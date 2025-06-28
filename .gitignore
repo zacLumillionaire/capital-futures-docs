@@ -1,0 +1,86 @@
+# ===================================================================
+# General
+# ===================================================================
+# Environment variables
+# Protects API keys, passwords, etc.
+.env
+
+# Log files
+*.log
+
+
+# ===================================================================
+# Operating System specific
+# ===================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+
+# ===================================================================
+# IDEs and Editors
+# ===================================================================
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+
+# ===================================================================
+# Language Specific: Python
+# ===================================================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+
+# ===================================================================
+# Build results from Visual Studio projects
+# ===================================================================
+[Bb]in/
+[Oo]bj/

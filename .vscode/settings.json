@@ -1,0 +1,18 @@
+{
+    "python.analysis.extraPaths": [
+        "./Python File"
+    ],
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticMode": "workspace",
+    "python.linting.enabled": true,
+    "python.linting.pylintEnabled": false,
+    "python.linting.flake8Enabled": false,
+    "python.analysis.ignore": [
+        "**/comtypes/gen/**"
+    ],
+    "python.analysis.stubPath": "./typings",
+    "files.associations": {
+        "*.py": "python"
+    }
+}

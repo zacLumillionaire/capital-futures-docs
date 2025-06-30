@@ -1,0 +1,20 @@
+[tool.pylsp-mypy]
+enabled = true
+live_mode = true
+
+[tool.pyright]
+include = ["Python File"]
+exclude = ["**/comtypes/gen/**"]
+typeCheckingMode = "basic"
+reportMissingImports = false
+reportMissingModuleSource = false
+
+[tool.pylint]
+disable = [
+    "import-error",
+    "no-name-in-module"
+]
+
+[tool.flake8]
+ignore = ["E501", "F401"]
+exclude = ["comtypes/gen/*"]

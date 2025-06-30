@@ -1,0 +1,11 @@
+# 回測系統依賴套件
+# PostgreSQL 資料庫連接器
+psycopg2-binary==2.9.10
+
+# 重試機制庫
+tenacity==9.1.2
+
+# 群益證券API相關套件
+comtypes==1.2.0
+pywin32==306
+pywin32-ctypes==0.2.2

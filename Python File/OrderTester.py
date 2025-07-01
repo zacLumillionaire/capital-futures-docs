@@ -43,6 +43,15 @@ except ImportError as e:
     PRICE_BRIDGE_AVAILABLE = False
     print(f"⚠️ 價格橋接模組未載入: {e}")
 
+# 導入TCP價格伺服器模組
+try:
+    from tcp_price_server import start_price_server, stop_price_server, broadcast_price_tcp, get_server_status
+    TCP_PRICE_SERVER_AVAILABLE = True
+    print("✅ TCP價格伺服器模組載入成功")
+except ImportError as e:
+    TCP_PRICE_SERVER_AVAILABLE = False
+    print(f"⚠️ TCP價格伺服器模組未載入: {e}")
+
 # 設定日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -153,16 +162,20 @@ class OrderTesterApp(tk.Tk):
     
     def __init__(self):
         super().__init__()
-        
+
         self.title("群益證券API期貨下單測試程式")
         self.geometry("1000x800")
-        
+
+        # TCP價格伺服器狀態
+        self.tcp_server_enabled = False
+        self.tcp_server_running = False
+
         # 初始化SKCOM
         self.initialize_skcom()
-        
+
         # 建立UI
         self.create_widgets()
-        
+
         # 設定關閉事件
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
     
@@ -283,7 +296,33 @@ class OrderTesterApp(tk.Tk):
         self.btn_logout = tk.Button(login_frame, text="登出", command=self.logout,
                                    bg="#DC143C", fg="white", width=10, state="disabled")
         self.btn_logout.grid(column=3, row=1, padx=5, pady=5)
-        
+
+        # TCP價格伺服器控制區域
+        tcp_frame = tk.LabelFrame(parent, text="TCP價格伺服器 (新功能)", padx=10, pady=10)
+        tcp_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        # TCP開關
+        self.var_tcp_enabled = tk.BooleanVar()
+        self.check_tcp_enabled = tk.Checkbutton(tcp_frame, text="啟用TCP價格伺服器",
+                                               variable=self.var_tcp_enabled,
+                                               command=self.toggle_tcp_server)
+        self.check_tcp_enabled.grid(column=0, row=0, sticky=tk.W, padx=5, pady=5)
+
+        # TCP狀態顯示
+        tk.Label(tcp_frame, text="伺服器狀態:").grid(column=1, row=0, sticky=tk.W, padx=(20,5), pady=5)
+        self.label_tcp_status = tk.Label(tcp_frame, text="未啟動", fg="red")
+        self.label_tcp_status.grid(column=2, row=0, padx=5, pady=5)
+
+        # TCP連接數顯示
+        tk.Label(tcp_frame, text="連接數:").grid(column=3, row=0, sticky=tk.W, padx=(20,5), pady=5)
+        self.label_tcp_clients = tk.Label(tcp_frame, text="0", fg="blue")
+        self.label_tcp_clients.grid(column=4, row=0, padx=5, pady=5)
+
+        # TCP說明
+        tcp_info = tk.Label(tcp_frame, text="📡 啟用後可讓策略程式透過TCP接收即時報價 (localhost:8888)",
+                           fg="gray", font=("Arial", 8))
+        tcp_info.grid(column=0, row=1, columnspan=5, sticky=tk.W, padx=5, pady=2)
+
         # 訊息顯示
         msg_frame = tk.LabelFrame(parent, text="登入訊息", padx=5, pady=5)
         msg_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -472,11 +511,82 @@ class OrderTesterApp(tk.Tk):
         except Exception as e:
             self.add_login_message(f"【錯誤】自動連線回報主機時發生錯誤: {str(e)}")
 
+    def toggle_tcp_server(self):
+        """切換TCP價格伺服器狀態"""
+        if not TCP_PRICE_SERVER_AVAILABLE:
+            messagebox.showerror("錯誤", "TCP價格伺服器模組未載入")
+            self.var_tcp_enabled.set(False)
+            return
+
+        if self.var_tcp_enabled.get():
+            # 啟動TCP伺服器
+            self.start_tcp_server()
+        else:
+            # 停止TCP伺服器
+            self.stop_tcp_server()
+
+    def start_tcp_server(self):
+        """啟動TCP價格伺服器"""
+        try:
+            if start_price_server():
+                self.tcp_server_running = True
+                self.tcp_server_enabled = True
+                self.label_tcp_status.config(text="運行中", fg="green")
+                self.add_login_message("✅ TCP價格伺服器已啟動 (localhost:8888)")
+
+                # 啟動狀態更新
+                self.update_tcp_status()
+            else:
+                self.var_tcp_enabled.set(False)
+                self.label_tcp_status.config(text="啟動失敗", fg="red")
+                self.add_login_message("❌ TCP價格伺服器啟動失敗")
+
+        except Exception as e:
+            self.var_tcp_enabled.set(False)
+            self.label_tcp_status.config(text="錯誤", fg="red")
+            self.add_login_message(f"❌ TCP價格伺服器啟動異常: {e}")
+
+    def stop_tcp_server(self):
+        """停止TCP價格伺服器"""
+        try:
+            stop_price_server()
+            self.tcp_server_running = False
+            self.tcp_server_enabled = False
+            self.label_tcp_status.config(text="已停止", fg="red")
+            self.label_tcp_clients.config(text="0")
+            self.add_login_message("⏹️ TCP價格伺服器已停止")
+
+        except Exception as e:
+            self.add_login_message(f"❌ 停止TCP價格伺服器異常: {e}")
+
+    def update_tcp_status(self):
+        """更新TCP伺服器狀態"""
+        if self.tcp_server_running:
+            try:
+                status = get_server_status()
+                if status:
+                    client_count = status.get('connected_clients', 0)
+                    self.label_tcp_clients.config(text=str(client_count))
+
+                # 每2秒更新一次
+                self.after(2000, self.update_tcp_status)
+
+            except Exception as e:
+                logger.error(f"更新TCP狀態失敗: {e}")
+
     def on_closing(self):
         """關閉應用程式"""
         try:
             # 直接關閉，避免messagebox導致的GIL錯誤
             logger.info("正在關閉應用程式...")
+
+            # 停止TCP價格伺服器
+            try:
+                if self.tcp_server_running:
+                    stop_price_server()
+                    logger.info("已停止TCP價格伺服器")
+            except Exception as e:
+                logger.error(f"停止TCP價格伺服器時發生錯誤: {e}")
 
             # 停止所有報價監控
             try:

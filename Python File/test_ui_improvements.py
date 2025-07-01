@@ -60,6 +60,15 @@ except ImportError as e:
     PRICE_BRIDGE_AVAILABLE = False
     print(f"⚠️ 價格橋接模組未載入: {e}")
 
+# 導入TCP價格客戶端模組
+try:
+    from tcp_price_server import PriceClient
+    TCP_PRICE_CLIENT_AVAILABLE = True
+    print("✅ TCP價格客戶端模組載入成功")
+except ImportError as e:
+    TCP_PRICE_CLIENT_AVAILABLE = False
+    print(f"⚠️ TCP價格客戶端模組未載入: {e}")
+
 # 設定日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -123,9 +132,17 @@ class DirectSKCOMManager:
 class LiveTradingPositionManager:
     """實盤交易部位管理器 - 基於回測邏輯"""
 
-    def __init__(self, config: StrategyConfig, order_api=None):
+    def __init__(self, config: StrategyConfig, order_api=None, range_start_time=(8, 46)):
         self.config = config
         self.order_api = order_api
+
+        # 動態區間時間設定
+        self.range_start_hour, self.range_start_minute = range_start_time
+        self.range_end_minute = self.range_start_minute + 1
+        self.range_end_hour = self.range_start_hour
+        if self.range_end_minute >= 60:
+            self.range_end_minute = 0
+            self.range_end_hour += 1
 
         # 交易狀態
         self.position = None  # 'LONG', 'SHORT', None
@@ -138,42 +155,76 @@ class LiveTradingPositionManager:
         self.range_low = None
         self.range_detected = False
 
-        # 價格歷史 (用於區間計算)
+        # 價格歷史 (用於區間計算) - 使用動態命名
         self.price_history = []
-        self.candle_846 = None
-        self.candle_847 = None
+        self.candle_first = None   # 第一分鐘K線 (原846)
+        self.candle_second = None  # 第二分鐘K線 (原847)
+
+        # 一分K監控 (新增)
+        self.current_minute_candle = None
+        self.last_minute = None
+        self.breakout_signal = None  # 'LONG_SIGNAL', 'SHORT_SIGNAL', None
+        self.waiting_for_entry = False  # 等待下一個報價進場
+        self.entry_signal_time = None
+
+        # 一天一次進場控制 (新增)
+        self.first_breakout_detected = False  # 是否已檢測到第一次突破
+        self.breakout_direction = None        # 第一次突破的方向 ('LONG', 'SHORT', None)
+        self.daily_entry_completed = False    # 當天是否已完成進場
 
         logger.info(f"🎯 實盤交易管理器初始化 - {config.trade_size_in_lots}口交易")
+
+    def is_after_range_period(self, current_time):
+        """檢查是否在區間計算期間之後"""
+        # 計算第三分鐘的開始時間
+        third_minute = self.range_end_minute + 1
+        third_hour = self.range_end_hour
+        if third_minute >= 60:
+            third_minute = 0
+            third_hour += 1
+
+        # 檢查是否在第三分鐘或之後
+        if current_time.hour > third_hour:
+            return True
+        elif current_time.hour == third_hour and current_time.minute >= third_minute:
+            return True
+        return False
 
     def update_price(self, price, timestamp):
         """更新價格並檢查交易信號"""
         current_time = timestamp.time()
         price_decimal = Decimal(str(price))
 
-        # 收集8:46和8:47的價格數據
-        if current_time.hour == 8 and current_time.minute == 46:
-            if not self.candle_846:
-                self.candle_846 = {'high': price_decimal, 'low': price_decimal, 'close': price_decimal}
+        # 收集第一分鐘的價格數據
+        if current_time.hour == self.range_start_hour and current_time.minute == self.range_start_minute:
+            if not self.candle_first:
+                self.candle_first = {'high': price_decimal, 'low': price_decimal, 'close': price_decimal}
             else:
-                self.candle_846['high'] = max(self.candle_846['high'], price_decimal)
-                self.candle_846['low'] = min(self.candle_846['low'], price_decimal)
-                self.candle_846['close'] = price_decimal
+                self.candle_first['high'] = max(self.candle_first['high'], price_decimal)
+                self.candle_first['low'] = min(self.candle_first['low'], price_decimal)
+                self.candle_first['close'] = price_decimal
 
-        elif current_time.hour == 8 and current_time.minute == 47:
-            if not self.candle_847:
-                self.candle_847 = {'high': price_decimal, 'low': price_decimal, 'close': price_decimal}
+        # 收集第二分鐘的價格數據
+        elif current_time.hour == self.range_end_hour and current_time.minute == self.range_end_minute:
+            if not self.candle_second:
+                self.candle_second = {'high': price_decimal, 'low': price_decimal, 'close': price_decimal}
             else:
-                self.candle_847['high'] = max(self.candle_847['high'], price_decimal)
-                self.candle_847['low'] = min(self.candle_847['low'], price_decimal)
-                self.candle_847['close'] = price_decimal
+                self.candle_second['high'] = max(self.candle_second['high'], price_decimal)
+                self.candle_second['low'] = min(self.candle_second['low'], price_decimal)
+                self.candle_second['close'] = price_decimal
 
-            # 8:47結束時計算區間
-            if not self.range_detected and self.candle_846 and self.candle_847:
+            # 第二分鐘結束時計算區間
+            if not self.range_detected and self.candle_first and self.candle_second:
                 self.calculate_opening_range()
 
-        # 8:48後檢查突破信號
-        elif current_time.hour == 8 and current_time.minute >= 48 and self.range_detected and not self.position:
-            self.check_breakout_signal(price_decimal, timestamp)
+        # 區間計算完成後的入場邏輯 (第三分鐘開始)
+        elif self.is_after_range_period(current_time) and self.range_detected and not self.daily_entry_completed:
+            # 如果正在等待進場，下一個報價就是進場時機
+            if self.waiting_for_entry and self.breakout_signal:
+                self.execute_entry_on_next_tick(price_decimal, timestamp)
+            elif not self.first_breakout_detected:
+                # 只有在未檢測到第一次突破時才監控
+                self.monitor_minute_candle_breakout(price_decimal, timestamp)
 
         # 已有部位時檢查出場條件
         elif self.position:
@@ -181,22 +232,210 @@ class LiveTradingPositionManager:
 
     def calculate_opening_range(self):
         """計算開盤區間"""
-        if not self.candle_846 or not self.candle_847:
+        if not self.candle_first or not self.candle_second:
             return
 
-        candles = [self.candle_846, self.candle_847]
+        candles = [self.candle_first, self.candle_second]
         self.range_high = max(c['high'] for c in candles)
         self.range_low = min(c['low'] for c in candles)
         self.range_detected = True
 
-        logger.info(f"📊 開盤區間計算完成: {float(self.range_low)} - {float(self.range_high)}")
+        range_start_str = f"{self.range_start_hour:02d}:{self.range_start_minute:02d}"
+        range_end_str = f"{self.range_end_hour:02d}:{self.range_end_minute:02d}"
+        logger.info(f"📊 開盤區間計算完成 ({range_start_str}-{range_end_str}): {float(self.range_low)} - {float(self.range_high)}")
 
-    def check_breakout_signal(self, price, timestamp):
-        """檢查突破信號並建倉"""
-        if price > self.range_high:
-            self.enter_position('LONG', price, timestamp)
-        elif price < self.range_low:
-            self.enter_position('SHORT', price, timestamp)
+    def monitor_minute_candle_breakout(self, price, timestamp):
+        """監控一分K收盤價突破區間"""
+        current_time = timestamp.time()
+        current_minute = current_time.minute
+
+        # 檢查是否進入新的分鐘
+        if self.last_minute != current_minute:
+            # 檢查上一分鐘的收盤價是否突破區間
+            if self.current_minute_candle and self.last_minute is not None:
+                self.check_minute_candle_breakout()
+
+            # 開始新的一分鐘K線
+            self.start_new_minute_candle(price, timestamp)
+            self.last_minute = current_minute
+        else:
+            # 更新當前分鐘K線
+            self.update_current_minute_candle(price, timestamp)
+
+    def start_new_minute_candle(self, price, timestamp):
+        """開始新的一分鐘K線"""
+        self.current_minute_candle = {
+            'open': price,
+            'high': price,
+            'low': price,
+            'close': price,
+            'start_time': timestamp,
+            'minute': timestamp.time().minute
+        }
+
+        logger.debug(f"📊 開始新分鐘K線 {timestamp.strftime('%H:%M')} - 開盤價: {float(price)}")
+
+    def update_current_minute_candle(self, price, timestamp):
+        """更新當前分鐘K線"""
+        if self.current_minute_candle:
+            self.current_minute_candle['high'] = max(self.current_minute_candle['high'], price)
+            self.current_minute_candle['low'] = min(self.current_minute_candle['low'], price)
+            self.current_minute_candle['close'] = price
+
+    def check_current_minute_breakout(self, close_price, minute):
+        """檢查當前分鐘收盤價是否突破區間（在00秒時調用）"""
+        # 檢查突破
+        if close_price > self.range_high:
+            self.breakout_signal = 'LONG_SIGNAL'
+            self.waiting_for_entry = True
+            self.entry_signal_time = datetime.now()
+
+            range_high_val = float(self.range_high) if self.range_high else 0
+            logger.info(f"🔥 {minute:02d}分收盤價突破上緣! 收盤價: {float(close_price)}, 區間上緣: {range_high_val}")
+            logger.info(f"⏳ 等待下一個報價進場做多...")
+
+        elif close_price < self.range_low:
+            self.breakout_signal = 'SHORT_SIGNAL'
+            self.waiting_for_entry = True
+            self.entry_signal_time = datetime.now()
+
+            range_low_val = float(self.range_low) if self.range_low else 0
+            logger.info(f"🔥 {minute:02d}分收盤價突破下緣! 收盤價: {float(close_price)}, 區間下緣: {range_low_val}")
+            logger.info(f"⏳ 等待下一個報價進場做空...")
+        else:
+            logger.debug(f"📊 {minute:02d}分收盤價未突破: {float(close_price)} (區間: {float(self.range_low) if self.range_low else 0}-{float(self.range_high) if self.range_high else 0})")
+
+    def check_minute_candle_breakout(self):
+        """檢查分鐘K線收盤價是否突破區間 - 只檢測第一次突破"""
+        if not self.current_minute_candle:
+            return
+
+        # 如果已經檢測到第一次突破，就不再檢測
+        if self.first_breakout_detected:
+            return
+
+        close_price = self.current_minute_candle['close']
+        minute = self.current_minute_candle['minute']
+
+        # 檢查第一次突破
+        if close_price > self.range_high:
+            # 記錄第一次突破
+            self.first_breakout_detected = True
+            self.breakout_direction = 'LONG'
+            self.breakout_signal = 'LONG_SIGNAL'
+            self.waiting_for_entry = True
+            self.entry_signal_time = self.current_minute_candle['start_time']
+
+            range_high_val = float(self.range_high) if self.range_high else 0
+            logger.info(f"🔥 第一次突破！{minute:02d}分K線收盤價突破上緣!")
+            logger.info(f"   收盤價: {float(close_price)}, 區間上緣: {range_high_val}")
+            logger.info(f"⏳ 等待下一個報價進場做多...")
+
+        elif close_price < self.range_low:
+            # 記錄第一次突破
+            self.first_breakout_detected = True
+            self.breakout_direction = 'SHORT'
+            self.breakout_signal = 'SHORT_SIGNAL'
+            self.waiting_for_entry = True
+            self.entry_signal_time = self.current_minute_candle['start_time']
+
+            range_low_val = float(self.range_low) if self.range_low else 0
+            logger.info(f"🔥 第一次突破！{minute:02d}分K線收盤價突破下緣!")
+            logger.info(f"   收盤價: {float(close_price)}, 區間下緣: {range_low_val}")
+            logger.info(f"⏳ 等待下一個報價進場做空...")
+        else:
+            # 未突破，記錄調試信息
+            range_high_val = float(self.range_high) if self.range_high else 0
+            range_low_val = float(self.range_low) if self.range_low else 0
+            logger.debug(f"📊 {minute:02d}分收盤價未突破: {float(close_price)} (區間: {range_low_val}-{range_high_val})")
+
+    def execute_entry_on_next_tick(self, price, timestamp):
+        """在下一個報價執行進場"""
+        if not self.waiting_for_entry or not self.breakout_signal:
+            return
+
+        direction = 'LONG' if self.breakout_signal == 'LONG_SIGNAL' else 'SHORT'
+
+        logger.info(f"🎯 執行進場! 方向: {direction}, 進場價: {float(price)}")
+
+        # 執行建倉
+        self.enter_position_with_separate_orders(direction, price, timestamp)
+
+        # 標記當天進場已完成
+        self.daily_entry_completed = True
+
+        # 重置信號狀態
+        self.breakout_signal = None
+        self.waiting_for_entry = False
+        self.entry_signal_time = None
+
+        logger.info(f"✅ 當天進場已完成，後續只執行停利/停損機制")
+
+    def enter_position_with_separate_orders(self, direction, price, timestamp):
+        """分開建倉 - 每口單獨下單"""
+        self.position = direction
+        self.entry_price = price
+        self.entry_time = timestamp
+
+        # 初始化各口單
+        initial_sl = self.range_low if direction == 'LONG' else self.range_high
+        self.lots = []
+
+        logger.info(f"🎯 開始分開建倉 - {direction} {self.config.trade_size_in_lots}口")
+
+        for i in range(self.config.trade_size_in_lots):
+            rule = self.config.lot_rules[i] if i < len(self.config.lot_rules) else self.config.lot_rules[-1]
+            lot_info = {
+                'id': i + 1,
+                'rule': rule,
+                'status': 'active',
+                'pnl': Decimal(0),
+                'peak_price': price,
+                'trailing_on': False,
+                'stop_loss': initial_sl,
+                'is_initial_stop': True,
+                'order_id': None,  # 實際下單後的訂單ID
+                'entry_time': timestamp
+            }
+            self.lots.append(lot_info)
+
+            # 執行單獨下單 (模擬)
+            self.execute_single_entry_order(lot_info, direction, price, timestamp)
+
+        logger.info(f"✅ 建倉完成 - {direction} {len(self.lots)}口 @ {float(price)}")
+
+    def execute_single_entry_order(self, lot_info, direction, price, timestamp):
+        """執行單一口建倉下單 (模擬)"""
+        lot_id = lot_info['id']
+
+        # 模擬下單 (不真實下單)
+        simulated_order_id = f"SIM_{direction}_{lot_id}_{timestamp.strftime('%H%M%S')}"
+        lot_info['order_id'] = simulated_order_id
+
+        logger.info(f"📋 [模擬建倉] 第{lot_id}口 {direction} MTX00 @ {float(price)} (訂單ID: {simulated_order_id})")
+
+        # 如果有真實API，可以在這裡調用
+        if self.order_api and hasattr(self.order_api, 'place_order'):
+            try:
+                order_direction = "BUY" if direction == "LONG" else "SELL"
+                result = self.order_api.place_order(
+                    product="MTX00",
+                    direction=order_direction,
+                    price=float(price),
+                    quantity=1,
+                    order_type="ROD"
+                )
+
+                if result.get('success'):
+                    lot_info['order_id'] = result.get('order_id')
+                    logger.info(f"✅ 第{lot_id}口真實下單成功 - 訂單ID: {lot_info['order_id']}")
+                else:
+                    logger.error(f"❌ 第{lot_id}口真實下單失敗: {result.get('message')}")
+
+            except Exception as e:
+                logger.error(f"❌ 第{lot_id}口下單API調用失敗: {e}")
+
+        return simulated_order_id
 
     def enter_position(self, direction, price, timestamp):
         """建立部位 - 多口建倉"""
@@ -410,8 +649,20 @@ class LiveTradingPositionManager:
         self.range_low = None
         self.range_detected = False
         self.price_history = []
-        self.candle_846 = None
-        self.candle_847 = None
+        self.candle_first = None
+        self.candle_second = None
+
+        # 重置新增的一分K監控狀態
+        self.current_minute_candle = None
+        self.last_minute = None
+        self.breakout_signal = None
+        self.waiting_for_entry = False
+        self.entry_signal_time = None
+
+        # 重置一天一次進場控制狀態
+        self.first_breakout_detected = False
+        self.breakout_direction = None
+        self.daily_entry_completed = False
 
         logger.info("🔄 交易狀態已重置")
 
@@ -621,6 +872,16 @@ class TradingTesterApp:
         self.position_manager = None
         self.strategy_active = False
 
+        # TCP客戶端相關
+        self.tcp_client = None
+        self.tcp_connected = False
+        self._tcp_first_data_received = False
+
+        # 區間模式相關
+        self.range_mode = "NORMAL"  # "NORMAL" 或 "TEST"
+        self.test_start_time = "14:30"  # 測試模式的開始時間
+        self.current_range_start = (8, 46)  # 當前使用的區間開始時間 (小時, 分鐘)
+
         # 初始化預設策略配置
         self.init_default_strategy_config()
         self.current_price = self.base_price
@@ -724,8 +985,8 @@ class TradingTesterApp:
             except Exception as e:
                 logger.warning(f"⚠️ 下單API設定失敗: {e}")
 
-        self.position_manager = LiveTradingPositionManager(self.strategy_config, order_api)
-        logger.info("✅ 部位管理器已建立")
+        self.position_manager = LiveTradingPositionManager(self.strategy_config, order_api, self.current_range_start)
+        logger.info(f"✅ 部位管理器已建立 - 區間時間: {self.current_range_start[0]:02d}:{self.current_range_start[1]:02d}")
         return True
 
     def initialize_button_states(self):
@@ -737,9 +998,8 @@ class TradingTesterApp:
 
         # 按鈕狀態
         self.btn_switch_sim.config(state="disabled")  # 已經是模擬模式
-        self.btn_switch_real.config(state="normal")
-        self.btn_switch_direct.config(state="normal")
         self.btn_switch_bridge.config(state="normal")
+        self.btn_switch_tcp.config(state="normal")
         self.btn_start_sim.config(state="normal")
         self.btn_stop_sim.config(state="disabled")
 
@@ -772,6 +1032,9 @@ class TradingTesterApp:
         # 下單測試面板
         if STABLE_API_AVAILABLE:
             self.create_trading_panel()
+
+        # 日誌顯示區域
+        self.create_log_panel()
 
     def create_control_panel(self):
         """創建控制面板"""
@@ -807,25 +1070,17 @@ class TradingTesterApp:
                                         fg="blue", font=("Arial", 10, "bold"))
         self.quote_mode_label.pack(side="left", padx=5)
 
-        self.btn_switch_sim = tk.Button(row2, text="🎮 切換模擬", command=self.switch_to_simulation,
-                                       bg="blue", fg="white", font=("Arial", 9))
+        self.btn_switch_sim = tk.Button(row2, text="🎮 模擬報價", command=self.switch_to_simulation,
+                                       bg="blue", fg="white", font=("Arial", 10, "bold"))
         self.btn_switch_sim.pack(side="left", padx=5)
 
-        self.btn_switch_real = tk.Button(row2, text="📡 切換實盤", command=self.switch_to_real,
-                                        bg="purple", fg="white", font=("Arial", 9))
-        self.btn_switch_real.pack(side="left", padx=5)
-
-        self.btn_switch_direct = tk.Button(row2, text="🔗 直接API", command=self.switch_to_direct,
-                                          bg="darkgreen", fg="white", font=("Arial", 9))
-        self.btn_switch_direct.pack(side="left", padx=5)
-
         self.btn_switch_bridge = tk.Button(row2, text="🌉 橋接模式", command=self.switch_to_bridge,
-                                          bg="teal", fg="white", font=("Arial", 9))
+                                          bg="teal", fg="white", font=("Arial", 10, "bold"))
         self.btn_switch_bridge.pack(side="left", padx=5)
 
-        self.btn_test_connection = tk.Button(row2, text="🔍 測試連接", command=self.test_ordertester_connection,
-                                           bg="orange", fg="white", font=("Arial", 8))
-        self.btn_test_connection.pack(side="left", padx=5)
+        self.btn_switch_tcp = tk.Button(row2, text="🚀 TCP模式", command=self.switch_to_tcp,
+                                       bg="purple", fg="white", font=("Arial", 10, "bold"))
+        self.btn_switch_tcp.pack(side="left", padx=5)
 
         # 第三行 - 模擬控制
         row3 = tk.Frame(control_frame)
@@ -866,6 +1121,34 @@ class TradingTesterApp:
         lots_combo.pack(side="left", padx=5)
         lots_combo.bind('<<ComboboxSelected>>', self.on_lots_changed)
 
+        # 區間模式選擇
+        mode_frame = tk.Frame(config_frame)
+        mode_frame.pack(fill="x", padx=5, pady=5)
+
+        tk.Label(mode_frame, text="區間模式:", font=("Arial", 10)).pack(side="left", padx=5)
+        self.range_mode_var = tk.StringVar(value="正常交易模式")
+        mode_combo = ttk.Combobox(mode_frame, textvariable=self.range_mode_var, width=15, state='readonly')
+        mode_combo['values'] = ['正常交易模式', '測試模式']
+        mode_combo.pack(side="left", padx=5)
+        mode_combo.bind('<<ComboboxSelected>>', self.on_range_mode_changed)
+
+        # 測試時間設定
+        time_frame = tk.Frame(config_frame)
+        time_frame.pack(fill="x", padx=5, pady=5)
+
+        tk.Label(time_frame, text="測試開始時間:", font=("Arial", 10)).pack(side="left", padx=5)
+        self.test_start_time_var = tk.StringVar(value="14:30")
+        self.test_time_entry = tk.Entry(time_frame, textvariable=self.test_start_time_var, width=8, font=("Arial", 10))
+        self.test_time_entry.pack(side="left", padx=5)
+
+        self.apply_time_btn = tk.Button(time_frame, text="應用", command=self.apply_test_time,
+                                       bg="orange", fg="white", font=("Arial", 9))
+        self.apply_time_btn.pack(side="left", padx=5)
+
+        # 初始狀態：測試時間設定為禁用
+        self.test_time_entry.config(state="disabled")
+        self.apply_time_btn.config(state="disabled")
+
         # 策略狀態顯示
         status_frame = tk.Frame(config_frame)
         status_frame.pack(fill="x", padx=5, pady=5)
@@ -877,6 +1160,18 @@ class TradingTesterApp:
         # 區間監控區域
         range_frame = tk.LabelFrame(strategy_container, text="開盤區間監控", fg="orange")
         range_frame.pack(fill="x", padx=5, pady=5)
+
+        # 時間顯示區域
+        time_display_frame = tk.Frame(range_frame)
+        time_display_frame.pack(fill="x", padx=5, pady=2)
+
+        tk.Label(time_display_frame, text="當前時間:", font=("Arial", 9)).pack(side="left", padx=5)
+        self.current_time_var = tk.StringVar(value="--:--:--")
+        tk.Label(time_display_frame, textvariable=self.current_time_var, font=("Arial", 9, "bold"), fg="blue").pack(side="left", padx=5)
+
+        tk.Label(time_display_frame, text="目標區間:", font=("Arial", 9)).pack(side="left", padx=(20, 5))
+        self.target_range_var = tk.StringVar(value="08:46-08:47")
+        tk.Label(time_display_frame, textvariable=self.target_range_var, font=("Arial", 9, "bold"), fg="purple").pack(side="left", padx=5)
 
         # 區間數據顯示
         range_data_frame = tk.Frame(range_frame)
@@ -941,6 +1236,120 @@ class TradingTesterApp:
         self.btn_stop_strategy.config(state="disabled")
 
         logger.info("✅ 策略面板創建成功 - 整合建倉機制")
+
+        # 啟動當前時間更新
+        self.update_current_time()
+
+    def on_range_mode_changed(self, event=None):
+        """區間模式變更事件"""
+        mode = self.range_mode_var.get()
+
+        if mode == "測試模式":
+            self.range_mode = "TEST"
+            # 啟用測試時間設定
+            self.test_time_entry.config(state="normal")
+            self.apply_time_btn.config(state="normal")
+            self.log_message("🧪 已切換到測試模式 - 可手動設定區間時間")
+        else:
+            self.range_mode = "NORMAL"
+            # 禁用測試時間設定
+            self.test_time_entry.config(state="disabled")
+            self.apply_time_btn.config(state="disabled")
+            # 恢復正常交易時間
+            self.current_range_start = (8, 46)
+            self.target_range_var.set("08:46-08:47")
+            self.range_status_var.set("等待8:46-8:47")
+            self.log_message("📈 已切換到正常交易模式 - 使用8:46-8:47區間")
+
+        logger.info(f"區間模式已變更: {mode}")
+
+    def apply_test_time(self):
+        """應用測試時間設定"""
+        try:
+            time_str = self.test_start_time_var.get().strip()
+
+            # 驗證時間格式
+            if ':' not in time_str:
+                raise ValueError("時間格式錯誤，請使用 HH:MM 格式")
+
+            hour_str, minute_str = time_str.split(':')
+            hour = int(hour_str)
+            minute = int(minute_str)
+
+            # 驗證時間範圍
+            if not (0 <= hour <= 23) or not (0 <= minute <= 59):
+                raise ValueError("時間範圍錯誤，小時應為0-23，分鐘應為0-59")
+
+            # 更新設定
+            self.current_range_start = (hour, minute)
+            self.test_start_time = time_str
+
+            # 更新顯示
+            end_minute = minute + 1
+            end_hour = hour
+            if end_minute >= 60:
+                end_minute = 0
+                end_hour += 1
+                if end_hour >= 24:
+                    end_hour = 0
+
+            range_display = f"{hour:02d}:{minute:02d}-{end_hour:02d}:{end_minute:02d}"
+            self.target_range_var.set(range_display)
+            self.range_status_var.set(f"等待{range_display}")
+
+            self.log_message(f"✅ 測試時間已設定: {range_display}")
+            logger.info(f"測試時間已設定: {time_str}")
+
+            # 更新position_manager的區間時間設定
+            if hasattr(self, 'position_manager') and self.position_manager:
+                self.update_position_manager_range_time()
+
+        except ValueError as e:
+            from tkinter import messagebox
+            messagebox.showerror("時間格式錯誤", f"請輸入正確的時間格式 (HH:MM)\n錯誤: {e}")
+            self.log_message(f"❌ 時間設定失敗: {e}")
+        except Exception as e:
+            self.log_message(f"❌ 應用測試時間失敗: {e}")
+
+    def update_current_time(self):
+        """更新當前時間顯示"""
+        try:
+            from datetime import datetime
+            current_time = datetime.now().strftime("%H:%M:%S")
+            self.current_time_var.set(current_time)
+
+            # 每秒更新一次
+            self.root.after(1000, self.update_current_time)
+
+        except Exception as e:
+            logger.error(f"更新當前時間失敗: {e}")
+
+    def update_position_manager_range_time(self):
+        """更新position_manager的區間時間設定"""
+        try:
+            if hasattr(self, 'position_manager') and self.position_manager:
+                # 更新區間時間
+                self.position_manager.range_start_hour, self.position_manager.range_start_minute = self.current_range_start
+                self.position_manager.range_end_minute = self.position_manager.range_start_minute + 1
+                self.position_manager.range_end_hour = self.position_manager.range_start_hour
+                if self.position_manager.range_end_minute >= 60:
+                    self.position_manager.range_end_minute = 0
+                    self.position_manager.range_end_hour += 1
+
+                # 重置區間檢測狀態
+                self.position_manager.range_detected = False
+                self.position_manager.range_high = None
+                self.position_manager.range_low = None
+                self.position_manager.candle_first = None
+                self.position_manager.candle_second = None
+
+                # 重置日誌標記
+                self.reset_daily_logs()
+
+                logger.info(f"✅ 部位管理器區間時間已更新: {self.current_range_start[0]:02d}:{self.current_range_start[1]:02d}")
+
+        except Exception as e:
+            logger.error(f"❌ 更新部位管理器區間時間失敗: {e}")
 
     def on_lots_changed(self, event=None):
         """交易口數變更事件"""
@@ -1015,7 +1424,14 @@ class TradingTesterApp:
             # 重置UI顯示
             self.range_high_var.set("--")
             self.range_low_var.set("--")
-            self.range_status_var.set("等待8:46-8:47")
+
+            # 根據當前模式設定狀態顯示
+            if self.range_mode == "TEST":
+                range_display = self.target_range_var.get()
+                self.range_status_var.set(f"等待{range_display}")
+            else:
+                self.range_status_var.set("等待8:46-8:47")
+
             self.position_direction_var.set("無部位")
             self.entry_price_var.set("--")
             self.active_lots_var.set("0")
@@ -1065,6 +1481,59 @@ class TradingTesterApp:
         # 開始更新
         update_status()
 
+    def create_log_panel(self):
+        """創建日誌顯示面板"""
+        log_frame = tk.LabelFrame(self.root, text="📋 系統日誌", fg="green", font=("Arial", 12, "bold"))
+        log_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # 日誌文字區域
+        log_text_frame = tk.Frame(log_frame)
+        log_text_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # 日誌顯示區域 (15行)
+        self.log_text = tk.Text(log_text_frame, height=15, wrap=tk.WORD, font=("Consolas", 9))
+
+        # 滾動條
+        log_scrollbar = tk.Scrollbar(log_text_frame, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scrollbar.set)
+
+        # 佈局
+        self.log_text.pack(side="left", fill="both", expand=True)
+        log_scrollbar.pack(side="right", fill="y")
+
+        # 清除日誌按鈕
+        clear_btn = tk.Button(log_frame, text="🗑️ 清除日誌", command=self.clear_log)
+        clear_btn.pack(pady=5)
+
+        # 初始歡迎訊息
+        self.log_message("🎉 完整交易測試系統已啟動")
+        self.log_message("✅ 日誌系統已就緒")
+
+    def log_message(self, message):
+        """添加日誌訊息"""
+        try:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_entry = f"[{timestamp}] {message}\n"
+
+            self.log_text.insert(tk.END, log_entry)
+            self.log_text.see(tk.END)  # 自動滾動到最新訊息
+
+            # 限制日誌行數 (保持最新1000行)
+            lines = self.log_text.get("1.0", tk.END).split('\n')
+            if len(lines) > 1000:
+                self.log_text.delete("1.0", f"{len(lines)-1000}.0")
+
+        except Exception as e:
+            logger.error(f"❌ 日誌顯示失敗: {e}")
+
+    def clear_log(self):
+        """清除日誌"""
+        try:
+            self.log_text.delete("1.0", tk.END)
+            self.log_message("🗑️ 日誌已清除")
+        except Exception as e:
+            logger.error(f"❌ 清除日誌失敗: {e}")
+
     def update_strategy_with_price(self, price, timestamp):
         """更新策略與價格數據"""
         try:
@@ -1077,35 +1546,49 @@ class TradingTesterApp:
             # 檢查是否有交易信號或狀態變化
             current_time = timestamp.time()
 
-            # 記錄重要事件
-            if (current_time.hour == 8 and current_time.minute == 46 and
-                not hasattr(self, '_logged_846')):
-                self.log_message(f"📊 8:46 開盤區間監控開始 - 當前價格: {int(price)}")
-                self._logged_846 = True
+            # 記錄重要事件 - 使用動態時間
+            range_start_hour, range_start_minute = self.current_range_start
+            range_end_minute = range_start_minute + 1
+            range_end_hour = range_start_hour
+            if range_end_minute >= 60:
+                range_end_minute = 0
+                range_end_hour += 1
 
-            elif (current_time.hour == 8 and current_time.minute == 47 and
-                  not hasattr(self, '_logged_847')):
-                self.log_message(f"📊 8:47 開盤區間監控中 - 當前價格: {int(price)}")
-                self._logged_847 = True
+            # 第三分鐘時間
+            third_minute = range_end_minute + 1
+            third_hour = range_end_hour
+            if third_minute >= 60:
+                third_minute = 0
+                third_hour += 1
 
-            elif (current_time.hour == 8 and current_time.minute == 48 and
-                  not hasattr(self, '_logged_848')):
+            if (current_time.hour == range_start_hour and current_time.minute == range_start_minute and
+                not hasattr(self, '_logged_first')):
+                self.log_message(f"📊 {range_start_hour:02d}:{range_start_minute:02d} 開盤區間監控開始 - 當前價格: {int(price)}")
+                self._logged_first = True
+
+            elif (current_time.hour == range_end_hour and current_time.minute == range_end_minute and
+                  not hasattr(self, '_logged_second')):
+                self.log_message(f"📊 {range_end_hour:02d}:{range_end_minute:02d} 開盤區間監控中 - 當前價格: {int(price)}")
+                self._logged_second = True
+
+            elif (current_time.hour == third_hour and current_time.minute == third_minute and
+                  not hasattr(self, '_logged_third')):
                 if self.position_manager.range_detected:
                     range_info = f"{int(float(self.position_manager.range_low))}-{int(float(self.position_manager.range_high))}"
-                    self.log_message(f"🎯 8:48 突破監控開始 - 區間: {range_info}")
-                self._logged_848 = True
+                    self.log_message(f"🎯 {third_hour:02d}:{third_minute:02d} 突破監控開始 - 區間: {range_info}")
+                self._logged_third = True
 
         except Exception as e:
             logger.error(f"❌ 策略價格更新失敗: {e}")
 
     def reset_daily_logs(self):
         """重置每日日誌標記"""
-        if hasattr(self, '_logged_846'):
-            delattr(self, '_logged_846')
-        if hasattr(self, '_logged_847'):
-            delattr(self, '_logged_847')
-        if hasattr(self, '_logged_848'):
-            delattr(self, '_logged_848')
+        if hasattr(self, '_logged_first'):
+            delattr(self, '_logged_first')
+        if hasattr(self, '_logged_second'):
+            delattr(self, '_logged_second')
+        if hasattr(self, '_logged_third'):
+            delattr(self, '_logged_third')
 
     def create_trading_panel(self):
         """創建下單測試面板"""
@@ -1176,8 +1659,7 @@ class TradingTesterApp:
         self.btn_start_sim.config(state="disabled")
         self.btn_stop_sim.config(state="normal")
 
-        if hasattr(self, 'strategy_panel'):
-            self.strategy_panel.log_message("🎯 開始模擬即時報價")
+        self.log_message("🎯 開始模擬即時報價")
 
         logger.info("🎯 開始價格模擬")
 
@@ -1212,9 +1694,11 @@ class TradingTesterApp:
             logger.info("已經是模擬報價模式")
             return
 
-        # 停止實盤報價
-        if self.real_quote_running:
-            self.stop_real_quotes()
+        # 停止其他模式
+        if self.bridge_monitoring:
+            self.stop_bridge_monitoring()
+        if self.tcp_connected:
+            self.stop_tcp_client()
 
         self.quote_mode = "SIMULATION"
         self.quote_mode_var.set("模擬報價")
@@ -1222,12 +1706,12 @@ class TradingTesterApp:
 
         # 更新按鈕狀態
         self.btn_switch_sim.config(state="disabled")
-        self.btn_switch_real.config(state="normal")
+        self.btn_switch_bridge.config(state="normal")
+        self.btn_switch_tcp.config(state="normal")
         self.btn_start_sim.config(state="normal")
 
         logger.info("✅ 已切換到模擬報價源")
-        if hasattr(self, 'strategy_panel'):
-            self.strategy_panel.log_message("🎮 已切換到模擬報價源")
+        self.log_message("🎮 已切換到模擬報價源")
 
     def switch_to_real(self):
         """切換到實盤報價源"""
@@ -1389,16 +1873,266 @@ class TradingTesterApp:
         # 更新按鈕狀態
         self.btn_switch_bridge.config(state="disabled")
         self.btn_switch_sim.config(state="normal")
-        self.btn_switch_real.config(state="normal")
-        self.btn_switch_direct.config(state="normal")
+        self.btn_switch_tcp.config(state="normal")
         self.btn_start_sim.config(state="disabled")
 
         # 啟動橋接監控
         self.start_bridge_monitoring()
 
         logger.info("✅ 已切換到橋接模式")
-        if hasattr(self, 'strategy_panel'):
-            self.strategy_panel.log_message("🌉 已切換到橋接模式 (OrderTester報價)")
+        self.log_message("🌉 已切換到橋接模式 (OrderTester報價)")
+
+    def switch_to_tcp(self):
+        """切換到TCP模式 (修復版本 - 避免重複連接)"""
+        if not TCP_PRICE_CLIENT_AVAILABLE:
+            from tkinter import messagebox
+            messagebox.showerror("錯誤", "TCP價格客戶端模組未載入")
+            logger.error("TCP價格客戶端模組未載入")
+            return
+
+        self.log_message("🚀 開始切換到TCP模式...")
+        logger.info("開始切換到TCP模式")
+
+        # 檢查是否已經是TCP模式
+        if self.quote_mode == "TCP" and self.tcp_connected:
+            self.log_message("ℹ️ 已經是TCP模式且已連接")
+            logger.info("已經是TCP模式且已連接，無需切換")
+            return
+
+        # 防止重複點擊 - 暫時禁用按鈕
+        self.btn_switch_tcp.config(state="disabled")
+
+        try:
+            # 停止其他模式
+            if self.price_running:
+                self.log_message("⏹️ 停止價格模擬...")
+                logger.info("停止價格模擬")
+                self.stop_price_simulation()
+
+            if self.bridge_monitoring:
+                self.log_message("⏹️ 停止橋接監控...")
+                logger.info("停止橋接監控")
+                self.stop_bridge_monitoring()
+
+            if self.tcp_connected:
+                self.log_message("⏹️ 停止舊TCP連接...")
+                logger.info("停止舊TCP連接")
+                self.stop_tcp_client()
+
+            # 更新模式狀態
+            self.quote_mode = "TCP"
+            self.quote_mode_var.set("TCP模式")
+            self.quote_mode_label.config(fg="purple")
+
+            # 更新按鈕狀態
+            self.btn_switch_sim.config(state="normal")
+            self.btn_switch_bridge.config(state="normal")
+            self.btn_start_sim.config(state="disabled")
+
+            # 啟動TCP客戶端
+            self.log_message("🔗 啟動TCP客戶端...")
+            logger.info("開始啟動TCP客戶端")
+
+            tcp_success = self.start_tcp_client()
+
+            if tcp_success:
+                logger.info("✅ 已成功切換到TCP模式")
+                self.log_message("🚀 已切換到TCP模式 (直接連接OrderTester)")
+            else:
+                # TCP連接失敗，自動切換到橋接模式
+                logger.warning("TCP連接失敗，自動切換到橋接模式")
+                self.log_message("🔄 TCP連接失敗，自動切換到橋接模式")
+                self.switch_to_bridge()
+
+        except Exception as e:
+            logger.error(f"切換到TCP模式時發生錯誤: {e}", exc_info=True)
+            self.log_message(f"❌ 切換到TCP模式失敗: {e}")
+
+            # 錯誤時切換到橋接模式
+            try:
+                self.switch_to_bridge()
+            except:
+                pass
+
+        finally:
+            # 恢復按鈕狀態
+            if not self.tcp_connected:
+                self.btn_switch_tcp.config(state="normal")
+
+    def start_tcp_client(self):
+        """啟動TCP客戶端 (修復版本 - 避免多重連接)"""
+        try:
+            if not TCP_PRICE_CLIENT_AVAILABLE:
+                self.log_message("❌ TCP價格客戶端模組未載入")
+                logger.error("TCP價格客戶端模組未載入")
+                return False
+
+            # 檢查是否已連接
+            if self.tcp_connected:
+                self.log_message("⚠️ TCP已連接，無需重複連接")
+                logger.warning("TCP客戶端已連接，跳過重複連接")
+                return True
+
+            self.log_message("🔗 開始TCP客戶端連接...")
+            logger.info("開始TCP客戶端連接流程")
+
+            # 清理舊連接
+            if self.tcp_client:
+                self.log_message("🧹 清理舊TCP連接...")
+                logger.info("清理舊TCP客戶端連接")
+                try:
+                    self.tcp_client.disconnect()
+                except Exception as e:
+                    logger.warning(f"清理舊連接時發生錯誤: {e}")
+                self.tcp_client = None
+
+            # 建立TCP客戶端 (不做預先診斷，避免額外連接)
+            self.log_message("🔗 建立TCP客戶端實例...")
+            logger.info("建立PriceClient實例")
+            self.tcp_client = PriceClient()
+
+            # 設定價格回調
+            def tcp_price_callback(price_data):
+                try:
+                    price = price_data.get('price', 0)
+                    volume = price_data.get('volume', 0)
+                    timestamp_str = price_data.get('timestamp', '')
+
+                    # 首次收到數據時記錄
+                    if not hasattr(self, '_tcp_first_data_received'):
+                        self._tcp_first_data_received = True
+                        self.log_message(f"📥 首次收到TCP數據: 價格={price}")
+
+                    # 解析時間戳
+                    from datetime import datetime
+                    try:
+                        # 假設timestamp是時間字符串 HH:MM:SS
+                        hour, minute, second = map(int, timestamp_str.split(':'))
+                        timestamp = datetime.now().replace(hour=hour, minute=minute, second=second, microsecond=0)
+                    except:
+                        timestamp = datetime.now()
+
+                    self.current_price = price
+
+                    # 更新UI顯示
+                    self.root.after(0, lambda: self.label_current_price.config(text=str(int(price))))
+
+                    # 整合策略邏輯 - TCP模式
+                    if self.strategy_active and self.position_manager:
+                        self.root.after(0, lambda p=price, t=timestamp: self.update_strategy_with_price(p, t))
+
+                except Exception as e:
+                    logger.error(f"❌ TCP價格回調處理失敗: {e}")
+
+            self.tcp_client.set_price_callback(tcp_price_callback)
+
+            # 連接到伺服器 (直接連接，不做預先檢查)
+            self.log_message("🔗 嘗試連接TCP伺服器 (localhost:8888)...")
+            logger.info("開始TCP客戶端連接到localhost:8888")
+
+            import time
+            connection_start_time = time.time()
+            if self.tcp_client.connect():
+                connection_time = time.time() - connection_start_time
+                self.tcp_connected = True
+                self.status_var.set("TCP已連接")
+
+                self.log_message("✅ TCP客戶端已連接到OrderTester")
+                self.log_message(f"📊 連接耗時: {connection_time:.3f}秒")
+                self.log_message("⏳ 等待接收價格數據...")
+
+                logger.info(f"TCP客戶端連接成功，耗時: {connection_time:.3f}秒")
+
+                # 啟動狀態監控
+                self.monitor_tcp_connection()
+                return True
+            else:
+                connection_time = time.time() - connection_start_time
+                self.log_message("❌ TCP客戶端連接失敗")
+                self.log_message(f"📊 連接嘗試耗時: {connection_time:.3f}秒")
+                self.log_message("💡 可能原因:")
+                self.log_message("   1. OrderTester未啟動TCP伺服器")
+                self.log_message("   2. 防火牆阻擋localhost:8888")
+                self.log_message("   3. 端口被其他程式占用")
+
+                logger.error(f"TCP客戶端連接失敗，耗時: {connection_time:.3f}秒")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ 啟動TCP客戶端異常: {e}", exc_info=True)
+            self.log_message(f"❌ 啟動TCP客戶端異常: {e}")
+
+            # 清理異常狀態
+            if self.tcp_client:
+                try:
+                    self.tcp_client.disconnect()
+                except:
+                    pass
+                self.tcp_client = None
+
+            return False
+
+    def stop_tcp_client(self):
+        """停止TCP客戶端 (增強日誌版本)"""
+        try:
+            self.log_message("🔌 開始停止TCP客戶端...")
+            logger.info("開始停止TCP客戶端")
+
+            if self.tcp_client:
+                self.log_message("🔗 斷開TCP連接...")
+                logger.info("斷開TCP客戶端連接")
+
+                try:
+                    self.tcp_client.disconnect()
+                    self.log_message("✅ TCP連接已斷開")
+                    logger.info("TCP客戶端連接已斷開")
+                except Exception as disconnect_error:
+                    self.log_message(f"⚠️ 斷開連接時發生錯誤: {disconnect_error}")
+                    logger.warning(f"斷開TCP連接時發生錯誤: {disconnect_error}")
+
+                self.tcp_client = None
+                self.log_message("🧹 TCP客戶端實例已清理")
+                logger.info("TCP客戶端實例已清理")
+            else:
+                self.log_message("ℹ️ 無需停止 - TCP客戶端未啟動")
+                logger.info("TCP客戶端未啟動，無需停止")
+
+            self.tcp_connected = False
+            self.status_var.set("系統就緒")
+
+            logger.info("⏹️ TCP客戶端已完全停止")
+            self.log_message("⏹️ TCP客戶端已停止")
+
+        except Exception as e:
+            logger.error(f"❌ 停止TCP客戶端失敗: {e}", exc_info=True)
+            self.log_message(f"❌ 停止TCP客戶端失敗: {e}")
+
+            # 強制清理狀態
+            self.tcp_client = None
+            self.tcp_connected = False
+            self.status_var.set("系統就緒")
+
+    def monitor_tcp_connection(self):
+        """監控TCP連接狀態"""
+        if self.tcp_connected and self.tcp_client:
+            try:
+                if not self.tcp_client.connected:
+                    self.tcp_connected = False
+                    self.status_var.set("TCP連接斷開")
+                    self.log_message("⚠️ TCP連接已斷開")
+
+                    # 嘗試重連
+                    self.log_message("🔄 嘗試重新連接...")
+                    if self.tcp_client.connect():
+                        self.tcp_connected = True
+                        self.status_var.set("TCP已重連")
+                        self.log_message("✅ TCP連接已恢復")
+
+                # 每5秒檢查一次
+                self.root.after(5000, self.monitor_tcp_connection)
+
+            except Exception as e:
+                logger.error(f"❌ TCP連接監控失敗: {e}")
 
     def start_bridge_monitoring(self):
         """啟動橋接監控"""
@@ -1422,8 +2156,7 @@ class TradingTesterApp:
             start_price_monitoring(bridge_callback)
 
             logger.info("✅ 橋接監控已啟動")
-            if hasattr(self, 'strategy_panel'):
-                self.strategy_panel.log_message("🌉 橋接監控已啟動，等待OrderTester報價...")
+            self.log_message("🌉 橋接監控已啟動，等待OrderTester報價...")
 
             return True
 
@@ -1441,8 +2174,7 @@ class TradingTesterApp:
             self.status_var.set("橋接監控已停止")
 
             logger.info("⏹️ 橋接監控已停止")
-            if hasattr(self, 'strategy_panel'):
-                self.strategy_panel.log_message("⏹️ 橋接監控已停止")
+            self.log_message("⏹️ 橋接監控已停止")
 
         except Exception as e:
             logger.error(f"❌ 停止橋接監控失敗: {e}")
@@ -1615,8 +2347,7 @@ class TradingTesterApp:
         self.status_var.set("接收實盤報價中...")
 
         logger.info("🚀 啟動實盤報價接收")
-        if hasattr(self, 'strategy_panel'):
-            self.strategy_panel.log_message("📡 開始接收實盤報價")
+        self.log_message("📡 開始接收實盤報價")
 
         # 啟動實盤報價線程
         def real_quote_thread():
@@ -1637,10 +2368,10 @@ class TradingTesterApp:
                     # 更新UI顯示
                     self.root.after(0, lambda: self.label_current_price.config(text=str(self.current_price)))
 
-                    # 更新策略面板
-                    if hasattr(self, 'strategy_panel'):
+                    # 整合策略邏輯 - 實盤模式
+                    if self.strategy_active and self.position_manager:
                         timestamp = datetime.now()
-                        self.root.after(0, lambda: self.strategy_panel.process_price_update(self.current_price, timestamp))
+                        self.root.after(0, lambda p=self.current_price, t=timestamp: self.update_strategy_with_price(p, t))
 
                     time.sleep(1.0)  # 實盤報價更新頻率較慢
 
@@ -1656,8 +2387,7 @@ class TradingTesterApp:
         self.status_var.set("實盤報價已停止")
 
         logger.info("⏹️ 停止實盤報價接收")
-        if hasattr(self, 'strategy_panel'):
-            self.strategy_panel.log_message("⏹️ 停止接收實盤報價")
+        self.log_message("⏹️ 停止接收實盤報價")
 
     def stop_price_simulation(self):
         """停止價格模擬"""
@@ -1671,8 +2401,7 @@ class TradingTesterApp:
 
         self.btn_stop_sim.config(state="disabled")
 
-        if hasattr(self, 'strategy_panel'):
-            self.strategy_panel.log_message("⏹️ 停止模擬報價")
+        self.log_message("⏹️ 停止模擬報價")
 
         logger.info("⏹️ 停止價格模擬")
 
@@ -1697,15 +2426,13 @@ class TradingTesterApp:
                 messagebox.showinfo("下單成功", message)
                 logger.info(f"測試買進成功: {result}")
 
-                if hasattr(self, 'strategy_panel'):
-                    self.strategy_panel.log_message(f"✅ 測試買進成功: {result['order_id']}")
+                self.log_message(f"✅ 測試買進成功: {result['order_id']}")
             else:
                 message = f"❌ 測試買進失敗!\n錯誤訊息: {result['message']}\n時間: {result['timestamp']}"
                 messagebox.showerror("下單失敗", message)
                 logger.error(f"測試買進失敗: {result}")
 
-                if hasattr(self, 'strategy_panel'):
-                    self.strategy_panel.log_message(f"❌ 測試買進失敗: {result['message']}")
+                self.log_message(f"❌ 測試買進失敗: {result['message']}")
 
         except Exception as e:
             error_msg = f"測試買進異常: {str(e)}"
@@ -1733,15 +2460,13 @@ class TradingTesterApp:
                 messagebox.showinfo("下單成功", message)
                 logger.info(f"測試賣出成功: {result}")
 
-                if hasattr(self, 'strategy_panel'):
-                    self.strategy_panel.log_message(f"✅ 測試賣出成功: {result['order_id']}")
+                self.log_message(f"✅ 測試賣出成功: {result['order_id']}")
             else:
                 message = f"❌ 測試賣出失敗!\n錯誤訊息: {result['message']}\n時間: {result['timestamp']}"
                 messagebox.showerror("下單失敗", message)
                 logger.error(f"測試賣出失敗: {result}")
 
-                if hasattr(self, 'strategy_panel'):
-                    self.strategy_panel.log_message(f"❌ 測試賣出失敗: {result['message']}")
+                self.log_message(f"❌ 測試賣出失敗: {result['message']}")
 
         except Exception as e:
             error_msg = f"測試賣出異常: {str(e)}"

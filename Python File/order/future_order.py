@@ -933,15 +933,17 @@ class FutureOrderFrame(tk.Frame):
 
                             # 🔗 價格橋接：寫入價格到橋接檔案 (供test_ui_improvements.py使用)
                             try:
+                                # 修正價格格式 (群益API價格通常需要除以100)
+                                corrected_price = nClose / 100.0 if nClose > 100000 else nClose
+                                corrected_bid = nBid / 100.0 if nBid > 100000 else nBid
+                                corrected_ask = nAsk / 100.0 if nAsk > 100000 else nAsk
+
                                 # 檢查是否有價格橋接模組
                                 if hasattr(self.parent, '_price_bridge_available'):
                                     if self.parent._price_bridge_available:
                                         # 導入價格橋接函數
                                         from price_bridge import write_price_to_bridge
                                         from datetime import datetime
-
-                                        # 修正價格格式 (群益API價格通常需要除以100)
-                                        corrected_price = nClose / 100.0 if nClose > 100000 else nClose
 
                                         # 寫入價格到橋接檔案
                                         write_price_to_bridge(corrected_price, nQty, datetime.now())
@@ -952,11 +954,47 @@ class FutureOrderFrame(tk.Frame):
                                         self.parent._price_bridge_available = True
                                         # 立即寫入價格
                                         from datetime import datetime
-                                        write_price_to_bridge(nClose, nQty, datetime.now())
+                                        write_price_to_bridge(corrected_price, nQty, datetime.now())
                                         print("✅ 價格橋接已啟動")
                                     except ImportError:
                                         self.parent._price_bridge_available = False
                                         print("⚠️ 價格橋接模組未找到")
+
+                                # 🚀 TCP價格廣播：新增功能
+                                try:
+                                    # 檢查是否有TCP價格伺服器模組
+                                    if hasattr(self.parent, '_tcp_server_available'):
+                                        if self.parent._tcp_server_available:
+                                            # 導入TCP廣播函數
+                                            from tcp_price_server import broadcast_price_tcp
+                                            from datetime import datetime
+
+                                            # 準備價格資料
+                                            price_data = {
+                                                'price': corrected_price,
+                                                'bid': corrected_bid,
+                                                'ask': corrected_ask,
+                                                'volume': nQty,
+                                                'timestamp': formatted_time,
+                                                'date': lDate,
+                                                'source': 'OrderTester'
+                                            }
+
+                                            # TCP廣播價格
+                                            broadcast_price_tcp(price_data)
+                                    else:
+                                        # 第一次檢查，嘗試導入TCP伺服器
+                                        try:
+                                            from tcp_price_server import broadcast_price_tcp
+                                            self.parent._tcp_server_available = True
+                                            print("✅ TCP價格伺服器模組已載入")
+                                        except ImportError:
+                                            self.parent._tcp_server_available = False
+                                            print("⚠️ TCP價格伺服器模組未找到")
+                                except Exception as tcp_error:
+                                    # TCP廣播失敗不影響主要功能
+                                    pass
+
                             except Exception as bridge_error:
                                 # 價格橋接失敗不影響主要功能
                                 pass

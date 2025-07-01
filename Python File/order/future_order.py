@@ -48,6 +48,9 @@ class FutureOrderFrame(tk.Frame):
         self.last_price = 0
         self.last_update_time = None
         self.quote_event_handler = None
+
+        # 策略回調相關 - 階段1整合
+        self.strategy_callback = None
         self.stocks_ready = False  # 商品資料是否準備完成
 
         # 策略面板暫時移除
@@ -930,6 +933,18 @@ class FutureOrderFrame(tk.Frame):
                         try:
                             self.parent.label_price.config(text=str(nClose))
                             self.parent.label_time.config(text=formatted_time)
+
+                            # 🎯 策略數據更新：安全方式，不直接調用回調
+                            try:
+                                # 修正價格格式 (群益API價格通常需要除以100)
+                                corrected_price = nClose / 100.0 if nClose > 100000 else nClose
+
+                                # 只更新數據，不調用回調（避免GIL衝突）
+                                self.parent.last_price = corrected_price
+                                self.parent.last_update_time = formatted_time
+                            except Exception as strategy_error:
+                                # 數據更新失敗不影響主要功能
+                                pass
 
                             # 🔗 價格橋接：寫入價格到橋接檔案 (供test_ui_improvements.py使用)
                             try:
@@ -1873,3 +1888,20 @@ class FutureOrderFrame(tk.Frame):
             # 即使出錯也要繼續輪詢
             if self.polling_active:
                 self.after(self.polling_interval, self.poll_quote_data)
+
+    def set_strategy_callback(self, callback_func):
+        """設定策略回調函數 - 階段1整合"""
+        try:
+            self.strategy_callback = callback_func
+            logger.info("✅ 策略回調函數已設定")
+        except Exception as e:
+            logger.error(f"❌ 設定策略回調函數失敗: {e}")
+
+    def call_strategy_callback(self, price, time_str):
+        """調用策略回調函數 - 線程安全版本"""
+        try:
+            if self.strategy_callback:
+                # 使用after_idle確保在主線程中調用
+                self.after_idle(self.strategy_callback, price, time_str)
+        except Exception as e:
+            logger.error(f"❌ 調用策略回調失敗: {e}")

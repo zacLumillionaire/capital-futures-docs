@@ -24,6 +24,9 @@
 
 import os
 import sys
+import time
+import threading
+import re
 import tkinter as tk
 from tkinter import ttk, messagebox
 import logging
@@ -94,6 +97,20 @@ class StrategyOrderManager:
         self.trading_mode = trading_mode
         self.order_executor = future_order_frame.order_executor if future_order_frame else None
 
+        # 商品設定
+        self.current_product = "MTX00"  # 預設小台指
+
+        # 非同步下單追蹤
+        self.pending_orders = {}      # 暫存下單請求，等待 OnAsyncOrder 確認
+        self.strategy_orders = {}     # 已確認的策略委託 (key: 委託序號)
+
+        # 設置回調函數
+        if self.order_executor:
+            self.order_executor.strategy_callback = self.on_order_result
+
+        # 設置回報監聽
+        self.setup_reply_log_monitoring()
+
         # 預留：報價監控和委託追蹤 (從LOG資料獲取)
         self.quote_monitor = None
         self.order_tracker = None
@@ -101,12 +118,55 @@ class StrategyOrderManager:
 
     def set_trading_mode(self, mode):
         """設定交易模式"""
+        print(f"[策略下單DEBUG] set_trading_mode 被調用，舊模式: {self.trading_mode}, 新模式: {mode}")
         self.trading_mode = mode
         print(f"[策略下單] 交易模式切換為: {mode.value}")
+        print(f"[策略下單DEBUG] 確認當前模式: {self.trading_mode}")
+
+    def on_order_result(self, order_seq_no, result_type, error_code=None):
+        """接收非同步下單結果"""
+        try:
+            if result_type == 'ORDER_SUCCESS':
+                # 委託成功，將暫存的下單資訊轉移到正式追蹤
+                print(f"[策略下單] ✅ 委託確認成功，序號: {order_seq_no}")
+
+                # 查找對應的暫存委託
+                pending_key = None
+                for key, order_info in self.pending_orders.items():
+                    if order_info['status'] == 'WAITING_CONFIRM':
+                        # 找到第一個等待確認的委託
+                        pending_key = key
+                        break
+
+                if pending_key:
+                    # 轉移到正式追蹤
+                    order_info = self.pending_orders.pop(pending_key)
+                    order_info['order_seq_no'] = order_seq_no
+                    order_info['status'] = 'CONFIRMED'
+                    self.strategy_orders[order_seq_no] = order_info
+
+                    print(f"[策略下單] 📋 委託追蹤: {order_info['direction']} {order_info['quantity']}口 @{order_info['price']}")
+
+            elif result_type == 'ORDER_FAILED':
+                # 委託失敗
+                print(f"[策略下單] ❌ 委託失敗: {order_seq_no} (錯誤代碼: {error_code})")
+
+                # 清理暫存的失敗委託
+                failed_keys = []
+                for key, order_info in self.pending_orders.items():
+                    if order_info['status'] == 'WAITING_CONFIRM':
+                        failed_keys.append(key)
+
+                # 移除失敗的委託 (簡化處理，移除第一個等待確認的)
+                if failed_keys:
+                    self.pending_orders.pop(failed_keys[0])
+
+        except Exception as e:
+            print(f"[策略下單] ❌ 處理下單結果失敗: {e}")
 
     def place_entry_order(self, direction, price, quantity=1, order_type="FOK"):
         """
-        建倉下單
+        建倉下單 - 支援非同步追蹤
 
         Args:
             direction: 'LONG' 或 'SHORT'
@@ -117,6 +177,11 @@ class StrategyOrderManager:
         Returns:
             dict: 下單結果
         """
+        print(f"[策略下單DEBUG] place_entry_order 被調用")
+        print(f"[策略下單DEBUG] 參數: direction={direction}, price={price}, quantity={quantity}, order_type={order_type}")
+        print(f"[策略下單DEBUG] 交易模式: {self.trading_mode}")
+        print(f"[策略下單DEBUG] order_executor: {self.order_executor}")
+
         if self.trading_mode == TradingMode.SIMULATION:
             # 模擬模式 - 直接返回成功
             print(f"[策略下單] 模擬建倉: {direction} {quantity}口 @{price}")
@@ -127,8 +192,10 @@ class StrategyOrderManager:
                 'mode': 'SIMULATION'
             }
         else:
-            # 實單模式 - 調用實際下單
+            # 實單模式 - 調用實際下單 (非同步)
+            print(f"[策略下單DEBUG] 進入實單模式分支")
             if not self.order_executor:
+                print(f"[策略下單DEBUG] order_executor 為 None，返回失敗")
                 return {
                     'success': False,
                     'message': '下單執行器未初始化',
@@ -139,11 +206,25 @@ class StrategyOrderManager:
             api_direction = 'BUY' if direction == 'LONG' else 'SELL'
             print(f"[策略下單] 實單建倉: {direction} {quantity}口 @{price}")
 
+            # 先暫存下單資訊
+            pending_key = f"{direction}_{price}_{quantity}_{len(self.pending_orders)}"
+            self.pending_orders[pending_key] = {
+                'direction': direction,
+                'price': price,
+                'quantity': quantity,
+                'order_type': order_type,
+                'status': 'WAITING_CONFIRM',
+                'timestamp': time.time()
+            }
+
+            # 執行非同步下單 - 建倉使用新倉
             result = self.order_executor.strategy_order(
                 direction=api_direction,
                 price=price,
                 quantity=quantity,
-                order_type=order_type
+                order_type=order_type,
+                product=self.current_product,
+                new_close=0  # 建倉 = 新倉
             )
             result['mode'] = 'LIVE'
             return result
@@ -186,11 +267,14 @@ class StrategyOrderManager:
             api_direction = 'BUY' if exit_direction == 'LONG' else 'SELL'
             print(f"[策略下單] 實單出場: {exit_direction} {quantity}口 @{price}")
 
+            # 執行非同步下單 - 出場使用平倉
             result = self.order_executor.strategy_order(
                 direction=api_direction,
                 price=price,
                 quantity=quantity,
-                order_type=order_type
+                order_type=order_type,
+                product=self.current_product,
+                new_close=1  # 出場 = 平倉
             )
             result['mode'] = 'LIVE'
             return result
@@ -205,6 +289,117 @@ class StrategyOrderManager:
         """預留：從LOG資料設置刪單追價機制"""
         # 未來整合委託查詢和刪單重下功能，並從LOG監控價格變化
         pass
+
+    def setup_reply_log_monitoring(self):
+        """設置回報LOG監聽 - 監聽委託成功和成交回報"""
+        try:
+            # 添加到 reply.order_reply 的logger
+            reply_logger = logging.getLogger('reply.order_reply')
+
+            # 檢查是否已有策略回報處理器
+            if not hasattr(self, 'reply_log_handler'):
+                self.reply_log_handler = StrategyReplyLogHandler(self)
+                reply_logger.addHandler(self.reply_log_handler)
+
+            print("[策略下單] ✅ 回報LOG監聽設置完成")
+        except Exception as e:
+            print(f"[策略下單] ❌ 回報LOG監聽設置失敗: {e}")
+
+    def process_reply_log(self, log_message):
+        """處理回報LOG - 解析委託序號並更新策略追蹤"""
+        try:
+            # 解析委託成功回報
+            if "✅【委託成功】序號:" in log_message:
+                # 提取序號
+                match = re.search(r'序號:(\d+)', log_message)
+                if match:
+                    seq_no = match.group(1)
+
+                    # 檢查是否有等待確認的策略委託
+                    if self.pending_orders:
+                        # 找到第一個等待確認的委託
+                        for key, order_info in list(self.pending_orders.items()):
+                            if order_info['status'] == 'WAITING_CONFIRM':
+                                # 轉移到正式追蹤
+                                order_info = self.pending_orders.pop(key)
+                                order_info['order_seq_no'] = seq_no
+                                order_info['status'] = 'CONFIRMED'
+                                self.strategy_orders[seq_no] = order_info
+
+                                print(f"[策略下單] 📋 委託確認: {order_info['direction']} {order_info['quantity']}口 @{order_info['price']} (序號:{seq_no})")
+                                break
+
+            # 解析成交回報
+            elif "🎉【成交】序號:" in log_message:
+                match = re.search(r'序號:(\d+)', log_message)
+                if match:
+                    seq_no = match.group(1)
+
+                    # 檢查是否為策略委託的成交
+                    if seq_no in self.strategy_orders:
+                        order_info = self.strategy_orders[seq_no]
+                        order_info['status'] = 'FILLED'
+
+                        print(f"[策略下單] 🎉 成交確認: {order_info['direction']} {order_info['quantity']}口 (序號:{seq_no})")
+
+                        # 如果是建倉成交，開始追蹤停損停利
+                        if order_info.get('new_close', 0) == 0:  # 新倉
+                            print(f"[策略下單] 🎯 建倉成交，開始追蹤停損停利")
+
+            # 解析取消回報
+            elif "🗑️【委託取消】序號:" in log_message or "🗑️【取消】序號:" in log_message:
+                match = re.search(r'序號:(\d+)', log_message)
+                if match:
+                    seq_no = match.group(1)
+
+                    # 檢查是否為策略委託的取消
+                    if seq_no in self.strategy_orders:
+                        order_info = self.strategy_orders[seq_no]
+                        order_info['status'] = 'CANCELLED'
+
+                        print(f"[策略下單] 🗑️ 委託取消: {order_info['direction']} {order_info['quantity']}口 (序號:{seq_no})")
+
+        except Exception as e:
+            print(f"[策略下單] ❌ 回報LOG處理失敗: {e}")
+
+    def get_strategy_orders_status(self):
+        """獲取策略委託狀態 - 用於查看追蹤情況"""
+        print(f"\n📊 策略委託狀態:")
+        print(f"等待確認: {len(self.pending_orders)} 筆")
+        print(f"已確認: {len([o for o in self.strategy_orders.values() if o['status'] == 'CONFIRMED'])} 筆")
+        print(f"已成交: {len([o for o in self.strategy_orders.values() if o['status'] == 'FILLED'])} 筆")
+        print(f"已取消: {len([o for o in self.strategy_orders.values() if o['status'] == 'CANCELLED'])} 筆")
+
+        if self.strategy_orders:
+            print(f"\n📋 詳細記錄:")
+            for seq_no, order_info in self.strategy_orders.items():
+                print(f"  序號:{seq_no} | {order_info['direction']} {order_info['quantity']}口 @{order_info['price']} | {order_info['status']}")
+
+        return {
+            'pending': len(self.pending_orders),
+            'confirmed': len([o for o in self.strategy_orders.values() if o['status'] == 'CONFIRMED']),
+            'filled': len([o for o in self.strategy_orders.values() if o['status'] == 'FILLED']),
+            'cancelled': len([o for o in self.strategy_orders.values() if o['status'] == 'CANCELLED'])
+        }
+
+# 新增：策略回報LOG處理器
+class StrategyReplyLogHandler(logging.Handler):
+    """策略回報LOG處理器 - 監聽委託和成交回報"""
+
+    def __init__(self, strategy_order_manager):
+        super().__init__()
+        self.strategy_order_manager = strategy_order_manager
+
+    def emit(self, record):
+        try:
+            message = record.getMessage()
+
+            # 監聽回報相關LOG
+            if any(keyword in message for keyword in ["【委託成功】", "【成交】", "【委託取消】", "【取消】"]):
+                self.strategy_order_manager.process_reply_log(message)
+
+        except Exception as e:
+            pass  # 忽略錯誤，避免影響LOG系統
 
 # ==================== 停損管理核心類別 ====================
 
@@ -758,10 +953,18 @@ class OrderTesterApp(tk.Tk):
             logger.info("🎯 開始創建策略面板...")
 
             # 初始化策略下單管理器
+            print(f"[策略DEBUG] 準備初始化策略下單管理器")
+            print(f"[策略DEBUG] future_order_frame: {getattr(self, 'future_order_frame', None)}")
+            if hasattr(self, 'future_order_frame') and self.future_order_frame:
+                print(f"[策略DEBUG] future_order_frame.order_executor: {getattr(self.future_order_frame, 'order_executor', None)}")
+
             self.strategy_order_manager = StrategyOrderManager(
                 future_order_frame=self.future_order_frame,
                 trading_mode=TradingMode.SIMULATION  # 預設為模擬模式
             )
+
+            print(f"[策略DEBUG] 策略下單管理器初始化完成")
+            print(f"[策略DEBUG] strategy_order_manager.order_executor: {self.strategy_order_manager.order_executor}")
             logger.info("✅ 策略下單管理器初始化完成")
 
             # 創建策略面板容器
@@ -786,6 +989,46 @@ class OrderTesterApp(tk.Tk):
             self.mode_status_var = tk.StringVar(value="✅ 模擬模式 (安全)")
             tk.Label(mode_frame, textvariable=self.mode_status_var,
                     font=("Arial", 10, "bold"), fg="green").pack(side="left", padx=10)
+
+            # 商品選擇區域
+            product_frame = tk.Frame(mode_frame)
+            product_frame.pack(side="left", padx=10)
+
+            tk.Label(product_frame, text="商品:", font=("Arial", 10)).pack(side="left", padx=5)
+            self.strategy_product_var = tk.StringVar(value="MTX00")
+            product_combo = ttk.Combobox(product_frame, textvariable=self.strategy_product_var,
+                                       values=["MTX00", "TM0000"],
+                                       state="readonly", width=8, font=("Arial", 10))
+            product_combo.pack(side="left", padx=5)
+            product_combo.bind("<<ComboboxSelected>>", self.on_strategy_product_changed)
+
+            # 商品說明
+            tk.Label(product_frame, text="(MTX00:小台指, TM0000:微型台指)",
+                    font=("Arial", 8), fg="gray").pack(side="left", padx=5)
+
+            # 進場頻率控制區域
+            entry_freq_frame = tk.Frame(mode_frame)
+            entry_freq_frame.pack(side="left", padx=10)
+
+            tk.Label(entry_freq_frame, text="進場頻率:", font=("Arial", 10)).pack(side="left", padx=5)
+            self.entry_frequency_var = tk.StringVar(value="一天一次")
+            freq_combo = ttk.Combobox(entry_freq_frame, textvariable=self.entry_frequency_var,
+                                    values=["一天一次", "可重複進場", "測試模式"],
+                                    state="readonly", width=10, font=("Arial", 10))
+            freq_combo.pack(side="left", padx=5)
+            freq_combo.bind("<<ComboboxSelected>>", self.on_entry_frequency_changed)
+
+            # 策略委託狀態查看按鈕
+            status_btn = tk.Button(mode_frame, text="📊 查看委託狀態",
+                                 command=self.show_strategy_orders_status,
+                                 font=("Arial", 9), bg="lightblue")
+            status_btn.pack(side="right", padx=5)
+
+            # 重置進場狀態按鈕
+            reset_btn = tk.Button(mode_frame, text="🔄 重置進場狀態",
+                                command=self.reset_entry_status,
+                                font=("Arial", 9), bg="lightyellow")
+            reset_btn.pack(side="right", padx=5)
 
             # 風險警告
             tk.Label(mode_frame, text="⚠️ 實單模式將執行真實交易！",
@@ -1251,7 +1494,6 @@ class OrderTesterApp(tk.Tk):
             self.add_strategy_log(f"🔍 收到LOG: {log_message}")
 
             # 解析LOG訊息：【Tick】價格:2228200 買:2228100 賣:2228200 量:1 時間:22:59:21
-            import re
             pattern = r"【Tick】價格:(\d+) 買:(\d+) 賣:(\d+) 量:(\d+) 時間:(\d{2}:\d{2}:\d{2})"
             match = re.match(pattern, log_message)
 
@@ -1329,11 +1571,41 @@ class OrderTesterApp(tk.Tk):
             self._last_range_minute = current_minute
 
             # 區間計算完成後的進場邏輯
-            if self.range_calculated and not self.daily_entry_completed:
+            if self.range_calculated and self.can_enter_position():
                 self.process_entry_logic(price, time_str, hour, minute, second)
 
         except Exception as e:
             pass
+
+    def can_enter_position(self):
+        """檢查是否可以進場 - 根據進場頻率設定"""
+        try:
+            # 獲取進場頻率設定
+            frequency = getattr(self, 'entry_frequency_var', None)
+            if frequency:
+                freq_setting = frequency.get()
+            else:
+                freq_setting = "一天一次"  # 預設值
+
+            if freq_setting == "一天一次":
+                # 一天一次模式：檢查是否已經進場
+                return not self.daily_entry_completed
+
+            elif freq_setting == "可重複進場":
+                # 可重複進場模式：只檢查是否已有部位
+                return not (hasattr(self, 'position') and self.position is not None)
+
+            elif freq_setting == "測試模式":
+                # 測試模式：忽略所有限制
+                return True
+
+            else:
+                # 預設為一天一次
+                return not self.daily_entry_completed
+
+        except Exception as e:
+            # 發生錯誤時使用保守策略
+            return not self.daily_entry_completed
 
     def process_entry_logic(self, price, time_str, hour, minute, second):
         """處理進場邏輯"""
@@ -1457,8 +1729,23 @@ class OrderTesterApp(tk.Tk):
             # 執行建倉
             self.enter_position(direction, price, time_str)
 
-            # 標記當天進場已完成
-            self.daily_entry_completed = True
+            # 根據進場頻率設定決定是否標記當天進場完成
+            frequency = getattr(self, 'entry_frequency_var', None)
+            freq_setting = frequency.get() if frequency else "一天一次"
+
+            if freq_setting == "一天一次":
+                # 一天一次模式：標記當天進場已完成
+                self.daily_entry_completed = True
+                print(f"[策略] 📅 一天一次模式：標記當天進場已完成")
+            elif freq_setting == "可重複進場":
+                # 可重複進場模式：不標記完成，但重置突破檢測
+                self.first_breakout_detected = False
+                print(f"[策略] 🔄 可重複進場模式：重置突破檢測，等待下次機會")
+            elif freq_setting == "測試模式":
+                # 測試模式：重置所有狀態，立即可再次進場
+                self.daily_entry_completed = False
+                self.first_breakout_detected = False
+                print(f"[策略] 🧪 測試模式：重置所有狀態，可立即再次進場")
 
             # 重置信號狀態
             self.breakout_signal = None
@@ -1515,13 +1802,21 @@ class OrderTesterApp(tk.Tk):
                 self.lots.append(lot_info)
 
                 # 新增：使用策略下單管理器執行建倉下單
+                print(f"[策略DEBUG] 檢查策略下單管理器: hasattr={hasattr(self, 'strategy_order_manager')}, manager={getattr(self, 'strategy_order_manager', None)}")
+
                 if hasattr(self, 'strategy_order_manager') and self.strategy_order_manager:
+                    print(f"[策略DEBUG] 策略下單管理器存在，準備下單...")
+                    print(f"[策略DEBUG] 交易模式: {self.strategy_order_manager.trading_mode}")
+                    print(f"[策略DEBUG] order_executor: {self.strategy_order_manager.order_executor}")
+
                     result = self.strategy_order_manager.place_entry_order(
                         direction=direction,
                         price=float(price),
                         quantity=1,
                         order_type="FOK"
                     )
+
+                    print(f"[策略DEBUG] 下單結果: {result}")
 
                     if result['success']:
                         mode_text = result.get('mode', 'UNKNOWN')
@@ -1538,6 +1833,7 @@ class OrderTesterApp(tk.Tk):
                         self.add_strategy_log(f"❌ 建倉下單失敗: 第{i+1}口 - {result['message']}")
                 else:
                     # 備用：純模擬模式
+                    print(f"[策略DEBUG] 策略下單管理器不存在，使用備用模式")
                     print(f"[策略] 📋 模擬建倉: 第{i+1}口 {direction} @{float(price):.1f} (ID: {lot_info['order_id']})")
                     self.add_strategy_log(f"📋 模擬建倉: 第{i+1}口 {direction} @{float(price):.1f}")
 
@@ -2063,6 +2359,96 @@ class OrderTesterApp(tk.Tk):
             # 發生錯誤時恢復到模擬模式
             self.trading_mode_var.set(TradingMode.SIMULATION.value)
             self.mode_status_var.set("✅ 模擬模式 (安全)")
+
+    def on_strategy_product_changed(self, event=None):
+        """策略商品變更事件"""
+        try:
+            product = self.strategy_product_var.get()
+
+            # 更新策略下單管理器的商品設定
+            if hasattr(self, 'strategy_order_manager'):
+                self.strategy_order_manager.current_product = product
+
+            # 記錄變更
+            if product == "MTX00":
+                self.add_strategy_log("📊 切換到小台指期貨 (MTX00)")
+                logger.info("策略商品切換為小台指期貨 (MTX00)")
+            elif product == "TM0000":
+                self.add_strategy_log("📊 切換到微型台指期貨 (TM0000)")
+                logger.info("策略商品切換為微型台指期貨 (TM0000)")
+
+        except Exception as e:
+            logger.error(f"策略商品切換失敗: {e}")
+            # 發生錯誤時恢復到預設商品
+            self.strategy_product_var.set("MTX00")
+
+    def on_entry_frequency_changed(self, event=None):
+        """進場頻率變更事件"""
+        try:
+            frequency = self.entry_frequency_var.get()
+
+            if frequency == "一天一次":
+                self.add_strategy_log("📅 設定為一天一次進場模式")
+                logger.info("策略進場頻率設定為一天一次")
+
+            elif frequency == "可重複進場":
+                self.add_strategy_log("🔄 設定為可重複進場模式")
+                logger.info("策略進場頻率設定為可重複進場")
+
+                # 重置今日進場標記，允許重新進場
+                if hasattr(self, 'daily_entry_completed'):
+                    self.daily_entry_completed = False
+                    self.add_strategy_log("✅ 已重置今日進場標記，可重新進場")
+
+            elif frequency == "測試模式":
+                self.add_strategy_log("🧪 設定為測試模式 - 忽略所有進場限制")
+                logger.info("策略進場頻率設定為測試模式")
+
+                # 重置所有限制
+                if hasattr(self, 'daily_entry_completed'):
+                    self.daily_entry_completed = False
+                if hasattr(self, 'first_breakout_detected'):
+                    self.first_breakout_detected = False
+
+                self.add_strategy_log("✅ 已重置所有進場限制")
+
+        except Exception as e:
+            logger.error(f"進場頻率變更失敗: {e}")
+            # 發生錯誤時恢復到預設
+            self.entry_frequency_var.set("一天一次")
+
+    def show_strategy_orders_status(self):
+        """顯示策略委託狀態"""
+        try:
+            if hasattr(self, 'strategy_order_manager'):
+                status = self.strategy_order_manager.get_strategy_orders_status()
+                self.add_strategy_log(f"📊 委託狀態 - 等待:{status['pending']} 確認:{status['confirmed']} 成交:{status['filled']} 取消:{status['cancelled']}")
+            else:
+                self.add_strategy_log("❌ 策略下單管理器未初始化")
+        except Exception as e:
+            self.add_strategy_log(f"❌ 查看委託狀態失敗: {e}")
+
+    def reset_entry_status(self):
+        """重置進場狀態 - 手動重置功能"""
+        try:
+            # 重置進場相關狀態
+            self.daily_entry_completed = False
+            self.first_breakout_detected = False
+            self.breakout_signal = None
+            self.waiting_for_entry = False
+            self.entry_signal_time = None
+
+            # 更新UI顯示
+            self.signal_status_var.set("⏳ 等待信號")
+            self.signal_direction_var.set("無")
+            self.daily_status_var.set("等待進場")
+
+            self.add_strategy_log("🔄 已重置進場狀態 - 可重新檢測突破信號")
+            logger.info("手動重置策略進場狀態")
+
+        except Exception as e:
+            self.add_strategy_log(f"❌ 重置進場狀態失敗: {e}")
+            logger.error(f"重置進場狀態失敗: {e}")
 
     def on_range_mode_changed(self, event=None):
         """區間模式變更事件"""

@@ -6,6 +6,8 @@
 
 import sys
 import os
+import time
+from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import tkinter as tk
@@ -50,9 +52,18 @@ class OrderExecutor:
         # 從LOG資料獲取報價資訊的預留接口
         self.log_quote_parser = None
 
+        # 非同步下單回調處理
+        self.strategy_callback = None  # 策略回調函數
+        self.setup_async_order_handler()
+
     def _default_message_callback(self, message):
         """預設訊息回調"""
         print(f"[OrderExecutor] {message}")
+
+    def _get_login_id(self):
+        """取得登入ID"""
+        # 暫時使用固定的登入ID，後續可以改為動態取得
+        return "E123354882"
 
     def execute_order_core(self, order_params, require_confirmation=True):
         """
@@ -88,7 +99,7 @@ class OrderExecutor:
             self.add_message(f"【錯誤】{error_msg}")
             return {'success': False, 'message': error_msg, 'order_id': None}
 
-    def strategy_order(self, direction, price, quantity=1, order_type="FOK", product="MTX00"):
+    def strategy_order(self, direction, price, quantity=1, order_type="FOK", product="MTX00", new_close=0):
         """
         策略專用下單 - 無確認對話框
 
@@ -98,11 +109,12 @@ class OrderExecutor:
             quantity: 委託數量
             order_type: 委託類型 ('ROD', 'IOC', 'FOK')
             product: 商品代碼
+            new_close: 倉別 (0:新倉, 1:平倉, 2:自動)
 
         Returns:
             dict: 下單結果
         """
-        # 固定策略交易參數
+        # 策略交易參數
         order_params = {
             'account': 'F0200006363839',  # 策略固定帳號
             'product': product,
@@ -111,11 +123,13 @@ class OrderExecutor:
             'quantity': quantity,
             'order_type': order_type,
             'day_trade': 1,  # 當沖
-            'new_close': 0,  # 新倉
+            'new_close': new_close,  # 倉別：0=新倉, 1=平倉, 2=自動
             'reserved': 0    # 盤中
         }
 
-        self.add_message(f"【策略下單】{direction} {quantity}口 @{price} ({order_type})")
+        # 根據倉別顯示不同訊息
+        close_type_text = {0: "新倉", 1: "平倉", 2: "自動"}[new_close]
+        self.add_message(f"【策略下單】{direction} {quantity}口 @{price} ({order_type}) [{close_type_text}]")
         return self.execute_order_core(order_params, require_confirmation=False)
 
     def manual_order(self, order_params):
@@ -161,8 +175,11 @@ class OrderExecutor:
                     msg_text = f"錯誤代碼: {nCode}"
                 return {'success': False, 'message': f'SKOrderLib初始化失敗: {msg_text}', 'order_id': None}
 
+            # 取得登入ID - 從父視窗或使用預設值
+            login_id = self._get_login_id()
+            self.add_message(f"【Token】使用登入ID: {login_id}")
+
             # 讀取憑證
-            login_id = "E123354882"  # 固定登入ID
             self.add_message(f"【憑證】使用登入ID讀取憑證: {login_id}")
             nCode = self.m_pSKOrder.ReadCertByID(login_id)
 
@@ -192,23 +209,28 @@ class OrderExecutor:
             oOrder.sNewClose = order_params.get('new_close', 0)
             oOrder.sReserved = order_params.get('reserved', 0)
 
-            # 執行下單
-            self.add_message("【API】準備調用SendFutureOrderCLR...")
-            result = self.m_pSKOrder.SendFutureOrderCLR(login_id, True, oOrder)
+            # 執行下單 - 非同步下單
+            self.add_message("【API】準備調用SendFutureOrderCLR (非同步模式)...")
+            self.add_message(f"【API參數】Token: {login_id}, 非同步: True")
+            result = self.m_pSKOrder.SendFutureOrderCLR(login_id, True, oOrder)  # True = 非同步下單
 
             if isinstance(result, tuple) and len(result) == 2:
                 message, nCode = result
                 self.add_message(f"【API返回】訊息: {message}, 代碼: {nCode}")
 
                 if nCode == 0:
-                    return {'success': True, 'message': message, 'order_id': message}
+                    # 非同步下單請求已送出，實際結果將透過 OnAsyncOrder 事件回報
+                    self.add_message(f"✅【下單請求】已送出，等待 OnAsyncOrder 確認...")
+                    return {'success': True, 'message': '下單請求已送出', 'order_id': 'PENDING'}
                 else:
                     if self.m_pSKCenter:
                         error_msg = self.m_pSKCenter.SKCenterLib_GetReturnCodeMessage(nCode)
                     else:
                         error_msg = f"錯誤代碼: {nCode}"
+                    self.add_message(f"❌【下單失敗】{error_msg}")
                     return {'success': False, 'message': error_msg, 'order_id': None}
             else:
+                self.add_message(f"【異常】API返回格式異常: {result}")
                 return {'success': False, 'message': f'API返回格式異常: {result}', 'order_id': None}
 
         except Exception as e:
@@ -227,6 +249,51 @@ class OrderExecutor:
         # 未來整合委託查詢和刪單重下功能
         pass
 
+    def setup_async_order_handler(self):
+        """設置非同步下單事件處理"""
+        try:
+            if self.m_pSKOrder:
+                # 創建事件處理器類別
+                class AsyncOrderEventHandler:
+                    def __init__(self, order_executor):
+                        self.order_executor = order_executor
+
+                    def OnAsyncOrder(self, nCode, bstrMessage):
+                        """處理非同步下單結果事件"""
+                        try:
+                            if nCode == 0:
+                                # 委託成功，bstrMessage 就是13碼委託序號
+                                self.order_executor.add_message(f"✅【委託確認】委託序號: {bstrMessage}")
+
+                                # 通知策略管理器
+                                if self.order_executor.strategy_callback:
+                                    self.order_executor.strategy_callback(bstrMessage, 'ORDER_SUCCESS')
+                            else:
+                                # 委託失敗
+                                self.order_executor.add_message(f"❌【委託失敗】錯誤: {bstrMessage} (代碼: {nCode})")
+
+                                # 通知策略管理器
+                                if self.order_executor.strategy_callback:
+                                    self.order_executor.strategy_callback(bstrMessage, 'ORDER_FAILED', nCode)
+
+                        except Exception as e:
+                            self.order_executor.add_message(f"【錯誤】OnAsyncOrder處理失敗: {e}")
+                        return 0
+
+                # 設置事件處理器
+                self.async_order_handler = AsyncOrderEventHandler(self)
+
+                # 連接事件 (如果API支援)
+                try:
+                    # 嘗試設置事件處理器
+                    self.m_pSKOrder.OnAsyncOrder = self.async_order_handler.OnAsyncOrder
+                    self.add_message("【初始化】OnAsyncOrder 事件處理器設置完成")
+                except Exception as e:
+                    self.add_message(f"【警告】OnAsyncOrder 事件設置失敗: {e}")
+
+        except Exception as e:
+            self.add_message(f"【錯誤】設置非同步事件處理器失敗: {e}")
+
 class FutureOrderFrame(tk.Frame):
     """期貨下單框架"""
     
@@ -240,11 +307,14 @@ class FutureOrderFrame(tk.Frame):
         self.m_pSKReply = skcom_objects.get('SKReply') if skcom_objects else None
         self.m_pSKQuote = skcom_objects.get('SKQuote') if skcom_objects else None
 
-        # 新增：初始化下單執行器
-        self.order_executor = OrderExecutor(skcom_objects, self.add_message)
-
         # UI變數
         self.order_data = {}
+
+        # 建立UI
+        self.create_widgets()
+
+        # 新增：初始化下單執行器 (在UI創建後)
+        self.order_executor = OrderExecutor(skcom_objects, self.add_message)
 
         # 即時報價相關變數
         self.quote_monitoring = False
@@ -259,9 +329,6 @@ class FutureOrderFrame(tk.Frame):
 
         # 策略面板暫時移除
         # self.strategy_panel = None
-
-        # 建立UI
-        self.create_widgets()
 
         # 載入預設值
         self.load_default_values()
@@ -1154,7 +1221,6 @@ class FutureOrderFrame(tk.Frame):
                                     if self.parent._price_bridge_available:
                                         # 導入價格橋接函數
                                         from price_bridge import write_price_to_bridge
-                                        from datetime import datetime
 
                                         # 寫入價格到橋接檔案
                                         write_price_to_bridge(corrected_price, nQty, datetime.now())
@@ -1164,7 +1230,6 @@ class FutureOrderFrame(tk.Frame):
                                         from price_bridge import write_price_to_bridge
                                         self.parent._price_bridge_available = True
                                         # 立即寫入價格
-                                        from datetime import datetime
                                         write_price_to_bridge(corrected_price, nQty, datetime.now())
                                         print("✅ 價格橋接已啟動")
                                     except ImportError:
@@ -1178,7 +1243,6 @@ class FutureOrderFrame(tk.Frame):
                                         if self.parent._tcp_server_available:
                                             # 導入TCP廣播函數
                                             from tcp_price_server import broadcast_price_tcp
-                                            from datetime import datetime
 
                                             # 準備價格資料
                                             price_data = {
@@ -1212,7 +1276,6 @@ class FutureOrderFrame(tk.Frame):
 
                             # 控制LOG頻率，使用最安全的方式
                             if hasattr(self.parent, '_last_log_time'):
-                                import time
                                 current_time = time.time()
                                 if current_time - self.parent._last_log_time > 1:  # 每1秒記錄一次
                                     self.parent._last_log_time = current_time
@@ -1226,7 +1289,6 @@ class FutureOrderFrame(tk.Frame):
                                     except:
                                         pass
                             else:
-                                import time
                                 self.parent._last_log_time = time.time()
                                 tick_msg = f"【Tick】價格:{nClose} 買:{nBid} 賣:{nAsk} 量:{nQty} 時間:{formatted_time}"
                                 # 只輸出到控制台，避免GIL錯誤
@@ -1248,7 +1310,6 @@ class FutureOrderFrame(tk.Frame):
                     try:
                         # 控制五檔LOG頻率，使用最安全的方式
                         if hasattr(self.parent, '_last_best5_time'):
-                            import time
                             current_time = time.time()
                             if current_time - self.parent._last_best5_time > 3:  # 每3秒記錄一次
                                 self.parent._last_best5_time = current_time
@@ -1262,7 +1323,6 @@ class FutureOrderFrame(tk.Frame):
                                 except:
                                     pass
                         else:
-                            import time
                             self.parent._last_best5_time = time.time()
                             best5_msg = f"【五檔】買1:{nBestBid1}({nBestBidQty1}) 賣1:{nBestAsk1}({nBestAskQty1})"
                             # 只輸出到控制台，避免GIL錯誤
@@ -1296,7 +1356,6 @@ class FutureOrderFrame(tk.Frame):
 
     def should_log_tick(self):
         """控制Tick LOG頻率，避免LOG過多"""
-        import time
         current_time = time.time()
         if not hasattr(self, '_last_tick_log_time'):
             self._last_tick_log_time = 0
@@ -1309,7 +1368,6 @@ class FutureOrderFrame(tk.Frame):
 
     def should_log_best5(self):
         """控制五檔LOG頻率"""
-        import time
         current_time = time.time()
         if not hasattr(self, '_last_best5_log_time'):
             self._last_best5_log_time = 0
@@ -1896,8 +1954,7 @@ class FutureOrderFrame(tk.Frame):
     def add_trade_report(self, message):
         """添加成交回報訊息"""
         try:
-            import datetime
-            timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+            timestamp = datetime.now().strftime("%H:%M:%S")
             formatted_message = f"[{timestamp}] {message}\n"
 
             self.text_trade_report.insert(tk.END, formatted_message)
@@ -2056,7 +2113,6 @@ class FutureOrderFrame(tk.Frame):
                 # 注意：這裡可能需要根據實際API調整
                 try:
                     # 模擬報價資料 (實際應該調用相應的查詢API)
-                    import time
                     current_time = time.strftime("%H:%M:%S")
 
                     # 這裡應該調用實際的報價查詢API

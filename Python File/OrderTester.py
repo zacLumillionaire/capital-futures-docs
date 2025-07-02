@@ -1034,117 +1034,115 @@ class OrderTesterApp(tk.Tk):
             tk.Label(mode_frame, text="⚠️ 實單模式將執行真實交易！",
                     font=("Arial", 9), fg="red").pack(side="right", padx=5)
 
-            # 價格顯示區域
-            price_frame = tk.LabelFrame(strategy_container, text="即時價格", fg="green")
-            price_frame.pack(fill="x", padx=5, pady=5)
 
-            tk.Label(price_frame, text="當前價格:", font=("Arial", 10)).pack(side="left", padx=5)
-            self.strategy_price_var = tk.StringVar(value="--")
-            tk.Label(price_frame, textvariable=self.strategy_price_var,
-                    font=("Arial", 12, "bold"), fg="red").pack(side="left", padx=5)
 
-            tk.Label(price_frame, text="更新時間:", font=("Arial", 10)).pack(side="left", padx=(20, 5))
-            self.strategy_time_var = tk.StringVar(value="--:--:--")
-            tk.Label(price_frame, textvariable=self.strategy_time_var,
-                    font=("Arial", 10), fg="blue").pack(side="left", padx=5)
-
-            # 客製化區間設定
-            range_config_frame = tk.LabelFrame(strategy_container, text="區間設定", fg="purple")
+            # 客製化區間設定 (包含即時價格)
+            range_config_frame = tk.LabelFrame(strategy_container, text="📊 即時價格 & 區間設定", fg="purple", font=("Arial", 10, "bold"))
             range_config_frame.pack(fill="x", padx=5, pady=5)
 
-            # 第一行：區間模式選擇
-            mode_row = tk.Frame(range_config_frame)
-            mode_row.pack(fill="x", padx=5, pady=2)
+            # 即時價格區域 (最重要，放在最左邊)
+            price_area = tk.Frame(range_config_frame)
+            price_area.pack(side="left", padx=5, pady=2)
 
-            tk.Label(mode_row, text="模式:", font=("Arial", 10)).pack(side="left", padx=5)
+            tk.Label(price_area, text="當前價格:", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+            self.strategy_price_var = tk.StringVar(value="--")
+            tk.Label(price_area, textvariable=self.strategy_price_var,
+                    font=("Arial", 12, "bold"), fg="red").pack(side="left", padx=5)
+
+            tk.Label(price_area, text="更新時間:", font=("Arial", 10)).pack(side="left", padx=(10, 5))
+            self.strategy_time_var = tk.StringVar(value="--:--:--")
+            tk.Label(price_area, textvariable=self.strategy_time_var,
+                    font=("Arial", 10), fg="blue").pack(side="left", padx=5)
+
+            # 區間模式選擇區域
+            mode_area = tk.Frame(range_config_frame)
+            mode_area.pack(side="left", padx=15, pady=2)
+
+            tk.Label(mode_area, text="模式:", font=("Arial", 10)).pack(side="left", padx=5)
             self.range_mode_var = tk.StringVar(value="正常模式")
-            mode_combo = ttk.Combobox(mode_row, textvariable=self.range_mode_var, width=12, state='readonly')
+            mode_combo = ttk.Combobox(mode_area, textvariable=self.range_mode_var, width=12, state='readonly')
             mode_combo['values'] = ['正常模式', '測試模式']
             mode_combo.pack(side="left", padx=5)
             mode_combo.bind('<<ComboboxSelected>>', self.on_range_mode_changed)
 
-            # 第二行：時間設定
-            time_row = tk.Frame(range_config_frame)
-            time_row.pack(fill="x", padx=5, pady=2)
+            # 時間設定區域
+            time_area = tk.Frame(range_config_frame)
+            time_area.pack(side="left", padx=15, pady=2)
 
-            tk.Label(time_row, text="開始時間:", font=("Arial", 10)).pack(side="left", padx=5)
+            tk.Label(time_area, text="開始時間:", font=("Arial", 10)).pack(side="left", padx=5)
             self.range_start_time_var = tk.StringVar(value="08:46")
-            self.range_time_entry = tk.Entry(time_row, textvariable=self.range_start_time_var, width=8, font=("Arial", 10))
+            self.range_time_entry = tk.Entry(time_area, textvariable=self.range_start_time_var, width=8, font=("Arial", 10))
             self.range_time_entry.pack(side="left", padx=5)
 
-            tk.Button(time_row, text="套用", command=self.apply_range_time,
+            tk.Button(time_area, text="套用", command=self.apply_range_time,
                      bg="lightblue", fg="black", font=("Arial", 9)).pack(side="left", padx=5)
 
-            tk.Button(time_row, text="測試用(3分鐘後)", command=self.set_test_time,
+            tk.Button(time_area, text="測試用(3分鐘後)", command=self.set_test_time,
                      bg="orange", fg="white", font=("Arial", 9)).pack(side="left", padx=5)
 
-            # 區間狀態顯示
-            range_status_frame = tk.LabelFrame(strategy_container, text="區間狀態", fg="blue")
-            range_status_frame.pack(fill="x", padx=5, pady=5)
+            # 區間狀態與進場信號合併顯示 (類似交易模式框的水平布局)
+            range_signal_frame = tk.LabelFrame(strategy_container, text="📊 區間狀態 & 進場信號", fg="blue", font=("Arial", 10, "bold"))
+            range_signal_frame.pack(fill="x", padx=5, pady=5)
 
-            # 第一行：當前區間和狀態
-            status_row1 = tk.Frame(range_status_frame)
-            status_row1.pack(fill="x", padx=5, pady=2)
+            # 區間狀態區域
+            range_area = tk.Frame(range_signal_frame)
+            range_area.pack(side="left", padx=5, pady=2)
 
-            tk.Label(status_row1, text="目標區間:", font=("Arial", 10)).pack(side="left", padx=5)
+            tk.Label(range_area, text="目標區間:", font=("Arial", 10)).pack(side="left", padx=5)
             self.target_range_var = tk.StringVar(value="08:46-08:48")
-            tk.Label(status_row1, textvariable=self.target_range_var,
+            tk.Label(range_area, textvariable=self.target_range_var,
                     font=("Arial", 10, "bold"), fg="purple").pack(side="left", padx=5)
 
-            tk.Label(status_row1, text="狀態:", font=("Arial", 10)).pack(side="left", padx=(20, 5))
+            tk.Label(range_area, text="狀態:", font=("Arial", 10)).pack(side="left", padx=(10, 5))
             self.range_status_var = tk.StringVar(value="等待區間開始")
-            tk.Label(status_row1, textvariable=self.range_status_var,
+            tk.Label(range_area, textvariable=self.range_status_var,
                     font=("Arial", 10, "bold"), fg="orange").pack(side="left", padx=5)
 
-            # 第二行：高低點數據
-            status_row2 = tk.Frame(range_status_frame)
-            status_row2.pack(fill="x", padx=5, pady=2)
+            # 高低點區域
+            range_data_area = tk.Frame(range_signal_frame)
+            range_data_area.pack(side="left", padx=10, pady=2)
 
-            tk.Label(status_row2, text="高點:", font=("Arial", 10)).pack(side="left", padx=5)
+            tk.Label(range_data_area, text="高點:", font=("Arial", 10)).pack(side="left", padx=5)
             self.range_high_var = tk.StringVar(value="--")
-            tk.Label(status_row2, textvariable=self.range_high_var,
+            tk.Label(range_data_area, textvariable=self.range_high_var,
                     font=("Arial", 10, "bold"), fg="red").pack(side="left", padx=5)
 
-            tk.Label(status_row2, text="低點:", font=("Arial", 10)).pack(side="left", padx=(20, 5))
+            tk.Label(range_data_area, text="低點:", font=("Arial", 10)).pack(side="left", padx=(10, 5))
             self.range_low_var = tk.StringVar(value="--")
-            tk.Label(status_row2, textvariable=self.range_low_var,
+            tk.Label(range_data_area, textvariable=self.range_low_var,
                     font=("Arial", 10, "bold"), fg="green").pack(side="left", padx=5)
 
-            tk.Label(status_row2, text="區間大小:", font=("Arial", 10)).pack(side="left", padx=(20, 5))
+            tk.Label(range_data_area, text="區間大小:", font=("Arial", 10)).pack(side="left", padx=(10, 5))
             self.range_size_var = tk.StringVar(value="--")
-            tk.Label(status_row2, textvariable=self.range_size_var,
+            tk.Label(range_data_area, textvariable=self.range_size_var,
                     font=("Arial", 10, "bold"), fg="blue").pack(side="left", padx=5)
 
-            # 進場信號顯示
-            signal_frame = tk.LabelFrame(strategy_container, text="進場信號", fg="red")
-            signal_frame.pack(fill="x", padx=5, pady=5)
+            # 進場信號區域
+            signal_area = tk.Frame(range_signal_frame)
+            signal_area.pack(side="left", padx=10, pady=2)
 
-            # 第一行：信號狀態
-            signal_row1 = tk.Frame(signal_frame)
-            signal_row1.pack(fill="x", padx=5, pady=2)
-
-            tk.Label(signal_row1, text="信號狀態:", font=("Arial", 10)).pack(side="left", padx=5)
+            tk.Label(signal_area, text="信號狀態:", font=("Arial", 10)).pack(side="left", padx=5)
             self.signal_status_var = tk.StringVar(value="等待突破信號")
-            tk.Label(signal_row1, textvariable=self.signal_status_var,
+            tk.Label(signal_area, textvariable=self.signal_status_var,
                     font=("Arial", 10, "bold"), fg="orange").pack(side="left", padx=5)
 
-            tk.Label(signal_row1, text="方向:", font=("Arial", 10)).pack(side="left", padx=(20, 5))
+            tk.Label(signal_area, text="方向:", font=("Arial", 10)).pack(side="left", padx=(10, 5))
             self.signal_direction_var = tk.StringVar(value="--")
-            tk.Label(signal_row1, textvariable=self.signal_direction_var,
+            tk.Label(signal_area, textvariable=self.signal_direction_var,
                     font=("Arial", 10, "bold"), fg="purple").pack(side="left", padx=5)
 
-            # 第二行：進場資訊
-            signal_row2 = tk.Frame(signal_frame)
-            signal_row2.pack(fill="x", padx=5, pady=2)
+            # 進場資訊區域
+            entry_info_area = tk.Frame(range_signal_frame)
+            entry_info_area.pack(side="left", padx=10, pady=2)
 
-            tk.Label(signal_row2, text="進場價:", font=("Arial", 10)).pack(side="left", padx=5)
+            tk.Label(entry_info_area, text="進場價:", font=("Arial", 10)).pack(side="left", padx=5)
             self.entry_price_var = tk.StringVar(value="--")
-            tk.Label(signal_row2, textvariable=self.entry_price_var,
+            tk.Label(entry_info_area, textvariable=self.entry_price_var,
                     font=("Arial", 10, "bold"), fg="red").pack(side="left", padx=5)
 
-            tk.Label(signal_row2, text="進場時間:", font=("Arial", 10)).pack(side="left", padx=(20, 5))
+            tk.Label(entry_info_area, text="進場時間:", font=("Arial", 10)).pack(side="left", padx=(10, 5))
             self.entry_time_var = tk.StringVar(value="--:--:--")
-            tk.Label(signal_row2, textvariable=self.entry_time_var,
+            tk.Label(entry_info_area, textvariable=self.entry_time_var,
                     font=("Arial", 10, "bold"), fg="blue").pack(side="left", padx=5)
 
             # 部位狀態顯示

@@ -71,6 +71,141 @@ logger = logging.getLogger(__name__)
 # 策略功能啟用 - 使用安全的數據讀取方式
 STRATEGY_AVAILABLE = True
 
+# ==================== 策略下單管理類別 ====================
+
+# 新增：交易模式枚舉
+class TradingMode(Enum):
+    SIMULATION = "模擬"
+    LIVE = "實單"
+
+# 新增：策略下單管理器
+class StrategyOrderManager:
+    """策略下單管理器 - 橋接策略邏輯和實際下單"""
+
+    def __init__(self, future_order_frame, trading_mode=TradingMode.SIMULATION):
+        """
+        初始化策略下單管理器
+
+        Args:
+            future_order_frame: 期貨下單框架實例
+            trading_mode: 交易模式 (模擬/實單)
+        """
+        self.future_order_frame = future_order_frame
+        self.trading_mode = trading_mode
+        self.order_executor = future_order_frame.order_executor if future_order_frame else None
+
+        # 預留：報價監控和委託追蹤 (從LOG資料獲取)
+        self.quote_monitor = None
+        self.order_tracker = None
+        self.log_quote_parser = None
+
+    def set_trading_mode(self, mode):
+        """設定交易模式"""
+        self.trading_mode = mode
+        print(f"[策略下單] 交易模式切換為: {mode.value}")
+
+    def place_entry_order(self, direction, price, quantity=1, order_type="FOK"):
+        """
+        建倉下單
+
+        Args:
+            direction: 'LONG' 或 'SHORT'
+            price: 委託價格
+            quantity: 委託數量
+            order_type: 委託類型
+
+        Returns:
+            dict: 下單結果
+        """
+        if self.trading_mode == TradingMode.SIMULATION:
+            # 模擬模式 - 直接返回成功
+            print(f"[策略下單] 模擬建倉: {direction} {quantity}口 @{price}")
+            return {
+                'success': True,
+                'message': f'模擬建倉成功: {direction} {quantity}口 @{price}',
+                'order_id': f'SIM_{direction}_{int(price)}_{quantity}',
+                'mode': 'SIMULATION'
+            }
+        else:
+            # 實單模式 - 調用實際下單
+            if not self.order_executor:
+                return {
+                    'success': False,
+                    'message': '下單執行器未初始化',
+                    'order_id': None,
+                    'mode': 'LIVE'
+                }
+
+            api_direction = 'BUY' if direction == 'LONG' else 'SELL'
+            print(f"[策略下單] 實單建倉: {direction} {quantity}口 @{price}")
+
+            result = self.order_executor.strategy_order(
+                direction=api_direction,
+                price=price,
+                quantity=quantity,
+                order_type=order_type
+            )
+            result['mode'] = 'LIVE'
+            return result
+
+    def place_exit_order(self, direction, price, quantity=1, order_type="FOK"):
+        """
+        出場下單
+
+        Args:
+            direction: 'LONG' 或 'SHORT' (原部位方向)
+            price: 委託價格
+            quantity: 委託數量
+            order_type: 委託類型
+
+        Returns:
+            dict: 下單結果
+        """
+        # 出場方向與建倉方向相反
+        exit_direction = 'SHORT' if direction == 'LONG' else 'LONG'
+
+        if self.trading_mode == TradingMode.SIMULATION:
+            # 模擬模式 - 直接返回成功
+            print(f"[策略下單] 模擬出場: {exit_direction} {quantity}口 @{price}")
+            return {
+                'success': True,
+                'message': f'模擬出場成功: {exit_direction} {quantity}口 @{price}',
+                'order_id': f'SIM_EXIT_{exit_direction}_{int(price)}_{quantity}',
+                'mode': 'SIMULATION'
+            }
+        else:
+            # 實單模式 - 調用實際下單
+            if not self.order_executor:
+                return {
+                    'success': False,
+                    'message': '下單執行器未初始化',
+                    'order_id': None,
+                    'mode': 'LIVE'
+                }
+
+            api_direction = 'BUY' if exit_direction == 'LONG' else 'SELL'
+            print(f"[策略下單] 實單出場: {exit_direction} {quantity}口 @{price}")
+
+            result = self.order_executor.strategy_order(
+                direction=api_direction,
+                price=price,
+                quantity=quantity,
+                order_type=order_type
+            )
+            result['mode'] = 'LIVE'
+            return result
+
+    # 預留：五檔報價和刪單追價功能 (從LOG資料獲取)
+    def setup_quote_monitoring_from_log(self):
+        """預留：從LOG資料設置五檔報價監控"""
+        # 未來可以解析現有的報價LOG來獲取五檔資料
+        pass
+
+    def setup_order_chasing_from_log(self):
+        """預留：從LOG資料設置刪單追價機制"""
+        # 未來整合委託查詢和刪單重下功能，並從LOG監控價格變化
+        pass
+
 # ==================== 停損管理核心類別 ====================
 
 class StopLossType(Enum):
@@ -618,14 +753,43 @@ class OrderTesterApp(tk.Tk):
                 logger.error(f"更新TCP狀態失敗: {e}")
 
     def create_strategy_panel(self, parent_frame, skcom_objects):
-        """創建簡化策略面板 - 階段1"""
+        """創建簡化策略面板 - 階段1 + 實單功能整合"""
         try:
             logger.info("🎯 開始創建策略面板...")
+
+            # 初始化策略下單管理器
+            self.strategy_order_manager = StrategyOrderManager(
+                future_order_frame=self.future_order_frame,
+                trading_mode=TradingMode.SIMULATION  # 預設為模擬模式
+            )
+            logger.info("✅ 策略下單管理器初始化完成")
 
             # 創建策略面板容器
             strategy_container = tk.LabelFrame(parent_frame, text="🎯 開盤區間突破策略",
                                              fg="blue", font=("Arial", 12, "bold"))
             strategy_container.pack(fill="both", expand=True, padx=10, pady=10)
+
+            # 新增：交易模式控制區域
+            mode_frame = tk.LabelFrame(strategy_container, text="⚙️ 交易模式", fg="red", font=("Arial", 10, "bold"))
+            mode_frame.pack(fill="x", padx=5, pady=5)
+
+            # 模式選擇
+            tk.Label(mode_frame, text="當前模式:", font=("Arial", 10)).pack(side="left", padx=5)
+            self.trading_mode_var = tk.StringVar(value=TradingMode.SIMULATION.value)
+            mode_combo = ttk.Combobox(mode_frame, textvariable=self.trading_mode_var,
+                                    values=[TradingMode.SIMULATION.value, TradingMode.LIVE.value],
+                                    state="readonly", width=8, font=("Arial", 10))
+            mode_combo.pack(side="left", padx=5)
+            mode_combo.bind("<<ComboboxSelected>>", self.on_trading_mode_changed)
+
+            # 模式狀態顯示
+            self.mode_status_var = tk.StringVar(value="✅ 模擬模式 (安全)")
+            tk.Label(mode_frame, textvariable=self.mode_status_var,
+                    font=("Arial", 10, "bold"), fg="green").pack(side="left", padx=10)
+
+            # 風險警告
+            tk.Label(mode_frame, text="⚠️ 實單模式將執行真實交易！",
+                    font=("Arial", 9), fg="red").pack(side="right", padx=5)
 
             # 價格顯示區域
             price_frame = tk.LabelFrame(strategy_container, text="即時價格", fg="green")
@@ -1350,8 +1514,33 @@ class OrderTesterApp(tk.Tk):
                 }
                 self.lots.append(lot_info)
 
-                # 模擬下單記錄
-                print(f"[策略] 📋 模擬下單: 第{i+1}口 {direction} @{float(price):.1f} (ID: {lot_info['order_id']})")
+                # 新增：使用策略下單管理器執行建倉下單
+                if hasattr(self, 'strategy_order_manager') and self.strategy_order_manager:
+                    result = self.strategy_order_manager.place_entry_order(
+                        direction=direction,
+                        price=float(price),
+                        quantity=1,
+                        order_type="FOK"
+                    )
+
+                    if result['success']:
+                        mode_text = result.get('mode', 'UNKNOWN')
+                        if mode_text == 'LIVE':
+                            print(f"[策略] 🔴 實單建倉: 第{i+1}口 {direction} @{float(price):.1f} (ID: {result['order_id']})")
+                            self.add_strategy_log(f"🔴 實單建倉: 第{i+1}口 {direction} @{float(price):.1f}")
+                            # 更新order_id為實際委託編號
+                            lot_info['order_id'] = result['order_id']
+                        else:
+                            print(f"[策略] 📋 模擬建倉: 第{i+1}口 {direction} @{float(price):.1f} (ID: {lot_info['order_id']})")
+                            self.add_strategy_log(f"📋 模擬建倉: 第{i+1}口 {direction} @{float(price):.1f}")
+                    else:
+                        print(f"[策略] ❌ 建倉下單失敗: 第{i+1}口 - {result['message']}")
+                        self.add_strategy_log(f"❌ 建倉下單失敗: 第{i+1}口 - {result['message']}")
+                else:
+                    # 備用：純模擬模式
+                    print(f"[策略] 📋 模擬建倉: 第{i+1}口 {direction} @{float(price):.1f} (ID: {lot_info['order_id']})")
+                    self.add_strategy_log(f"📋 模擬建倉: 第{i+1}口 {direction} @{float(price):.1f}")
+
                 print(f"[策略]    停損規則: 移動停利={rule.use_trailing_stop}, 啟動點={rule.trailing_activation}, 回撤={rule.trailing_pullback}")
 
             # 更新UI顯示
@@ -1580,16 +1769,36 @@ class OrderTesterApp(tk.Tk):
                 self.trading_logger.update_daily_summary()
                 print(f"[交易記錄] 🎯 交易循環完成，已更新統計")
 
-        # 如果有實際下單API，可以在這裡調用
-        # 目前先使用模擬模式
+        # 新增：使用策略下單管理器執行出場下單
         try:
-            # 這裡可以整合到OrderTester的下單系統
-            # 例如調用期貨下單框架的下單功能
-            if hasattr(self, 'future_order_frame') and hasattr(self.future_order_frame, 'place_order'):
-                # 實際出場下單邏輯
-                pass
+            if hasattr(self, 'strategy_order_manager') and self.strategy_order_manager:
+                result = self.strategy_order_manager.place_exit_order(
+                    direction=self.position,  # 原部位方向
+                    price=float(price),
+                    quantity=1,
+                    order_type="FOK"
+                )
+
+                if result['success']:
+                    mode_text = result.get('mode', 'UNKNOWN')
+                    if mode_text == 'LIVE':
+                        self.add_strategy_log(f"🔴 實單出場: {result['message']}")
+                        print(f"[策略] 🔴 實單出場成功: {result['message']}")
+                    else:
+                        self.add_strategy_log(f"✅ 模擬出場: {result['message']}")
+                        print(f"[策略] ✅ 模擬出場: {result['message']}")
+                else:
+                    self.add_strategy_log(f"❌ 出場下單失敗: {result['message']}")
+                    print(f"[策略] ❌ 出場下單失敗: {result['message']}")
+            else:
+                # 備用：純模擬模式
+                self.add_strategy_log(f"✅ 模擬出場 (備用模式)")
+                print(f"[策略] ✅ 模擬出場 (備用模式)")
+
         except Exception as e:
             logger.error(f"❌ 執行出場下單失敗: {e}")
+            self.add_strategy_log(f"❌ 出場下單異常: {str(e)}")
+            print(f"[策略] ❌ 出場下單異常: {e}")
 
     def update_position_display(self):
         """更新部位顯示 - 包含停損狀態"""
@@ -1814,6 +2023,46 @@ class OrderTesterApp(tk.Tk):
                 print("[策略] ⏹️ LOG監聽已停止")
         except Exception as e:
             pass
+
+    def on_trading_mode_changed(self, event=None):
+        """交易模式變更事件"""
+        try:
+            mode_text = self.trading_mode_var.get()
+
+            if mode_text == TradingMode.LIVE.value:
+                # 切換到實單模式 - 需要額外確認
+                confirm_msg = "⚠️ 實單模式風險確認 ⚠️\n\n" + \
+                             "您即將切換到實單交易模式！\n" + \
+                             "策略觸發時將執行真實的期貨下單。\n\n" + \
+                             "期貨交易具有高風險，可能造成重大損失！\n" + \
+                             "確定要切換到實單模式嗎？"
+
+                result = messagebox.askyesno("實單模式確認", confirm_msg)
+
+                if result:
+                    # 確認切換到實單模式
+                    mode = TradingMode.LIVE
+                    self.strategy_order_manager.set_trading_mode(mode)
+                    self.mode_status_var.set("🔴 實單模式 (風險)")
+                    self.add_strategy_log("🔴 已切換到實單模式 - 策略將執行真實交易！")
+                    logger.warning("策略交易模式切換為實單模式")
+                else:
+                    # 取消切換，恢復模擬模式
+                    self.trading_mode_var.set(TradingMode.SIMULATION.value)
+                    self.add_strategy_log("✅ 保持模擬模式")
+            else:
+                # 切換到模擬模式
+                mode = TradingMode.SIMULATION
+                self.strategy_order_manager.set_trading_mode(mode)
+                self.mode_status_var.set("✅ 模擬模式 (安全)")
+                self.add_strategy_log("✅ 已切換到模擬模式")
+                logger.info("策略交易模式切換為模擬模式")
+
+        except Exception as e:
+            logger.error(f"交易模式切換失敗: {e}")
+            # 發生錯誤時恢復到模擬模式
+            self.trading_mode_var.set(TradingMode.SIMULATION.value)
+            self.mode_status_var.set("✅ 模擬模式 (安全)")
 
     def on_range_mode_changed(self, event=None):
         """區間模式變更事件"""

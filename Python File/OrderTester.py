@@ -28,6 +28,10 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import logging
 import comtypes.client
+from enum import Enum, auto
+from dataclasses import dataclass, field
+from decimal import Decimal
+from datetime import datetime
 
 # 導入我們的模組
 from order.future_order import FutureOrderFrame
@@ -66,6 +70,31 @@ logger = logging.getLogger(__name__)
 #     logger.warning(f"策略模組未載入: {e}")
 # 策略功能啟用 - 使用安全的數據讀取方式
 STRATEGY_AVAILABLE = True
+
+# ==================== 停損管理核心類別 ====================
+
+class StopLossType(Enum):
+    """停損類型枚舉"""
+    RANGE_BOUNDARY = auto()  # 區間邊界停損
+    OPENING_PRICE = auto()   # 開盤價停損
+    FIXED_POINTS = auto()    # 固定點數停損
+
+@dataclass
+class LotRule:
+    """單一口部位的出場規則配置"""
+    use_trailing_stop: bool = True                          # 是否使用移動停利
+    fixed_tp_points: Decimal | None = None                  # 固定停利點數
+    trailing_activation: Decimal | None = None              # 移動停利啟動點數
+    trailing_pullback: Decimal | None = None                # 移動停利回撤比例
+    protective_stop_multiplier: Decimal | None = None       # 保護性停損倍數
+
+@dataclass
+class StrategyConfig:
+    """策略配置的中央控制面板"""
+    trade_size_in_lots: int = 3                            # 交易口數
+    stop_loss_type: StopLossType = StopLossType.RANGE_BOUNDARY  # 停損類型
+    fixed_stop_loss_points: Decimal = Decimal(15)          # 固定停損點數
+    lot_rules: list[LotRule] = field(default_factory=list) # 各口停損規則
 
 # 全域變數
 sk = None
@@ -175,6 +204,12 @@ class OrderTesterApp(tk.Tk):
         # 策略相關初始化
         self.strategy_panel = None
         self.strategy_quote_callback = None
+
+        # 停損管理配置初始化
+        self.strategy_config = self.create_default_strategy_config()
+
+        # 交易記錄系統初始化
+        self.trading_logger = TradingLogger()
 
         # 🎯 關鍵：在程式啟動時就設定LOG處理器
         self.setup_strategy_log_handler()
@@ -737,6 +772,92 @@ class OrderTesterApp(tk.Tk):
             tk.Label(position_row2, textvariable=self.daily_status_var,
                     font=("Arial", 10, "bold"), fg="orange").pack(side="left", padx=5)
 
+            # 停損狀態顯示
+            stop_loss_frame = tk.LabelFrame(strategy_container, text="停損狀態", fg="red")
+            stop_loss_frame.pack(fill="x", padx=5, pady=5)
+
+            # 第一行：停損類型和狀態
+            stop_row1 = tk.Frame(stop_loss_frame)
+            stop_row1.pack(fill="x", padx=5, pady=2)
+
+            tk.Label(stop_row1, text="停損類型:", font=("Arial", 10)).pack(side="left", padx=5)
+            self.stop_loss_type_var = tk.StringVar(value="區間邊界")
+            tk.Label(stop_row1, textvariable=self.stop_loss_type_var,
+                    font=("Arial", 10, "bold"), fg="red").pack(side="left", padx=5)
+
+            tk.Label(stop_row1, text="移動停利:", font=("Arial", 10)).pack(side="left", padx=(20, 5))
+            self.trailing_stop_var = tk.StringVar(value="--")
+            tk.Label(stop_row1, textvariable=self.trailing_stop_var,
+                    font=("Arial", 10, "bold"), fg="blue").pack(side="left", padx=5)
+
+            # 第二行：各口停損狀態
+            stop_row2 = tk.Frame(stop_loss_frame)
+            stop_row2.pack(fill="x", padx=5, pady=2)
+
+            tk.Label(stop_row2, text="各口狀態:", font=("Arial", 10)).pack(side="left", padx=5)
+            self.lots_status_var = tk.StringVar(value="--")
+            tk.Label(stop_row2, textvariable=self.lots_status_var,
+                    font=("Arial", 9), fg="purple").pack(side="left", padx=5)
+
+            # 即時統計顯示
+            stats_frame = tk.LabelFrame(strategy_container, text="即時統計", fg="purple")
+            stats_frame.pack(fill="x", padx=5, pady=5)
+
+            # 第一行：當日績效
+            stats_row1 = tk.Frame(stats_frame)
+            stats_row1.pack(fill="x", padx=5, pady=2)
+
+            tk.Label(stats_row1, text="當日交易:", font=("Arial", 10)).pack(side="left", padx=5)
+            self.daily_trades_var = tk.StringVar(value="0次")
+            tk.Label(stats_row1, textvariable=self.daily_trades_var,
+                    font=("Arial", 10, "bold"), fg="blue").pack(side="left", padx=5)
+
+            tk.Label(stats_row1, text="總損益:", font=("Arial", 10)).pack(side="left", padx=(20, 5))
+            self.daily_pnl_var = tk.StringVar(value="0點")
+            tk.Label(stats_row1, textvariable=self.daily_pnl_var,
+                    font=("Arial", 10, "bold"), fg="green").pack(side="left", padx=5)
+
+            # 第二行：各口表現
+            stats_row2 = tk.Frame(stats_frame)
+            stats_row2.pack(fill="x", padx=5, pady=2)
+
+            tk.Label(stats_row2, text="各口表現:", font=("Arial", 9)).pack(side="left", padx=5)
+            self.lot1_performance_var = tk.StringVar(value="--")
+            tk.Label(stats_row2, text="1口:", font=("Arial", 9)).pack(side="left", padx=(10, 2))
+            tk.Label(stats_row2, textvariable=self.lot1_performance_var,
+                    font=("Arial", 9), fg="blue").pack(side="left", padx=2)
+
+            self.lot2_performance_var = tk.StringVar(value="--")
+            tk.Label(stats_row2, text="2口:", font=("Arial", 9)).pack(side="left", padx=(10, 2))
+            tk.Label(stats_row2, textvariable=self.lot2_performance_var,
+                    font=("Arial", 9), fg="blue").pack(side="left", padx=2)
+
+            self.lot3_performance_var = tk.StringVar(value="--")
+            tk.Label(stats_row2, text="3口:", font=("Arial", 9)).pack(side="left", padx=(10, 2))
+            tk.Label(stats_row2, textvariable=self.lot3_performance_var,
+                    font=("Arial", 9), fg="blue").pack(side="left", padx=2)
+
+            # 第三行：出場原因統計
+            stats_row3 = tk.Frame(stats_frame)
+            stats_row3.pack(fill="x", padx=5, pady=2)
+
+            tk.Label(stats_row3, text="出場統計:", font=("Arial", 9)).pack(side="left", padx=5)
+
+            self.trailing_stats_var = tk.StringVar(value="--")
+            tk.Label(stats_row3, text="移動:", font=("Arial", 9)).pack(side="left", padx=(10, 2))
+            tk.Label(stats_row3, textvariable=self.trailing_stats_var,
+                    font=("Arial", 9), fg="green").pack(side="left", padx=2)
+
+            self.protection_stats_var = tk.StringVar(value="--")
+            tk.Label(stats_row3, text="保護:", font=("Arial", 9)).pack(side="left", padx=(10, 2))
+            tk.Label(stats_row3, textvariable=self.protection_stats_var,
+                    font=("Arial", 9), fg="orange").pack(side="left", padx=2)
+
+            self.initial_stop_stats_var = tk.StringVar(value="--")
+            tk.Label(stats_row3, text="停損:", font=("Arial", 9)).pack(side="left", padx=(10, 2))
+            tk.Label(stats_row3, textvariable=self.initial_stop_stats_var,
+                    font=("Arial", 9), fg="red").pack(side="left", padx=2)
+
             # 控制按鈕
             control_frame = tk.Frame(strategy_container)
             control_frame.pack(fill="x", padx=5, pady=5)
@@ -818,6 +939,35 @@ class OrderTesterApp(tk.Tk):
             error_label = tk.Label(parent_frame, text=f"策略面板載入失敗: {e}",
                                  fg="red", font=("Arial", 12))
             error_label.pack(expand=True)
+
+    def create_default_strategy_config(self):
+        """創建預設策略配置"""
+        return StrategyConfig(
+            trade_size_in_lots=3,
+            stop_loss_type=StopLossType.RANGE_BOUNDARY,
+            lot_rules=[
+                # 第1口：快速移動停利
+                LotRule(
+                    use_trailing_stop=True,
+                    trailing_activation=Decimal(15),
+                    trailing_pullback=Decimal('0.20')
+                ),
+                # 第2口：中等移動停利 + 保護性停損
+                LotRule(
+                    use_trailing_stop=True,
+                    trailing_activation=Decimal(40),
+                    trailing_pullback=Decimal('0.20'),
+                    protective_stop_multiplier=Decimal('2.0')
+                ),
+                # 第3口：較大移動停利 + 保護性停損
+                LotRule(
+                    use_trailing_stop=True,
+                    trailing_activation=Decimal(65),
+                    trailing_pullback=Decimal('0.20'),
+                    protective_stop_multiplier=Decimal('2.0')
+                )
+            ]
+        )
 
     def add_strategy_log(self, message):
         """添加策略日誌"""
@@ -955,6 +1105,18 @@ class OrderTesterApp(tk.Tk):
                 # 區間計算邏輯
                 self.add_strategy_log(f"📈 開始區間計算...")
                 self.process_range_calculation(price, time_str)
+
+                # 出場條件檢查 - 如果已有部位，檢查出場條件
+                if hasattr(self, 'position') and self.position and hasattr(self, 'lots') and self.lots:
+                    self.add_strategy_log(f"🔍 檢查出場條件...")
+                    # 創建時間戳對象
+                    from datetime import datetime
+                    timestamp = datetime.strptime(time_str, "%H:%M:%S").replace(
+                        year=datetime.now().year,
+                        month=datetime.now().month,
+                        day=datetime.now().day
+                    )
+                    self.check_exit_conditions(Decimal(str(price)), timestamp)
 
             else:
                 self.add_strategy_log(f"❌ LOG格式不匹配: {log_message}")
@@ -1149,28 +1311,48 @@ class OrderTesterApp(tk.Tk):
             pass
 
     def enter_position(self, direction, price, time_str):
-        """建立部位 - 簡化版多口建倉"""
+        """建立部位 - 完整版多口建倉含停損配置"""
         try:
             self.position = direction
-            self.entry_price = price
+            self.entry_price = Decimal(str(price))
             self.entry_time = time_str
 
-            # 簡化版：預設3口建倉
-            trade_size = 3
+            # 使用策略配置的交易口數
+            trade_size = self.strategy_config.trade_size_in_lots
             self.lots = []
 
+            # 計算初始停損價位
+            initial_sl = self.range_low if direction == 'LONG' else self.range_high
+            if initial_sl is None:
+                # 如果沒有區間數據，使用固定點數停損
+                if direction == 'LONG':
+                    initial_sl = self.entry_price - self.strategy_config.fixed_stop_loss_points
+                else:
+                    initial_sl = self.entry_price + self.strategy_config.fixed_stop_loss_points
+
             for i in range(trade_size):
+                # 取得對應的停損規則
+                rule = (self.strategy_config.lot_rules[i]
+                       if i < len(self.strategy_config.lot_rules)
+                       else self.strategy_config.lot_rules[-1])
+
                 lot_info = {
                     'id': i + 1,
+                    'rule': rule,                           # 新增：停損規則
                     'status': 'active',
-                    'pnl': 0,
-                    'entry_price': price,
+                    'pnl': Decimal(0),
+                    'peak_price': self.entry_price,         # 新增：峰值價格追蹤
+                    'trailing_on': False,                   # 新增：移動停利狀態
+                    'stop_loss': initial_sl,                # 新增：停損價位
+                    'is_initial_stop': True,                # 新增：是否為初始停損
+                    'entry_price': self.entry_price,
                     'order_id': f"SIM{time_str.replace(':', '')}{i+1:02d}"
                 }
                 self.lots.append(lot_info)
 
                 # 模擬下單記錄
                 print(f"[策略] 📋 模擬下單: 第{i+1}口 {direction} @{float(price):.1f} (ID: {lot_info['order_id']})")
+                print(f"[策略]    停損規則: 移動停利={rule.use_trailing_stop}, 啟動點={rule.trailing_activation}, 回撤={rule.trailing_pullback}")
 
             # 更新UI顯示
             self.position_status_var.set(f"{direction} {trade_size}口")
@@ -1178,10 +1360,34 @@ class OrderTesterApp(tk.Tk):
             self.entry_price_var.set(f"{float(price):.1f}")
             self.entry_time_var.set(time_str)
 
+            # 初始化停損狀態顯示
+            stop_type_map = {
+                StopLossType.RANGE_BOUNDARY: "區間邊界",
+                StopLossType.OPENING_PRICE: "開盤價",
+                StopLossType.FIXED_POINTS: "固定點數"
+            }
+            self.stop_loss_type_var.set(stop_type_map.get(self.strategy_config.stop_loss_type, "區間邊界"))
+            self.trailing_stop_var.set("未啟動")
+
+            # 更新各口狀態顯示
+            self.update_stop_loss_display(self.lots)
+
             # 記錄到資料庫（簡化版）
             self.record_entry_to_database(direction, price, time_str, trade_size)
 
+            # 新增：開始交易記錄
+            range_data = {
+                'high': float(self.range_high) if self.range_high else None,
+                'low': float(self.range_low) if self.range_low else None,
+                'size': float(self.range_high - self.range_low) if self.range_high and self.range_low else None
+            }
+            self.trading_logger.log_trade_start(direction, price, time_str, self.lots, range_data)
+
+            print(f"[策略] ✅ 建倉完成 - {direction} {trade_size}口 @ {float(price):.1f}")
+            print(f"[策略] 🛡️ 初始停損: {float(initial_sl):.1f}")
+
         except Exception as e:
+            logger.error(f"建立部位失敗: {e}")
             pass
 
     def record_entry_to_database(self, direction, price, time_str, trade_size):
@@ -1201,6 +1407,272 @@ class OrderTesterApp(tk.Tk):
 
         except Exception as e:
             pass
+
+    def check_exit_conditions(self, price, timestamp):
+        """檢查出場條件 - 從test_ui_improvements.py移植"""
+        if not self.lots:
+            return
+
+        current_time = timestamp.time()
+
+        # 檢查初始停損
+        active_lots_with_initial_stop = [lot for lot in self.lots if lot['status'] == 'active' and lot['is_initial_stop']]
+
+        if active_lots_with_initial_stop:
+            initial_sl = self.range_low if self.position == 'LONG' else self.range_high
+
+            if initial_sl and ((self.position == 'LONG' and price < initial_sl) or (self.position == 'SHORT' and price > initial_sl)):
+                # 觸及初始停損，全部出場
+                loss = (price - self.entry_price) if self.position == 'LONG' else (self.entry_price - price)
+
+                for lot in active_lots_with_initial_stop:
+                    lot['pnl'] = loss
+                    lot['status'] = 'exited'
+                    self.execute_exit_order(lot, price, "初始停損")
+
+                print(f"[策略] ❌ 初始停損觸發 | 時間: {current_time.strftime('%H:%M:%S')}, 價格: {int(float(price))}, 單口虧損: {int(float(loss))}")
+                self.add_strategy_log(f"❌ 初始停損觸發 @ {int(float(price))}")
+                return
+
+        # 檢查各口單的個別出場條件
+        for lot in self.lots:
+            if lot['status'] != 'active':
+                continue
+
+            # 檢查保護性停損
+            if not lot['is_initial_stop']:
+                if (self.position == 'LONG' and price <= lot['stop_loss']) or \
+                   (self.position == 'SHORT' and price >= lot['stop_loss']):
+                    lot['pnl'] = lot['stop_loss'] - self.entry_price if self.position == 'LONG' else self.entry_price - lot['stop_loss']
+                    lot['status'] = 'exited'
+                    self.execute_exit_order(lot, lot['stop_loss'], "保護性停損")
+                    continue
+
+            # 檢查移動停利和固定停利
+            self.check_take_profit_conditions(lot, price, timestamp)
+
+    def check_take_profit_conditions(self, lot, price, timestamp):
+        """檢查停利條件 - 從test_ui_improvements.py移植"""
+        rule = lot['rule']
+        current_time = timestamp.time()
+
+        # 移動停利邏輯
+        if rule.use_trailing_stop and rule.trailing_activation and rule.trailing_pullback:
+            if self.position == 'LONG':
+                lot['peak_price'] = max(lot['peak_price'], price)
+
+                # 檢查是否啟動移動停利
+                if not lot['trailing_on'] and lot['peak_price'] >= self.entry_price + rule.trailing_activation:
+                    lot['trailing_on'] = True
+                    print(f"[策略] 🔔 第{lot['id']}口移動停利啟動 | 時間: {current_time.strftime('%H:%M:%S')}")
+                    self.add_strategy_log(f"🔔 第{lot['id']}口移動停利啟動")
+
+                # 檢查移動停利出場
+                if lot['trailing_on']:
+                    stop_price = lot['peak_price'] - (lot['peak_price'] - self.entry_price) * rule.trailing_pullback
+                    if price <= stop_price:
+                        lot['pnl'] = stop_price - self.entry_price
+                        lot['status'] = 'exited'
+                        self.execute_exit_order(lot, stop_price, "移動停利")
+                        self.update_next_lot_protection(lot)
+                        return
+
+            elif self.position == 'SHORT':
+                lot['peak_price'] = min(lot['peak_price'], price)
+
+                if not lot['trailing_on'] and lot['peak_price'] <= self.entry_price - rule.trailing_activation:
+                    lot['trailing_on'] = True
+                    print(f"[策略] 🔔 第{lot['id']}口移動停利啟動 | 時間: {current_time.strftime('%H:%M:%S')}")
+                    self.add_strategy_log(f"🔔 第{lot['id']}口移動停利啟動")
+
+                if lot['trailing_on']:
+                    stop_price = lot['peak_price'] + (self.entry_price - lot['peak_price']) * rule.trailing_pullback
+                    if price >= stop_price:
+                        lot['pnl'] = self.entry_price - stop_price
+                        lot['status'] = 'exited'
+                        self.execute_exit_order(lot, stop_price, "移動停利")
+                        self.update_next_lot_protection(lot)
+                        return
+
+        # 固定停利邏輯
+        elif rule.fixed_tp_points:
+            if (self.position == 'LONG' and price >= self.entry_price + rule.fixed_tp_points) or \
+               (self.position == 'SHORT' and price <= self.entry_price - rule.fixed_tp_points):
+                lot['pnl'] = rule.fixed_tp_points
+                lot['status'] = 'exited'
+                exit_price = self.entry_price + rule.fixed_tp_points if self.position == 'LONG' else self.entry_price - rule.fixed_tp_points
+                self.execute_exit_order(lot, exit_price, "固定停利")
+                self.update_next_lot_protection(lot)
+
+    def check_all_previous_lots_profitable(self, target_lot_id):
+        """檢查目標口單之前的所有口單是否都獲利"""
+        try:
+            for lot in self.lots:
+                if lot['id'] < target_lot_id and lot['status'] == 'exited':
+                    if lot['pnl'] <= 0:  # 如果有虧損或平手
+                        return False
+            return True
+        except Exception as e:
+            print(f"[策略] ❌ 檢查前面口單獲利狀況失敗: {e}")
+            return False
+
+    def update_next_lot_protection(self, exited_lot):
+        """更新下一口單的保護性停損 - 修正版：只有前面全部獲利才更新"""
+        next_lot = next((l for l in self.lots if l['id'] == exited_lot['id'] + 1), None)
+
+        if not next_lot or next_lot['status'] != 'active' or not next_lot['rule'].protective_stop_multiplier:
+            return
+
+        # 新增：檢查前面所有口單是否都獲利
+        all_previous_profitable = self.check_all_previous_lots_profitable(next_lot['id'])
+
+        # 收集前面口單的獲利資訊用於日誌
+        previous_lots_info = []
+        for lot in self.lots:
+            if lot['id'] < next_lot['id'] and lot['status'] == 'exited':
+                previous_lots_info.append(f"第{lot['id']}口:{lot['pnl']:+.0f}點")
+
+        if not all_previous_profitable:
+            print(f"[策略] ⚠️ 前面有口單虧損({', '.join(previous_lots_info)})，第{next_lot['id']}口維持原始停損")
+            self.add_strategy_log(f"⚠️ 第{next_lot['id']}口維持原始停損(前面有虧損)")
+            return
+
+        # 計算累積獲利
+        cumulative_pnl = sum(l['pnl'] for l in self.lots if l['status'] == 'exited')
+        total_profit = cumulative_pnl + exited_lot['pnl']
+
+        # 只有在總獲利為正時才設定保護性停損
+        if total_profit <= 0:
+            print(f"[策略] ⚠️ 累積獲利不足({total_profit:+.0f}點)，第{next_lot['id']}口維持原始停損")
+            self.add_strategy_log(f"⚠️ 第{next_lot['id']}口維持原始停損(獲利不足)")
+            return
+
+        # 設定保護性停損
+        stop_loss_amount = total_profit * next_lot['rule'].protective_stop_multiplier
+        new_sl = self.entry_price - stop_loss_amount if self.position == 'LONG' else self.entry_price + stop_loss_amount
+
+        next_lot['stop_loss'] = new_sl
+        next_lot['is_initial_stop'] = False
+
+        print(f"[策略] 🛡️ 第{next_lot['id']}口保護性停損更新: {int(float(new_sl))} (基於累積獲利 {int(float(total_profit))})")
+        print(f"[策略] 📊 前面口單狀況: {', '.join(previous_lots_info)}")
+        self.add_strategy_log(f"🛡️ 第{next_lot['id']}口保護性停損更新: {int(float(new_sl))}")
+        self.add_strategy_log(f"📊 前面全部獲利: {', '.join(previous_lots_info)}")
+
+    def execute_exit_order(self, lot, price, reason):
+        """執行出場下單 - 從test_ui_improvements.py移植並整合到OrderTester"""
+        # 模擬模式記錄
+        print(f"[策略] ✅ 第{lot['id']}口{reason} | 模擬出場價: {int(float(price))}, 損益: {int(float(lot['pnl']))}")
+        self.add_strategy_log(f"✅ 第{lot['id']}口{reason} @ {int(float(price))}, 損益: {int(float(lot['pnl']))}")
+
+        # 新增：記錄出場到交易記錄
+        from datetime import datetime
+        current_time = datetime.now().strftime("%H:%M:%S")
+        self.trading_logger.log_lot_exit(lot, price, current_time, reason)
+
+        # 更新UI顯示
+        self.update_position_display()
+
+        # 檢查是否全部出場，如果是則完成交易記錄
+        if hasattr(self, 'lots') and self.lots:
+            if all(lot['status'] == 'exited' for lot in self.lots):
+                self.trading_logger.log_trade_complete()
+                self.trading_logger.update_daily_summary()
+                print(f"[交易記錄] 🎯 交易循環完成，已更新統計")
+
+        # 如果有實際下單API，可以在這裡調用
+        # 目前先使用模擬模式
+        try:
+            # 這裡可以整合到OrderTester的下單系統
+            # 例如調用期貨下單框架的下單功能
+            if hasattr(self, 'future_order_frame') and hasattr(self.future_order_frame, 'place_order'):
+                # 實際出場下單邏輯
+                pass
+        except Exception as e:
+            logger.error(f"❌ 執行出場下單失敗: {e}")
+
+    def update_position_display(self):
+        """更新部位顯示 - 包含停損狀態"""
+        try:
+            if hasattr(self, 'lots') and self.lots:
+                active_lots = [lot for lot in self.lots if lot['status'] == 'active']
+                total_pnl = sum(lot['pnl'] for lot in self.lots if lot['status'] == 'exited')
+
+                self.active_lots_var.set(str(len(active_lots)))
+                self.total_pnl_var.set(f"{int(float(total_pnl))}")
+
+                # 更新停損狀態顯示
+                self.update_stop_loss_display(active_lots)
+
+                # 更新即時統計顯示
+                self.update_trading_stats_display()
+
+                if len(active_lots) == 0:
+                    self.position_status_var.set("已全部出場")
+                    self.daily_status_var.set("交易完成")
+                    self.lots_status_var.set("全部出場")
+        except Exception as e:
+            pass
+
+    def update_stop_loss_display(self, active_lots):
+        """更新停損狀態顯示"""
+        try:
+            if not active_lots:
+                self.trailing_stop_var.set("--")
+                self.lots_status_var.set("--")
+                return
+
+            # 統計移動停利狀態
+            trailing_count = sum(1 for lot in active_lots if lot.get('trailing_on', False))
+            if trailing_count > 0:
+                self.trailing_stop_var.set(f"{trailing_count}口啟動")
+            else:
+                self.trailing_stop_var.set("未啟動")
+
+            # 顯示各口狀態
+            status_parts = []
+            for lot in active_lots:
+                lot_id = lot['id']
+                if lot.get('trailing_on', False):
+                    status_parts.append(f"第{lot_id}口:移動中")
+                elif lot.get('is_initial_stop', True):
+                    status_parts.append(f"第{lot_id}口:初始停損")
+                else:
+                    status_parts.append(f"第{lot_id}口:保護停損")
+
+            status_text = " | ".join(status_parts)
+            # 限制顯示長度
+            if len(status_text) > 50:
+                status_text = status_text[:47] + "..."
+            self.lots_status_var.set(status_text)
+
+        except Exception as e:
+            pass
+
+    def update_trading_stats_display(self):
+        """更新即時統計顯示"""
+        try:
+            # 獲取當前統計數據
+            stats = self.trading_logger.get_current_stats()
+
+            # 更新當日績效
+            self.daily_trades_var.set(f"{stats.get('trades_count', 0)}次")
+            pnl = stats.get('total_pnl', 0)
+            pnl_sign = "+" if pnl >= 0 else ""
+            self.daily_pnl_var.set(f"{pnl_sign}{pnl:.0f}點")
+
+            # 更新各口表現
+            self.lot1_performance_var.set(stats.get('lot1_performance', '--'))
+            self.lot2_performance_var.set(stats.get('lot2_performance', '--'))
+            self.lot3_performance_var.set(stats.get('lot3_performance', '--'))
+
+            # 更新出場原因統計
+            self.trailing_stats_var.set(stats.get('trailing_stats', '--'))
+            self.protection_stats_var.set(stats.get('protection_stats', '--'))
+            self.initial_stop_stats_var.set(stats.get('initial_stop_stats', '--'))
+
+        except Exception as e:
+            print(f"[統計顯示] 更新統計顯示失敗: {e}")
 
     def is_time_in_range_precise(self, time_str):
         """精確的2分鐘區間判斷 - 使用報價時間戳"""
@@ -1500,26 +1972,364 @@ class OrderTesterApp(tk.Tk):
             except Exception as e:
                 logger.error(f"停止報價監控時發生錯誤: {e}")
 
-            # 清理資源
-            logger.info("正在清理資源...")
-            self.quit()
+            # 關閉主視窗
             self.destroy()
+            logger.info("應用程式已關閉")
+
         except Exception as e:
             logger.error(f"關閉應用程式時發生錯誤: {e}")
-            # 強制退出
-            import sys
-            sys.exit(0)
+            # 強制關閉
+            try:
+                self.destroy()
+            except:
+                pass
 
-def main():
-    """主函式"""
-    # 檢查SKCOM.dll
-    if not os.path.exists('SKCOM.dll'):
-        messagebox.showerror("錯誤", "找不到SKCOM.dll檔案")
-        return
-    
-    # 建立並執行應用程式
-    app = OrderTesterApp()
-    app.mainloop()
+# ==================== 交易記錄系統 ====================
+
+class TradingLogger:
+    """交易記錄器 - 專注於TXT檔案記錄和即時統計"""
+
+    def __init__(self):
+        self.records_folder = "Trading_Records"
+        self.current_date = datetime.now().strftime("%Y-%m-%d")
+        self.trade_counter = 0
+        self.current_trade = None
+        self.daily_trades = []  # 當日交易記錄
+
+        # 確保資料夾存在
+        self.ensure_folder_exists()
+
+    def ensure_folder_exists(self):
+        """確保Trading_Records資料夾存在"""
+        try:
+            if not os.path.exists(self.records_folder):
+                os.makedirs(self.records_folder)
+                print(f"[交易記錄] 創建資料夾: {self.records_folder}")
+        except Exception as e:
+            print(f"[交易記錄] 創建資料夾失敗: {e}")
+
+    def log_trade_start(self, direction, entry_price, entry_time, lots_info, range_data=None):
+        """記錄交易開始"""
+        try:
+            self.trade_counter += 1
+            self.current_trade = {
+                'trade_id': self.trade_counter,
+                'direction': direction,
+                'entry_price': float(entry_price),
+                'entry_time': entry_time,
+                'total_lots': len(lots_info),
+                'lots_detail': [],
+                'range_data': range_data or {},
+                'start_timestamp': datetime.now()
+            }
+
+            print(f"[交易記錄] 開始記錄交易 #{self.trade_counter}: {direction} @{float(entry_price)}")
+
+        except Exception as e:
+            print(f"[交易記錄] 記錄交易開始失敗: {e}")
+
+    def log_lot_exit(self, lot_info, exit_price, exit_time, exit_reason):
+        """記錄單口出場"""
+        try:
+            if not self.current_trade:
+                return
+
+            lot_record = {
+                'lot_id': lot_info['id'],
+                'exit_time': exit_time,
+                'exit_price': float(exit_price),
+                'exit_reason': exit_reason,
+                'pnl': float(lot_info['pnl']),
+                'rule': {
+                    'trailing_activation': float(lot_info['rule'].trailing_activation) if lot_info['rule'].trailing_activation else None,
+                    'trailing_pullback': float(lot_info['rule'].trailing_pullback) if lot_info['rule'].trailing_pullback else None,
+                    'protective_stop_multiplier': float(lot_info['rule'].protective_stop_multiplier) if lot_info['rule'].protective_stop_multiplier else None
+                }
+            }
+
+            self.current_trade['lots_detail'].append(lot_record)
+            print(f"[交易記錄] 記錄第{lot_info['id']}口出場: {exit_reason} @{float(exit_price)}")
+
+        except Exception as e:
+            print(f"[交易記錄] 記錄出場失敗: {e}")
+
+    def log_trade_complete(self):
+        """完成交易記錄並保存到TXT檔案"""
+        try:
+            if not self.current_trade or not self.current_trade['lots_detail']:
+                return
+
+            # 計算交易總結
+            total_pnl = sum(lot['pnl'] for lot in self.current_trade['lots_detail'])
+            end_timestamp = datetime.now()
+            duration = end_timestamp - self.current_trade['start_timestamp']
+
+            self.current_trade['total_pnl'] = total_pnl
+            self.current_trade['duration'] = str(duration).split('.')[0]  # 移除微秒
+            self.current_trade['end_time'] = self.current_trade['lots_detail'][-1]['exit_time']
+
+            # 添加到每日交易列表
+            self.daily_trades.append(self.current_trade.copy())
+
+            # 寫入詳細記錄檔案
+            self.write_trade_detail()
+
+            print(f"[交易記錄] 完成交易記錄 #{self.current_trade['trade_id']}: 總損益 {total_pnl:.1f}點")
+
+            # 重置當前交易
+            self.current_trade = None
+
+        except Exception as e:
+            print(f"[交易記錄] 完成交易記錄失敗: {e}")
+
+    def write_trade_detail(self):
+        """寫入交易詳細記錄到TXT檔案"""
+        try:
+            if not self.current_trade:
+                return
+
+            filename = f"{self.current_date}_trading_log.txt"
+            filepath = os.path.join(self.records_folder, filename)
+
+            # 準備交易記錄內容
+            trade = self.current_trade
+            content = []
+
+            # 如果是第一筆交易，添加標題
+            if not os.path.exists(filepath):
+                content.append(f"=== {self.current_date} 台指期貨交易記錄 ===\n")
+
+            # 交易標題
+            content.append(f"[交易 #{trade['trade_id']:03d}] {trade['entry_time']} - {trade['end_time']}")
+            content.append(f"方向: {trade['direction']} | 進場價: {trade['entry_price']:.0f} | 總口數: {trade['total_lots']}")
+
+            # 區間資訊（如果有）
+            if trade['range_data']:
+                range_info = trade['range_data']
+                content.append(f"區間: {range_info.get('low', '--'):.0f}-{range_info.get('high', '--'):.0f} ({range_info.get('size', '--'):.0f}點)")
+
+            content.append("")  # 空行
+
+            # 各口出場詳情
+            for lot in trade['lots_detail']:
+                duration_parts = trade['duration'].split(':')
+                if len(duration_parts) >= 2:
+                    duration_display = f"{duration_parts[1]}:{duration_parts[2]}" if len(duration_parts) > 2 else f"{duration_parts[0]}:{duration_parts[1]}"
+                else:
+                    duration_display = trade['duration']
+
+                pnl_sign = "+" if lot['pnl'] >= 0 else ""
+                content.append(f"第{lot['lot_id']}口: {lot['exit_time']} {lot['exit_reason']}出場 @{lot['exit_price']:.0f} | 損益: {pnl_sign}{lot['pnl']:.0f}點")
+
+            content.append("")  # 空行
+
+            # 交易總結
+            total_pnl_sign = "+" if trade['total_pnl'] >= 0 else ""
+            win_lots = sum(1 for lot in trade['lots_detail'] if lot['pnl'] > 0)
+            win_rate = (win_lots / len(trade['lots_detail']) * 100) if trade['lots_detail'] else 0
+
+            content.append(f"交易總結: {total_pnl_sign}{trade['total_pnl']:.0f}點 | 持倉時間: {duration_display} | 勝率: {win_rate:.0f}%")
+            content.append("")
+            content.append("---")
+            content.append("")
+
+            # 寫入檔案
+            with open(filepath, 'a', encoding='utf-8') as f:
+                f.write('\n'.join(content))
+
+            print(f"[交易記錄] 寫入詳細記錄: {filename}")
+
+        except Exception as e:
+            print(f"[交易記錄] 寫入詳細記錄失敗: {e}")
+
+    def update_daily_summary(self):
+        """更新每日統計摘要"""
+        try:
+            if not self.daily_trades:
+                return
+
+            filename = f"{self.current_date}_summary.txt"
+            filepath = os.path.join(self.records_folder, filename)
+
+            # 計算統計數據
+            stats = self.calculate_daily_stats()
+
+            # 準備摘要內容
+            content = []
+            content.append(f"=== {self.current_date} 交易統計摘要 ===")
+            content.append("")
+
+            # 總體績效
+            content.append("【總體績效】")
+            content.append(f"交易次數: {stats['total_trades']}次")
+            content.append(f"總損益: {stats['total_pnl']:+.0f}點")
+            content.append(f"勝率: {stats['win_rate']:.0f}% ({stats['winning_trades']}勝{stats['losing_trades']}負)")
+            content.append(f"平均每筆: {stats['avg_pnl']:+.1f}點")
+            content.append(f"最大獲利: {stats['max_profit']:+.0f}點")
+            content.append(f"最大虧損: {stats['max_loss']:+.0f}點")
+            content.append("")
+
+            # 各口單表現
+            content.append("【各口單表現】")
+            for i in range(1, 4):  # 假設最多3口
+                lot_stats = stats['lot_performance'].get(f'lot_{i}')
+                if lot_stats:
+                    content.append(f"第{i}口: {lot_stats['trades']}筆交易 | 平均: {lot_stats['avg_pnl']:+.1f}點 | 勝率: {lot_stats['win_rate']:.0f}%")
+            content.append("")
+
+            # 出場原因分析
+            content.append("【出場原因分析】")
+            for reason, reason_stats in stats['exit_analysis'].items():
+                content.append(f"{reason}: {reason_stats['count']}次 | 平均: {reason_stats['avg_pnl']:+.1f}點 | 勝率: {reason_stats['win_rate']:.0f}%")
+            content.append("")
+
+            # 更新時間
+            content.append(f"更新時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+            # 寫入檔案
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(content))
+
+            print(f"[交易記錄] 更新統計摘要: {filename}")
+
+        except Exception as e:
+            print(f"[交易記錄] 更新統計摘要失敗: {e}")
+
+    def calculate_daily_stats(self):
+        """計算每日統計數據"""
+        try:
+            if not self.daily_trades:
+                return {}
+
+            # 基本統計
+            total_trades = len(self.daily_trades)
+            total_pnl = sum(trade['total_pnl'] for trade in self.daily_trades)
+            winning_trades = sum(1 for trade in self.daily_trades if trade['total_pnl'] > 0)
+            losing_trades = total_trades - winning_trades
+            win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+            avg_pnl = total_pnl / total_trades if total_trades > 0 else 0
+
+            trade_pnls = [trade['total_pnl'] for trade in self.daily_trades]
+            max_profit = max(trade_pnls) if trade_pnls else 0
+            max_loss = min(trade_pnls) if trade_pnls else 0
+
+            # 各口單表現統計
+            lot_performance = {}
+            for lot_num in range(1, 4):  # 假設最多3口
+                lot_key = f'lot_{lot_num}'
+                lot_pnls = []
+                lot_wins = 0
+                lot_trades = 0
+
+                for trade in self.daily_trades:
+                    for lot in trade['lots_detail']:
+                        if lot['lot_id'] == lot_num:
+                            lot_pnls.append(lot['pnl'])
+                            lot_trades += 1
+                            if lot['pnl'] > 0:
+                                lot_wins += 1
+
+                if lot_trades > 0:
+                    lot_performance[lot_key] = {
+                        'trades': lot_trades,
+                        'avg_pnl': sum(lot_pnls) / lot_trades,
+                        'win_rate': (lot_wins / lot_trades * 100)
+                    }
+
+            # 出場原因分析
+            exit_analysis = {}
+            for trade in self.daily_trades:
+                for lot in trade['lots_detail']:
+                    reason = lot['exit_reason']
+                    if reason not in exit_analysis:
+                        exit_analysis[reason] = {'pnls': [], 'wins': 0}
+
+                    exit_analysis[reason]['pnls'].append(lot['pnl'])
+                    if lot['pnl'] > 0:
+                        exit_analysis[reason]['wins'] += 1
+
+            # 計算出場原因統計
+            for reason, data in exit_analysis.items():
+                count = len(data['pnls'])
+                avg_pnl = sum(data['pnls']) / count if count > 0 else 0
+                win_rate = (data['wins'] / count * 100) if count > 0 else 0
+                exit_analysis[reason] = {
+                    'count': count,
+                    'avg_pnl': avg_pnl,
+                    'win_rate': win_rate
+                }
+
+            return {
+                'total_trades': total_trades,
+                'total_pnl': total_pnl,
+                'winning_trades': winning_trades,
+                'losing_trades': losing_trades,
+                'win_rate': win_rate,
+                'avg_pnl': avg_pnl,
+                'max_profit': max_profit,
+                'max_loss': max_loss,
+                'lot_performance': lot_performance,
+                'exit_analysis': exit_analysis
+            }
+
+        except Exception as e:
+            print(f"[交易記錄] 計算統計數據失敗: {e}")
+            return {}
+
+    def get_current_stats(self):
+        """獲取當前統計數據供UI顯示"""
+        try:
+            if not self.daily_trades:
+                return {
+                    'trades_count': 0,
+                    'total_pnl': 0,
+                    'lot1_performance': '--',
+                    'lot2_performance': '--',
+                    'lot3_performance': '--',
+                    'trailing_stats': '--',
+                    'protection_stats': '--',
+                    'initial_stop_stats': '--'
+                }
+
+            stats = self.calculate_daily_stats()
+
+            # 格式化各口表現
+            lot_performances = {}
+            for i in range(1, 4):
+                lot_key = f'lot_{i}'
+                if lot_key in stats['lot_performance']:
+                    perf = stats['lot_performance'][lot_key]
+                    lot_performances[f'lot{i}_performance'] = f"{perf['avg_pnl']:+.0f}點({perf['win_rate']:.0f}%)"
+                else:
+                    lot_performances[f'lot{i}_performance'] = '--'
+
+            # 格式化出場原因統計
+            exit_stats = {}
+            for reason in ['移動停利', '保護性停損', '初始停損']:
+                if reason in stats['exit_analysis']:
+                    data = stats['exit_analysis'][reason]
+                    exit_stats[f'{reason}_stats'] = f"{data['count']}次({data['avg_pnl']:+.0f}點)"
+                else:
+                    exit_stats[f'{reason}_stats'] = '--'
+
+            return {
+                'trades_count': stats['total_trades'],
+                'total_pnl': stats['total_pnl'],
+                **lot_performances,
+                'trailing_stats': exit_stats.get('移動停利_stats', '--'),
+                'protection_stats': exit_stats.get('保護性停損_stats', '--'),
+                'initial_stop_stats': exit_stats.get('初始停損_stats', '--')
+            }
+
+        except Exception as e:
+            print(f"[交易記錄] 獲取統計數據失敗: {e}")
+            return {}
 
 if __name__ == "__main__":
-    main()
+    try:
+        app = OrderTesterApp()
+        app.mainloop()
+    except Exception as e:
+        logger.error(f"應用程式啟動失敗: {e}")
+        print(f"應用程式啟動失敗: {e}")
+        input("按Enter鍵退出...")

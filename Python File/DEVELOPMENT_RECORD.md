@@ -569,8 +569,321 @@ SK_SUCCESS = 0                       # 成功
 
 📚 **開發記錄文件**
 📅 **建立日期**: 2025-07-01
-🔄 **最後更新**: 2025-07-01
+🔄 **最後更新**: 2025-07-02
 👨‍💻 **維護者**: 開發團隊
 📧 **聯絡方式**: [技術支援信箱]
 
 *此文件記錄了期貨交易系統開發過程中的重要問題和解決方案，為未來的維護和擴展提供寶貴參考。建議定期更新此文件，記錄新的問題和解決方案。*
+
+---
+
+## 🎯 **第四階段: 停損功能整合與架構優化** (2025-07-02)
+
+### **重大架構改進**
+
+#### **策略機與下單機合併**
+- **問題背景**: 原本策略機(StrategyTester.py)與下單機(OrderTester.py)分離，導致通信複雜和GIL衝突
+- **解決方案**: 將策略功能直接整合到OrderTester.py中，形成統一的交易系統
+- **技術實現**:
+  ```python
+  # 在OrderTester.py中直接整合策略面板
+  def create_strategy_tab(self, notebook, skcom_objects):
+      """創建策略頁面 - 直接整合到主程式"""
+      strategy_frame = tk.Frame(notebook)
+      notebook.add(strategy_frame, text="策略")
+  ```
+
+#### **LOG監聽機制創新**
+- **核心突破**: 改用LOG監聽方式接收報價數據，徹底解決GIL衝突
+- **實現原理**:
+  ```python
+  class StrategyLogHandler(logging.Handler):
+      def emit(self, record):
+          message = record.getMessage()
+          if "【Tick】價格:" in message:
+              self.strategy_app.process_tick_log(message)
+  ```
+- **優勢**:
+  - 避免直接事件回調的GIL問題
+  - 穩定的數據接收機制
+  - 與現有報價系統無縫整合
+
+#### **報價數據處理流程**
+```
+期貨報價框架 → LOG輸出 → StrategyLogHandler → process_tick_log() → 策略邏輯
+```
+
+### **停損功能完整整合**
+
+#### **核心類別架構**
+```python
+# 停損管理核心類別
+class StopLossType(Enum):
+    RANGE_BOUNDARY = auto()  # 區間邊界停損
+    OPENING_PRICE = auto()   # 開盤價停損
+    FIXED_POINTS = auto()    # 固定點數停損
+
+@dataclass
+class LotRule:
+    """單一口部位的出場規則配置"""
+    use_trailing_stop: bool = True
+    fixed_tp_points: Decimal | None = None
+    trailing_activation: Decimal | None = None
+    trailing_pullback: Decimal | None = None
+    protective_stop_multiplier: Decimal | None = None
+
+@dataclass
+class StrategyConfig:
+    """策略配置的中央控制面板"""
+    trade_size_in_lots: int = 3
+    stop_loss_type: StopLossType = StopLossType.RANGE_BOUNDARY
+    fixed_stop_loss_points: Decimal = Decimal(15)
+    lot_rules: list[LotRule] = field(default_factory=list)
+```
+
+#### **多口停損策略設計**
+- **第1口**: 15點啟動移動停利，20%回撤 (快速獲利)
+- **第2口**: 40點啟動移動停利，20%回撤 + 2倍保護性停損
+- **第3口**: 65點啟動移動停利，20%回撤 + 2倍保護性停損
+
+#### **智能停損機制**
+1. **初始停損**: 基於區間邊界的全部位保護
+2. **移動停利**: 個別口單的動態停利追蹤
+3. **保護性停損**: 基於前一口獲利的動態調整
+
+### **進出場機制完整實現**
+
+#### **進場流程**
+```python
+def enter_position(self, direction, price, time_str):
+    """建立部位 - 完整版多口建倉含停損配置"""
+    # 使用策略配置的交易口數
+    trade_size = self.strategy_config.trade_size_in_lots
+
+    # 計算初始停損價位
+    initial_sl = self.range_low if direction == 'LONG' else self.range_high
+
+    # 為每口設定個別停損規則
+    for i in range(trade_size):
+        rule = self.strategy_config.lot_rules[i]
+        lot_info = {
+            'id': i + 1,
+            'rule': rule,
+            'status': 'active',
+            'pnl': Decimal(0),
+            'peak_price': self.entry_price,
+            'trailing_on': False,
+            'stop_loss': initial_sl,
+            'is_initial_stop': True,
+            # ...
+        }
+```
+
+#### **出場流程**
+```python
+def check_exit_conditions(self, price, timestamp):
+    """檢查出場條件"""
+    # 1. 檢查初始停損 (全部位)
+    if active_lots_with_initial_stop:
+        if price_hits_initial_stop:
+            # 全部出場
+
+    # 2. 檢查各口個別條件
+    for lot in self.lots:
+        # 保護性停損檢查
+        # 移動停利檢查
+        self.check_take_profit_conditions(lot, price, timestamp)
+```
+
+### **UI增強與狀態監控**
+
+#### **停損狀態顯示**
+- **停損類型**: 顯示當前使用的停損類型
+- **移動停利**: 即時顯示啟動的口數狀態
+- **各口狀態**: 詳細顯示每口單的停損狀態
+
+#### **即時監控功能**
+```python
+def update_stop_loss_display(self, active_lots):
+    """更新停損狀態顯示"""
+    # 統計移動停利狀態
+    trailing_count = sum(1 for lot in active_lots if lot.get('trailing_on', False))
+
+    # 顯示各口狀態
+    for lot in active_lots:
+        if lot.get('trailing_on', False):
+            status_parts.append(f"第{lot_id}口:移動中")
+        elif lot.get('is_initial_stop', True):
+            status_parts.append(f"第{lot_id}口:初始停損")
+        else:
+            status_parts.append(f"第{lot_id}口:保護停損")
+```
+
+### **技術創新點**
+
+#### **1. LOG監聽策略**
+- **創新**: 使用LOG處理器接收報價，避免GIL衝突
+- **穩定性**: 解決了長期困擾的多線程問題
+- **效能**: 直接在主線程處理，無需線程同步
+
+#### **2. 統一架構設計**
+- **整合**: 策略與下單功能統一在OrderTester.py
+- **簡化**: 消除了複雜的進程間通信
+- **維護**: 單一程式更易維護和調試
+
+#### **3. 智能停損算法**
+- **多層次**: 初始→保護性→移動停利的漸進式管理
+- **個性化**: 每口單獨的停損規則配置
+- **動態性**: 基於獲利自動調整停損點
+
+### **開發里程碑**
+
+#### **✅ 已完成功能**
+1. **核心停損類別** - StopLossType、LotRule、StrategyConfig
+2. **策略配置系統** - 預設3口交易配置
+3. **出場條件檢查** - 完整的停損檢查邏輯
+4. **保護性停損** - 動態停損調整機制
+5. **出場下單執行** - 實盤和模擬模式支援
+6. **UI狀態顯示** - 停損狀態即時監控
+7. **整合測試** - 核心功能驗證通過
+
+#### **🎯 技術成果**
+- **零GIL錯誤**: LOG監聽機制徹底解決多線程問題
+- **統一架構**: 策略與下單功能完美整合
+- **智能停損**: 多口多層次停損管理
+- **穩定運行**: 保持OrderTester.py原有穩定性
+
+### **未來發展方向**
+
+#### **短期優化**
+1. **停損配置UI**: 圖形化參數設定介面
+2. **歷史回測**: 停損策略效果分析
+3. **風險管理**: 整體部位風險控制
+
+#### **長期擴展**
+1. **多策略支援**: 支援不同的交易策略
+2. **機器學習**: 智能停損點優化
+3. **雲端同步**: 策略配置雲端管理
+
+### **關鍵經驗總結**
+
+#### **架構設計**
+- **統一勝過分離**: 統一架構比分離架構更穩定
+- **LOG監聽創新**: 巧妙解決GIL問題的關鍵突破
+- **漸進式整合**: 逐步整合比一次性重寫更安全
+
+#### **停損策略**
+- **多層次保護**: 不同階段使用不同停損策略
+- **個性化配置**: 每口單獨配置提供更大靈活性
+- **動態調整**: 基於獲利調整停損點的重要性
+
+#### **開發流程**
+- **測試驅動**: 每個功能都要有對應測試
+- **文檔同步**: 開發過程中同步更新文檔
+- **版本控制**: 重要節點要有備份和標記
+
+---
+
+**📝 本次更新重點**: 記錄了停損功能的完整整合過程，特別是LOG監聽機制的創新應用和策略機與下單機的成功合併，為台指期貨日內交易提供了完整的風險管理解決方案。
+
+---
+
+## 🛡️ **保護性停損邏輯優化** (2025-07-02 下午)
+
+### **問題發現**
+在停損功能整合完成後，用戶發現保護性停損邏輯存在風險管理漏洞：
+- **原邏輯**: 任何口單出場都會觸發下一口的保護性停損更新
+- **問題**: 第1口獲利→第2口停損→第3口仍會使用保護性停損，風險過高
+
+### **期望邏輯**
+- **嚴格風控**: 只有前面所有口單都獲利時，才更新後續口單的保護性停損
+- **風險控制**: 如果前面有任何口單虧損，後續口單維持原始區間停損
+
+### **修正實現**
+
+#### **1. 新增獲利檢查函數**
+```python
+def check_all_previous_lots_profitable(self, target_lot_id):
+    """檢查目標口單之前的所有口單是否都獲利"""
+    for lot in self.lots:
+        if lot['id'] < target_lot_id and lot['status'] == 'exited':
+            if lot['pnl'] <= 0:  # 如果有虧損或平手
+                return False
+    return True
+```
+
+#### **2. 修正保護性停損更新邏輯**
+```python
+def update_next_lot_protection(self, exited_lot):
+    """更新下一口單的保護性停損 - 修正版：只有前面全部獲利才更新"""
+
+    # 檢查前面所有口單是否都獲利
+    all_previous_profitable = self.check_all_previous_lots_profitable(next_lot['id'])
+
+    if not all_previous_profitable:
+        print(f"[策略] ⚠️ 前面有口單虧損，第{next_lot['id']}口維持原始停損")
+        return
+
+    # 只有在前面全部獲利且總獲利為正時才設定保護性停損
+    if total_profit <= 0:
+        print(f"[策略] ⚠️ 累積獲利不足，第{next_lot['id']}口維持原始停損")
+        return
+
+    # 原有的保護性停損設定邏輯...
+```
+
+### **修正前後對比**
+
+| 情況 | 修正前 | 修正後 | 風險變化 |
+|------|--------|--------|----------|
+| 1獲利→2停損→3 | 3口保護性停損 | 3口原始停損 | ✅ 風險降低 |
+| 1獲利→2獲利→3 | 3口保護性停損 | 3口保護性停損 | ✅ 無變化 |
+| 1停損→2 | 2口保護性停損 | 2口原始停損 | ✅ 風險降低 |
+
+### **測試驗證**
+
+#### **測試案例1: 前面有虧損**
+```
+第1口: +24點 (獲利)
+第2口: -36點 (虧損)
+第3口: 檢查結果 → 維持原始停損
+```
+
+#### **測試案例2: 前面全部獲利**
+```
+第1口: +24點 (獲利)
+第2口: +30點 (獲利)
+第3口: 檢查結果 → 使用保護性停損
+```
+
+### **技術特點**
+
+#### **嚴格風控**
+- 只有在確實有累積獲利的情況下才提高停損點
+- 避免在有虧損的情況下過度樂觀
+
+#### **詳細日誌**
+- 記錄每次停損決策的原因
+- 顯示前面口單的獲利狀況
+- 便於交易後的分析和檢討
+
+#### **向後兼容**
+- 不影響現有功能的正常運作
+- 保持方法簽名不變
+- 只是邏輯更加嚴格
+
+### **實際效果**
+
+#### **風險管理改善**
+- ✅ 降低過度樂觀的風險
+- ✅ 更符合保守的風險管理原則
+- ✅ 避免在虧損情況下的錯誤決策
+
+#### **交易紀律**
+- ✅ 強化"只有獲利才放鬆停損"的紀律
+- ✅ 避免情緒化的風險管理決策
+- ✅ 提高整體交易系統的穩健性
+
+---
+
+**🎯 修正成果**: 成功修正保護性停損邏輯，實現更嚴格的風險管理機制。現在系統只有在前面所有口單都獲利的情況下，才會為後續口單設定保護性停損，大大降低了風險管理的漏洞，提升了交易系統的安全性。

@@ -26,6 +26,207 @@ STRATEGY_AVAILABLE = False
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# 新增：下單執行器類別
+class OrderExecutor:
+    """下單執行器 - 核心邏輯層，支援手動/策略兩種下單模式"""
+
+    def __init__(self, skcom_objects, message_callback=None):
+        """
+        初始化下單執行器
+
+        Args:
+            skcom_objects: SKCOM API物件字典
+            message_callback: 訊息回調函數，用於記錄日誌
+        """
+        self.m_pSKOrder = skcom_objects.get('SKOrder')
+        self.m_pSKCenter = skcom_objects.get('SKCenter')
+        self.m_pSKQuote = skcom_objects.get('SKQuote')
+        self.add_message = message_callback or self._default_message_callback
+
+        # 預留：報價監控和委託追蹤
+        self.quote_monitor = None
+        self.order_tracker = None
+
+        # 從LOG資料獲取報價資訊的預留接口
+        self.log_quote_parser = None
+
+    def _default_message_callback(self, message):
+        """預設訊息回調"""
+        print(f"[OrderExecutor] {message}")
+
+    def execute_order_core(self, order_params, require_confirmation=True):
+        """
+        核心下單邏輯
+
+        Args:
+            order_params: 下單參數字典
+            require_confirmation: 是否需要確認對話框
+
+        Returns:
+            dict: 下單結果 {'success': bool, 'message': str, 'order_id': str}
+        """
+        try:
+            # 檢查必要參數
+            required_fields = ['account', 'product', 'direction', 'price', 'quantity']
+            for field in required_fields:
+                if field not in order_params:
+                    return {'success': False, 'message': f'缺少必要參數: {field}', 'order_id': None}
+
+            # 風險確認 (僅手動下單需要)
+            if require_confirmation:
+                risk_msg = self._build_confirmation_message(order_params)
+                result = messagebox.askyesno("期貨下單確認", risk_msg)
+                if not result:
+                    self.add_message("【取消】使用者取消期貨下單")
+                    return {'success': False, 'message': '使用者取消下單', 'order_id': None}
+
+            # 執行實際下單
+            return self._send_order_to_api(order_params)
+
+        except Exception as e:
+            error_msg = f"下單執行失敗: {str(e)}"
+            self.add_message(f"【錯誤】{error_msg}")
+            return {'success': False, 'message': error_msg, 'order_id': None}
+
+    def strategy_order(self, direction, price, quantity=1, order_type="FOK", product="MTX00"):
+        """
+        策略專用下單 - 無確認對話框
+
+        Args:
+            direction: 'BUY' 或 'SELL'
+            price: 委託價格
+            quantity: 委託數量
+            order_type: 委託類型 ('ROD', 'IOC', 'FOK')
+            product: 商品代碼
+
+        Returns:
+            dict: 下單結果
+        """
+        # 固定策略交易參數
+        order_params = {
+            'account': 'F0200006363839',  # 策略固定帳號
+            'product': product,
+            'direction': direction,
+            'price': price,
+            'quantity': quantity,
+            'order_type': order_type,
+            'day_trade': 1,  # 當沖
+            'new_close': 0,  # 新倉
+            'reserved': 0    # 盤中
+        }
+
+        self.add_message(f"【策略下單】{direction} {quantity}口 @{price} ({order_type})")
+        return self.execute_order_core(order_params, require_confirmation=False)
+
+    def manual_order(self, order_params):
+        """
+        手動下單 - 保持原有確認機制
+
+        Args:
+            order_params: 完整的下單參數字典
+
+        Returns:
+            dict: 下單結果
+        """
+        return self.execute_order_core(order_params, require_confirmation=True)
+
+    def _build_confirmation_message(self, order_params):
+        """建立確認對話框訊息"""
+        direction_text = "買進" if order_params['direction'] == 'BUY' else "賣出"
+        order_type_text = order_params.get('order_type', 'ROD')
+
+        return f"⚠️ 期貨交易風險確認 ⚠️\n\n" + \
+               f"帳號: {order_params['account']}\n" + \
+               f"商品: {order_params['product']}\n" + \
+               f"價格: {order_params['price']}\n" + \
+               f"數量: {order_params['quantity']}\n" + \
+               f"買賣: {direction_text}\n" + \
+               f"委託類型: {order_type_text}\n\n" + \
+               "期貨具有高槓桿特性，可能產生巨大損失！\n" + \
+               "確定要進行真實下單嗎？"
+
+    def _send_order_to_api(self, order_params):
+        """發送下單到API - 核心邏輯"""
+        try:
+            if not self.m_pSKOrder:
+                return {'success': False, 'message': 'SKOrder物件未初始化', 'order_id': None}
+
+            # 檢查並初始化SKOrderLib
+            self.add_message("【初始化】檢查SKOrderLib初始化狀態...")
+            nCode = self.m_pSKOrder.SKOrderLib_Initialize()
+            if nCode != 0:
+                if self.m_pSKCenter:
+                    msg_text = self.m_pSKCenter.SKCenterLib_GetReturnCodeMessage(nCode)
+                else:
+                    msg_text = f"錯誤代碼: {nCode}"
+                return {'success': False, 'message': f'SKOrderLib初始化失敗: {msg_text}', 'order_id': None}
+
+            # 讀取憑證
+            login_id = "E123354882"  # 固定登入ID
+            self.add_message(f"【憑證】使用登入ID讀取憑證: {login_id}")
+            nCode = self.m_pSKOrder.ReadCertByID(login_id)
+
+            if nCode != 0:
+                if self.m_pSKCenter:
+                    msg_text = self.m_pSKCenter.SKCenterLib_GetReturnCodeMessage(nCode)
+                else:
+                    msg_text = f"錯誤代碼: {nCode}"
+                self.add_message(f"【警告】憑證讀取失敗: {msg_text}")
+
+            # 建立下單物件
+            import comtypes.gen.SKCOMLib as sk
+            oOrder = sk.FUTUREORDER()
+
+            # 填入下單參數
+            oOrder.bstrFullAccount = order_params['account']
+            oOrder.bstrStockNo = order_params['product']
+            oOrder.sBuySell = 0 if order_params['direction'] == 'BUY' else 1
+
+            # 委託類型轉換
+            order_type_map = {'ROD': 0, 'IOC': 1, 'FOK': 2}
+            oOrder.sTradeType = order_type_map.get(order_params.get('order_type', 'FOK'), 2)
+
+            oOrder.sDayTrade = order_params.get('day_trade', 1)
+            oOrder.bstrPrice = str(order_params['price'])
+            oOrder.nQty = order_params['quantity']
+            oOrder.sNewClose = order_params.get('new_close', 0)
+            oOrder.sReserved = order_params.get('reserved', 0)
+
+            # 執行下單
+            self.add_message("【API】準備調用SendFutureOrderCLR...")
+            result = self.m_pSKOrder.SendFutureOrderCLR(login_id, True, oOrder)
+
+            if isinstance(result, tuple) and len(result) == 2:
+                message, nCode = result
+                self.add_message(f"【API返回】訊息: {message}, 代碼: {nCode}")
+
+                if nCode == 0:
+                    return {'success': True, 'message': message, 'order_id': message}
+                else:
+                    if self.m_pSKCenter:
+                        error_msg = self.m_pSKCenter.SKCenterLib_GetReturnCodeMessage(nCode)
+                    else:
+                        error_msg = f"錯誤代碼: {nCode}"
+                    return {'success': False, 'message': error_msg, 'order_id': None}
+            else:
+                return {'success': False, 'message': f'API返回格式異常: {result}', 'order_id': None}
+
+        except Exception as e:
+            error_msg = f"API調用失敗: {str(e)}"
+            self.add_message(f"【錯誤】{error_msg}")
+            return {'success': False, 'message': error_msg, 'order_id': None}
+
+    # 預留：五檔報價和刪單追價功能
+    def setup_quote_monitoring(self, product="MTX00"):
+        """預留：設置五檔報價監控 - 從LOG資料解析"""
+        # 未來可以從現有的報價LOG中解析五檔資料
+        pass
+
+    def setup_order_chasing(self):
+        """預留：設置刪單追價機制"""
+        # 未來整合委託查詢和刪單重下功能
+        pass
+
 class FutureOrderFrame(tk.Frame):
     """期貨下單框架"""
     
@@ -38,7 +239,10 @@ class FutureOrderFrame(tk.Frame):
         self.m_pSKOrder = skcom_objects.get('SKOrder') if skcom_objects else None
         self.m_pSKReply = skcom_objects.get('SKReply') if skcom_objects else None
         self.m_pSKQuote = skcom_objects.get('SKQuote') if skcom_objects else None
-        
+
+        # 新增：初始化下單執行器
+        self.order_executor = OrderExecutor(skcom_objects, self.add_message)
+
         # UI變數
         self.order_data = {}
 
@@ -595,7 +799,7 @@ class FutureOrderFrame(tk.Frame):
         self.add_message("【提示】期貨部位查詢功能需要根據官方API文件實現")
     
     def test_future_order(self):
-        """測試期貨下單 - 根據官方API實現"""
+        """測試期貨下單 - 使用新的OrderExecutor架構"""
         if not self.m_pSKOrder:
             self.add_message("【錯誤】SKOrder物件未初始化")
             messagebox.showerror("錯誤", "SKOrder物件未初始化")
@@ -628,7 +832,6 @@ class FutureOrderFrame(tk.Frame):
             product_code = product_selected.split(' ')[0]
 
             # 檢查是否為手動輸入的完整商品代碼 (不需要組合月份)
-            # 根據群益API文件，常見格式：MTX00 (小台指近月), TX00 (大台指近月)
             manual_input_patterns = [
                 "小台近", "大台近", "電子近", "金融近",  # 中文格式
                 "MTX00", "TX00", "TE00", "TF00",        # 近月格式
@@ -661,36 +864,29 @@ class FutureOrderFrame(tk.Frame):
             self.add_message(f"【設定】委託條件:{PERIODSET['future'][period]}, 當沖:{FLAGSET['future'][day_trade]}")
             self.add_message(f"【倉別】{NEWCLOSESET['future'][new_close]}, 盤別:{RESERVEDSET[reserved]}")
 
-            # 風險確認
-            risk_msg = f"⚠️ 期貨交易風險確認 ⚠️\n\n" + \
-                      f"帳號: {account}\n" + \
-                      f"商品: {full_product_code}\n" + \
-                      f"價格: {price_val}\n" + \
-                      f"數量: {quantity_val}\n" + \
-                      f"買賣: {BUYSELLSET[buy_sell]}\n" + \
-                      f"倉別: {NEWCLOSESET['future'][new_close]}\n\n" + \
-                      "期貨具有高槓桿特性，可能產生巨大損失！\n" + \
-                      "確定要進行真實下單嗎？"
+            # 建立下單參數字典
+            order_params = {
+                'account': account,
+                'product': full_product_code,
+                'direction': 'BUY' if buy_sell == 0 else 'SELL',
+                'price': price_val,
+                'quantity': quantity_val,
+                'order_type': ['ROD', 'IOC', 'FOK'][period],
+                'day_trade': day_trade,
+                'new_close': new_close,
+                'reserved': reserved
+            }
 
-            result = messagebox.askyesno("期貨下單確認", risk_msg)
+            # 使用新的OrderExecutor進行手動下單 (保持確認機制)
+            self.add_message("【執行】使用OrderExecutor執行手動下單...")
+            result = self.order_executor.manual_order(order_params)
 
-            if not result:
-                self.add_message("【取消】使用者取消期貨下單")
-                return
-
-            # 實際下單 - 根據官方API實現
-            self.add_message("【執行】開始執行期貨下單...")
-
-            # 根據官方案例實現期貨下單
-            success = self.send_future_order_clr(
-                account, full_product_code, buy_sell, period, day_trade,
-                price_val, quantity_val, new_close, reserved
-            )
-
-            if success:
-                self.add_message("【成功】期貨下單指令已送出，請查看回報訊息")
+            if result['success']:
+                self.add_message(f"【成功】期貨下單指令已送出: {result['message']}")
+                # 延遲查詢委託狀況
+                self.after(2000, self.query_pending_orders)
             else:
-                self.add_message("【失敗】期貨下單失敗，請檢查參數和帳號")
+                self.add_message(f"【失敗】期貨下單失敗: {result['message']}")
 
         except ValueError as e:
             error_msg = f"數值格式錯誤: {str(e)}"

@@ -32,6 +32,18 @@ import math
 # 其它物件
 import Config
 
+# 🔧 GIL錯誤修復：導入Queue管理器
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Python File'))
+from queue_manager import (
+    put_quote_message, put_tick_message, put_connection_message,
+    put_reply_message, register_message_handler, MainThreadProcessor
+)
+from message_handlers import (
+    quote_handler, tick_handler, connection_handler, reply_handler,
+    set_ui_widget
+)
+
 
 # 顯示各功能狀態用的function
 def WriteMessage(strMsg,listInformation):
@@ -1224,135 +1236,307 @@ class StockList(Frame):
         except Exception as e:
             messagebox.showerror("error！",e)
 
-#事件        
+#事件 - 🔧 GIL錯誤修復：改為Queue模式
 class SKQuoteLibEvents:
-     
+
     def OnConnection(self, nKind, nCode):
-        if (nKind == 3001):
-            strMsg = "Connected!"
-        elif (nKind == 3002):
-            strMsg = "DisConnected!"
-        elif (nKind == 3003):
-            strMsg = "Stocks ready!"
-        elif (nKind == 3021):
-            strMsg = "Connect Error!"
-        WriteMessage(strMsg,GlobalListInformation)
+        """連線事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包連線數據，放入Queue而不直接更新UI
+            connection_data = {
+                'kind': nKind,
+                'code': nCode
+            }
+            put_connection_message(connection_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnNotifyQuoteLONG(self, sMarketNo, nStockidx):
-        pStock = sk.SKSTOCKLONG()
-        m_nCode = skQ.SKQuoteLib_GetStockByIndexLONG(sMarketNo, nStockidx, pStock)
-        strMsg = '代碼:',pStock.bstrStockNo,'--名稱:',pStock.bstrStockName,'--開盤價:',pStock.nOpen/math.pow(10,pStock.sDecimal),'--最高:',pStock.nHigh/math.pow(10,pStock.sDecimal),'--最低:',pStock.nLow/math.pow(10,pStock.sDecimal),'--成交價:',pStock.nClose/math.pow(10,pStock.sDecimal),'--總量:',pStock.nTQty
-        WriteMessage(strMsg,Gobal_Quote_ListInformation)
-        
+        """報價事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            pStock = sk.SKSTOCKLONG()
+            m_nCode = skQ.SKQuoteLib_GetStockByIndexLONG(sMarketNo, nStockidx, pStock)
+
+            # 打包報價數據，放入Queue而不直接更新UI
+            quote_data = {
+                'stock_no': pStock.bstrStockNo,
+                'stock_name': pStock.bstrStockName,
+                'open_price': pStock.nOpen/math.pow(10,pStock.sDecimal),
+                'high_price': pStock.nHigh/math.pow(10,pStock.sDecimal),
+                'low_price': pStock.nLow/math.pow(10,pStock.sDecimal),
+                'close_price': pStock.nClose/math.pow(10,pStock.sDecimal),
+                'total_qty': pStock.nTQty
+            }
+            put_quote_message(quote_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
+
     def OnNotifyHistoryTicksLONG(self, sMarketNo, nStockidx, nPtr, lDate, lTimehms, lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-        strMsg = "[OnNotifyHistoryTicksLONG]", nStockidx, nPtr, lDate, lTimehms, lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate
-        WriteMessage(strMsg,Gobal_Tick_ListInformation)
+        """歷史Tick事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包歷史Tick數據，放入Queue而不直接更新UI
+            tick_data = {
+                'type': 'history',
+                'market_no': sMarketNo,
+                'stock_idx': nStockidx,
+                'ptr': nPtr,
+                'date': lDate,
+                'time_hms': lTimehms,
+                'time_millis': lTimemillismicros,
+                'bid': nBid,
+                'ask': nAsk,
+                'close': nClose,
+                'qty': nQty,
+                'simulate': nSimulate
+            }
+            put_tick_message(tick_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnNotifyTicksLONG(self,sMarketNo, nStockidx, nPtr, lDate, lTimehms, lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-        strMsg = "[OnNotifyTicksLONG]", nStockidx, nPtr, lDate, lTimehms, lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate
-        WriteMessage(strMsg,Gobal_Tick_ListInformation)
+        """即時Tick事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包即時Tick數據，放入Queue而不直接更新UI
+            tick_data = {
+                'type': 'live',
+                'market_no': sMarketNo,
+                'stock_idx': nStockidx,
+                'ptr': nPtr,
+                'date': lDate,
+                'time_hms': lTimehms,
+                'time_millis': lTimemillismicros,
+                'bid': nBid,
+                'ask': nAsk,
+                'close': nClose,
+                'qty': nQty,
+                'simulate': nSimulate
+            }
+            put_tick_message(tick_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnNotifyBest5LONG(self,sMarketNo,nStockidx,nBestBid1,nBestBidQty1,nBestBid2,nBestBidQty2,nBestBid3,nBestBidQty3,nBestBid4,nBestBidQty4,nBestBid5,nBestBidQty5,nExtendBid,nExtendBidQty,nBestAsk1,nBestAskQty1,nBestAsk2,nBestAskQty2,nBestAsk3,nBestAskQty3,nBestAsk4,nBestAskQty4,nBestAsk5,nBestAskQty5,nExtendAsk,nExtendAskQty,nSimulate):
-        pStock = sk.SKBEST5()
-        m_nCode = skQ.SKQuoteLib_GetBest5LONG(sMarketNo, nStockidx, pStock)
+        """五檔報價事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 🔧 GIL錯誤修復：絕不直接操作TreeView控件！
 
-        strMsg = nBestBidQty1,nBestBidQty2,nBestBidQty3,nBestBidQty4,nBestBidQty5
-        strMsg2 =nBestBid1,nBestBid2,nBestBid3,nBestBid4,nBestBid5
-        strMsg3 =nBestAskQty1,nBestAskQty2,nBestAskQty3,nBestAskQty4,nBestAskQty5
-        strMsg4 =nBestAsk1,nBestAsk2,nBestAsk3,nBestAsk4,nBestAsk5
+            # 打包五檔報價數據，放入Queue而不直接更新UI
+            best5_data = {
+                'type': 'best5',
+                'market_no': sMarketNo,
+                'stock_idx': nStockidx,
+                'bid_prices': [nBestBid1, nBestBid2, nBestBid3, nBestBid4, nBestBid5],
+                'bid_qtys': [nBestBidQty1, nBestBidQty2, nBestBidQty3, nBestBidQty4, nBestBidQty5],
+                'ask_prices': [nBestAsk1, nBestAsk2, nBestAsk3, nBestAsk4, nBestAsk5],
+                'ask_qtys': [nBestAskQty1, nBestAskQty2, nBestAskQty3, nBestAskQty4, nBestAskQty5],
+                'extend_bid': nExtendBid,
+                'extend_bid_qty': nExtendBidQty,
+                'extend_ask': nExtendAsk,
+                'extend_ask_qty': nExtendAskQty,
+                'simulate': nSimulate
+            }
 
-        Gobal_Best5TreeViewQ_Information = strMsg
-        Gobal_Best5TreeViewP_Information = strMsg2
-        Gobal_Best5TreeViewQ_Information2 = strMsg3
-        Gobal_Best5TreeViewP_Information2 = strMsg4
+            # 使用Queue安全傳遞數據
+            put_quote_message(best5_data)
 
-        for i in range(min(len(Gobal_Best5TreeViewQ_Information),len(Gobal_Best5TreeViewP_Information))):
-            Gobal_Best5TreeView.insert('', i, values=(Gobal_Best5TreeViewQ_Information[i], Gobal_Best5TreeViewP_Information[i]/100))
-
-        for i in range(min(len(Gobal_Best5TreeViewQ_Information2),len(Gobal_Best5TreeViewP_Information2))):
-            Gobal_Best5TreeView2.insert('', i, values=(Gobal_Best5TreeViewQ_Information2[i], Gobal_Best5TreeViewP_Information2[i]/100))
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnNotifyKLineData(self,bstrStockNo,bstrData):
-        cutData = bstrData.split(',')
-        strMsg = bstrStockNo,bstrData
-        WriteMessage(strMsg,Gobal_KLine_ListInformation)
-    def OnNotifyMarketTot(self,sMarketNo,sPrt,nTime,nTotv,nTots,nTotc):  
-        strMsg1 = nTotv/100,"億"
-        strMsg2 = nTots,"張"
-        strMsg3 = nTotc,"筆"
+        """K線數據事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包K線數據，放入Queue而不直接更新UI
+            kline_data = {
+                'type': 'kline',
+                'stock_no': bstrStockNo,
+                'data': bstrData
+            }
+            put_quote_message(kline_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
-        if (sMarketNo == 0):
-            WriteMessage(strMsg1,Gobal_MarketInfo_ListInformation3)           
-            WriteMessage(strMsg2,Gobal_MarketInfo_ListInformation4)
-            WriteMessage(strMsg3,Gobal_MarketInfo_ListInformation5)
-        else:
-            WriteMessage(strMsg1,Gobal_MarketInfo_ListInformation6)           
-            WriteMessage(strMsg2,Gobal_MarketInfo_ListInformation7)
-            WriteMessage(strMsg3,Gobal_MarketInfo_ListInformation8)
+    def OnNotifyMarketTot(self,sMarketNo,sPrt,nTime,nTotv,nTots,nTotc):
+        """市場總計事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包市場總計數據，放入Queue而不直接更新UI
+            market_data = {
+                'type': 'market_total',
+                'market_no': sMarketNo,
+                'prt': sPrt,
+                'time': nTime,
+                'total_value': nTotv/100,
+                'total_shares': nTots,
+                'total_count': nTotc
+            }
+            put_quote_message(market_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnNotifyMarketHighLow(self,sMarketNo,sPrt,nTime,sUp,sDown,sHigh,sLow,sNoChange):
+        """市場漲跌事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包市場漲跌數據，放入Queue而不直接更新UI
+            market_data = {
+                'type': 'market_highlow',
+                'market_no': sMarketNo,
+                'prt': sPrt,
+                'time': nTime,
+                'up': sUp,
+                'down': sDown,
+                'high': sHigh,
+                'low': sLow,
+                'no_change': sNoChange
+            }
+            put_quote_message(market_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
-        strMsg = "成交(上漲/下跌)家數:",sUp,"/",sDown,"成交(漲停/跌停)家數：",sHigh,"/",sLow,"________平盤家數：",sNoChange
-
-        if (sMarketNo == 0):
-            WriteMessage(strMsg,Gobal_OnNotifyUDHLC_ListInformation1)
-        else:
-            WriteMessage(strMsg,Gobal_OnNotifyUDHLC_ListInformation2)
-
-    def OnNotifyStockList(self,sMarketNo,bstrStockData):      
-        strMsg = "[OnNotifyStockList]",bstrStockData
-        WriteMessage(strMsg,Gobal_StockList_ListInformation)
+    def OnNotifyStockList(self,sMarketNo,bstrStockData):
+        """股票清單事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包股票清單數據，放入Queue而不直接更新UI
+            stock_data = {
+                'type': 'stock_list',
+                'market_no': sMarketNo,
+                'stock_data': bstrStockData
+            }
+            put_quote_message(stock_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnNotifyMarketBuySell(self,sMarketNo,sPrt,nTime,nBc,nSc,nBs,nSs):
-        if (sMarketNo == 0):
-            strMsg = "大盤成交買進(張/筆)數：",nBs,"/",nBc,"大盤成交賣出(張/筆)數：",nSs,"/",nSc
-            WriteMessage(strMsg,Gobal_MarketInfo_ListInformation)
-        else:
-            strMsg = "大盤成交買進(張/筆)數：",nBs,"/",nBc,"大盤成交賣出(張/筆)數：",nSs,"/",nSc
-            WriteMessage(strMsg,Gobal_MarketInfo_ListInformation2) 
+        """市場買賣事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包市場買賣數據，放入Queue而不直接更新UI
+            market_data = {
+                'type': 'market_buysell',
+                'market_no': sMarketNo,
+                'prt': sPrt,
+                'time': nTime,
+                'buy_count': nBc,
+                'sell_count': nSc,
+                'buy_shares': nBs,
+                'sell_shares': nSs
+            }
+            put_quote_message(market_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnNotifyServerTime(self,sHour,sMinute,sSecond,nTotal):
-        strMsg = "%02d" % sHour,":","%02d" % sMinute,":","%02d" % sSecond
-        Gobal_ServerTime_Information["text"]= strMsg
+        """伺服器時間事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包時間數據，放入Queue而不直接更新UI
+            time_data = {
+                'type': 'server_time',
+                'hour': sHour,
+                'minute': sMinute,
+                'second': sSecond,
+                'total': nTotal
+            }
+            put_connection_message(time_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnNotifyBoolTunelLONG(self,  sMarketNo, nStockIdx, bstrAVG, bstrUBT, bstrLBT):
-        Gobal_BoolenAVG_Info["text"]=bstrAVG
-        Gobal_BoolenUBT_Info["text"]=bstrUBT
-        Gobal_BoolenLBT_Info["text"]=bstrLBT
+        """布林通道事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包布林通道數據，放入Queue而不直接更新UI
+            bool_data = {
+                'type': 'bool_tunnel',
+                'market_no': sMarketNo,
+                'stock_idx': nStockIdx,
+                'avg': bstrAVG,
+                'ubt': bstrUBT,
+                'lbt': bstrLBT
+            }
+            put_quote_message(bool_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnNotifyMACDLONG(self, sMarketNo, nStockidx, bstrMACD, bstrDIF ,bstrOSC):
-        Gobal_MACD_Inf["text"] = bstrMACD
-        Gobal_DIF_Inf["text"] = bstrDIF
-        Gobal_OSC_Inf["text"] = bstrOSC
+        """MACD事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包MACD數據，放入Queue而不直接更新UI
+            macd_data = {
+                'type': 'macd',
+                'market_no': sMarketNo,
+                'stock_idx': nStockidx,
+                'macd': bstrMACD,
+                'dif': bstrDIF,
+                'osc': bstrOSC
+            }
+            put_quote_message(macd_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def  OnNotifyFutureTradeInfoLONG(self, bstrStockNo, sMarketNo, nStockidx, nBuyTotalCount, nSellTotalCount, nBuyTotalQty, nSellTotalQty, nBuyDealTotalCount, nSellDealTotalCount):
-        Gobal_MarketNo_Inf["text"] = str(sMarketNo)
-        Gobal_TotalBuy_Inf["text"] = str(nBuyTotalCount)
-        Gobal_TotalBuyP_Inf["text"] = str(nBuyTotalQty)
-        Gobal_TotalSucessB_Inf["text"] = str(nBuyDealTotalCount)
-        Gobal_StockIdx_Inf["text"] = str(nStockidx)
-        Gobal_TotalSell_Inf["text"] = str(nSellTotalCount)
-        Gobal_TotalSellP_Inf["text"] = str(nSellTotalQty)
-        Gobal_TotalSucessS_Inf["text"] = str(nSellDealTotalCount)
-    
+        """期貨交易資訊事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包期貨交易資訊，放入Queue而不直接更新UI
+            trade_data = {
+                'type': 'future_trade_info',
+                'stock_no': bstrStockNo,
+                'market_no': sMarketNo,
+                'stock_idx': nStockidx,
+                'buy_total_count': nBuyTotalCount,
+                'sell_total_count': nSellTotalCount,
+                'buy_total_qty': nBuyTotalQty,
+                'sell_total_qty': nSellTotalQty,
+                'buy_deal_total_count': nBuyDealTotalCount,
+                'sell_deal_total_count': nSellDealTotalCount
+            }
+            put_quote_message(trade_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
+
     def OnNotifyStrikePrices(self,bstrOptionData):
-            sum=" "
-            m_nCount=0
-            strData = ""
-            strData = "[OnNotifyStrikePrices]" + bstrOptionData
-            WriteMessage( strData,Gobal_StrikePrices_ListInformation)
+        """履約價事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包履約價數據，放入Queue而不直接更新UI
+            strike_data = {
+                'type': 'strike_prices',
+                'option_data': bstrOptionData
+            }
+            put_quote_message(strike_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
 #SKQuoteLibEventHandler = win32com.client.WithEvents(SKQuoteLib, SKQuoteLibEvents)
 SKQuoteEvent=SKQuoteLibEvents()
 SKQuoteLibEventHandler = comtypes.client.GetEvents(skQ, SKQuoteEvent)
 
 class SKReplyLibEvent():
-    
+    """回報事件類 - 🔧 使用Queue避免GIL錯誤"""
 
     def OnReplyMessage(self,bstrUserID, bstrMessages):
-        sConfirmCode = -1
-        WriteMessage(bstrMessages,GlobalListInformation)
-        return sConfirmCode
+        """回報訊息事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            sConfirmCode = -1
+            # 打包回報數據，放入Queue而不直接更新UI
+            reply_data = {
+                'user_id': bstrUserID,
+                'message': bstrMessages
+            }
+            put_reply_message(reply_data)
+            return sConfirmCode
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            return -1
 
 # comtypes使用此方式註冊callback
 SKReplyEvent = SKReplyLibEvent()
@@ -1362,15 +1546,31 @@ SKReplyLibEventHandler = comtypes.client.GetEvents(skR, SKReplyEvent)
 if __name__ == '__main__':
     #Globals.initialize()
     root = Tk()
-    root.title("PythonExampleQuote")
+    root.title("PythonExampleQuote - 🔧 GIL錯誤修復版本")
 
-    
+    # 🔧 GIL錯誤修復：註冊訊息處理器
+    register_message_handler('quote', quote_handler)
+    register_message_handler('tick', tick_handler)
+    register_message_handler('connection', connection_handler)
+    register_message_handler('reply', reply_handler)
+
     # Center
     FrameLogin(master = root)
 
     #TabControl
     root.TabControl = Notebook(root)
-    root.TabControl.add(FrameQuote(master = root),text="報價功能")
+    quote_frame = FrameQuote(master = root)
+    root.TabControl.add(quote_frame, text="報價功能")
     root.TabControl.grid(column = 0, row = 2, sticky = 'ew', padx = 10, pady = 10)
+
+    # 🔧 GIL錯誤修復：設置UI控件引用
+    set_ui_widget('global_listbox', GlobalListInformation)
+    set_ui_widget('quote_listbox', Gobal_Quote_ListInformation)
+    set_ui_widget('tick_listbox', Gobal_Tick_ListInformation)
+    set_ui_widget('reply_listbox', GlobalListInformation)  # 回報使用全域listbox
+
+    # 🔧 GIL錯誤修復：啟動主線程Queue處理器
+    processor = MainThreadProcessor(root, interval_ms=50)
+    processor.start()
 
     root.mainloop()

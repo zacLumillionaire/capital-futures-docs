@@ -60,6 +60,20 @@ except ImportError as e:
     TCP_PRICE_SERVER_AVAILABLE = False
     print(f"⚠️ TCP價格伺服器模組未載入: {e}")
 
+# 導入Queue基礎設施
+try:
+    from queue_infrastructure import (
+        get_queue_infrastructure,
+        TickData,
+        get_queue_manager
+    )
+    QUEUE_INFRASTRUCTURE_AVAILABLE = True
+    print("✅ Queue基礎設施載入成功")
+except ImportError as e:
+    QUEUE_INFRASTRUCTURE_AVAILABLE = False
+    print(f"⚠️ Queue基礎設施載入失敗: {e}")
+    print("📝 將使用傳統模式運行")
+
 # 設定日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

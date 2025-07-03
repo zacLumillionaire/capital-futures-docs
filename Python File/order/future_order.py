@@ -24,6 +24,27 @@ from order.future_config import *
 #     print(f"策略模組未載入: {e}")
 STRATEGY_AVAILABLE = False
 
+# 新增：Queue基礎設施導入
+try:
+    import sys
+    import os
+    # 添加父目錄到路徑，以便導入queue_infrastructure
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+
+    from queue_infrastructure import (
+        get_queue_infrastructure,
+        TickData,
+        get_queue_manager
+    )
+    QUEUE_INFRASTRUCTURE_AVAILABLE = True
+    print("✅ Queue基礎設施導入成功")
+except ImportError as e:
+    QUEUE_INFRASTRUCTURE_AVAILABLE = False
+    print(f"⚠️ Queue基礎設施導入失敗: {e}")
+    print("📝 將使用傳統模式運行")
+
 # 設定日誌
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -323,8 +344,270 @@ class FutureOrderFrame(tk.Frame):
         self.last_update_time = None
         self.quote_event_handler = None
 
+        # 新增：Queue基礎設施初始化
+        self.queue_infrastructure = None
+        self.queue_mode_enabled = False
+        self.init_queue_infrastructure()
+
         # 策略回調相關 - 階段1整合
         self.strategy_callback = None
+
+    def init_queue_infrastructure(self):
+        """初始化Queue基礎設施"""
+        if not QUEUE_INFRASTRUCTURE_AVAILABLE:
+            self.add_message("⚠️ Queue基礎設施不可用，使用傳統模式")
+            return
+
+        try:
+            # 初始化Queue基礎設施
+            self.queue_infrastructure = get_queue_infrastructure(self.master)
+
+            if self.queue_infrastructure.initialize():
+                self.add_message("✅ Queue基礎設施初始化成功")
+
+                # 添加日誌回調 - 將Queue日誌顯示到UI
+                if self.queue_infrastructure.ui_updater:
+                    self.queue_infrastructure.add_log_callback(self.on_queue_log_message)
+
+                # 標記Queue模式可用
+                self.queue_mode_enabled = True
+                self.add_message("🎯 Queue模式已啟用，將使用新的數據流架構")
+            else:
+                self.add_message("❌ Queue基礎設施初始化失敗")
+
+        except Exception as e:
+            self.add_message(f"❌ Queue基礎設施初始化錯誤: {str(e)}")
+            self.queue_mode_enabled = False
+
+    def on_queue_log_message(self, message, level, source):
+        """處理來自Queue的日誌訊息"""
+        try:
+            # 根據來源和等級決定顯示格式
+            if source == "TICK":
+                # Tick資料使用簡化格式，避免UI過載
+                if level == "INFO" and "【Tick】" in message:
+                    # 控制Tick日誌頻率，避免UI過載
+                    if not hasattr(self, '_last_queue_tick_time'):
+                        self._last_queue_tick_time = 0
+
+                    current_time = time.time()
+                    if current_time - self._last_queue_tick_time > 2:  # 每2秒顯示一次
+                        self._last_queue_tick_time = current_time
+                        self.add_message(f"[Queue] {message}")
+            elif source == "STRATEGY":
+                # 策略訊息完整顯示
+                self.add_message(f"[策略] {message}")
+            elif source == "PROCESSOR":
+                # 處理器訊息
+                self.add_message(f"[處理器] {message}")
+            else:
+                # 其他系統訊息
+                self.add_message(f"[{source}] {message}")
+
+        except Exception as e:
+            # 避免日誌處理錯誤影響主要功能
+            pass
+
+    def start_queue_services(self):
+        """啟動Queue基礎設施的所有服務"""
+        if not self.queue_mode_enabled or not self.queue_infrastructure:
+            self.add_message("⚠️ Queue模式未啟用，無法啟動服務")
+            return False
+
+        try:
+            # 啟動所有Queue服務
+            if self.queue_infrastructure.start_all():
+                self.add_message("🚀 Queue服務已全部啟動")
+                self.add_message("📊 數據流: API事件 → Queue → 策略處理 → UI更新")
+                return True
+            else:
+                self.add_message("❌ Queue服務啟動失敗")
+                return False
+
+        except Exception as e:
+            self.add_message(f"❌ 啟動Queue服務錯誤: {str(e)}")
+            return False
+
+    def stop_queue_services(self):
+        """停止Queue基礎設施的所有服務"""
+        if not self.queue_infrastructure:
+            return
+
+        try:
+            self.queue_infrastructure.stop_all()
+            self.add_message("🛑 Queue服務已全部停止")
+        except Exception as e:
+            self.add_message(f"❌ 停止Queue服務錯誤: {str(e)}")
+
+    def get_queue_status(self):
+        """取得Queue基礎設施狀態"""
+        if not self.queue_infrastructure:
+            return {"available": False, "message": "Queue基礎設施未初始化"}
+
+        try:
+            status = self.queue_infrastructure.get_status()
+            return {
+                "available": True,
+                "initialized": status.get('initialized', False),
+                "running": status.get('running', False),
+                "queue_manager": status.get('queue_manager', {}),
+                "tick_processor": status.get('tick_processor', {}),
+                "ui_updater": status.get('ui_updater', {})
+            }
+        except Exception as e:
+            return {"available": False, "error": str(e)}
+
+    def create_queue_control_panel(self):
+        """創建Queue控制面板"""
+        # Queue控制面板
+        queue_frame = tk.LabelFrame(self, text="🚀 Queue架構控制", fg="blue", padx=10, pady=5)
+        queue_frame.grid(column=0, row=8, columnspan=6, sticky=tk.E + tk.W, padx=5, pady=5)
+
+        # 第一行：狀態顯示
+        status_row = tk.Frame(queue_frame)
+        status_row.grid(column=0, row=0, sticky=tk.E + tk.W, pady=5)
+
+        tk.Label(status_row, text="Queue狀態:", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+
+        self.queue_status_label = tk.Label(status_row, text="未初始化", fg="gray", font=("Arial", 10))
+        self.queue_status_label.pack(side="left", padx=5)
+
+        # 第二行：控制按鈕
+        control_row = tk.Frame(queue_frame)
+        control_row.grid(column=0, row=1, sticky=tk.E + tk.W, pady=5)
+
+        # 啟動Queue服務按鈕
+        self.btn_start_queue = tk.Button(control_row, text="🚀 啟動Queue服務",
+                                        command=self.on_start_queue_services,
+                                        bg="green", fg="white", font=("Arial", 9, "bold"))
+        self.btn_start_queue.pack(side="left", padx=5)
+
+        # 停止Queue服務按鈕
+        self.btn_stop_queue = tk.Button(control_row, text="🛑 停止Queue服務",
+                                       command=self.on_stop_queue_services,
+                                       bg="red", fg="white", font=("Arial", 9, "bold"))
+        self.btn_stop_queue.pack(side="left", padx=5)
+
+        # 查看Queue狀態按鈕
+        self.btn_queue_status = tk.Button(control_row, text="📊 查看狀態",
+                                         command=self.on_show_queue_status,
+                                         bg="orange", fg="white", font=("Arial", 9, "bold"))
+        self.btn_queue_status.pack(side="left", padx=5)
+
+        # 切換模式按鈕
+        self.btn_toggle_mode = tk.Button(control_row, text="🔄 切換模式",
+                                        command=self.on_toggle_queue_mode,
+                                        bg="purple", fg="white", font=("Arial", 9, "bold"))
+        self.btn_toggle_mode.pack(side="left", padx=5)
+
+        # 初始化按鈕狀態
+        self.update_queue_control_buttons()
+
+    def update_queue_control_buttons(self):
+        """更新Queue控制按鈕狀態"""
+        try:
+            if not QUEUE_INFRASTRUCTURE_AVAILABLE:
+                # Queue基礎設施不可用
+                self.queue_status_label.config(text="基礎設施不可用", fg="red")
+                self.btn_start_queue.config(state="disabled")
+                self.btn_stop_queue.config(state="disabled")
+                self.btn_toggle_mode.config(state="disabled")
+                return
+
+            if self.queue_mode_enabled:
+                # Queue模式已啟用
+                status = self.get_queue_status()
+                if status.get('running', False):
+                    self.queue_status_label.config(text="✅ 運行中", fg="green")
+                    self.btn_start_queue.config(state="disabled")
+                    self.btn_stop_queue.config(state="normal")
+                else:
+                    self.queue_status_label.config(text="⏸️ 已初始化", fg="orange")
+                    self.btn_start_queue.config(state="normal")
+                    self.btn_stop_queue.config(state="disabled")
+
+                self.btn_toggle_mode.config(text="🔄 切換到傳統模式")
+            else:
+                # 傳統模式
+                self.queue_status_label.config(text="🔄 傳統模式", fg="blue")
+                self.btn_start_queue.config(state="disabled")
+                self.btn_stop_queue.config(state="disabled")
+                self.btn_toggle_mode.config(text="🚀 切換到Queue模式")
+
+        except Exception as e:
+            self.queue_status_label.config(text=f"錯誤: {str(e)}", fg="red")
+
+    def on_start_queue_services(self):
+        """啟動Queue服務按鈕事件"""
+        if self.start_queue_services():
+            self.update_queue_control_buttons()
+
+    def on_stop_queue_services(self):
+        """停止Queue服務按鈕事件"""
+        self.stop_queue_services()
+        self.update_queue_control_buttons()
+
+    def on_show_queue_status(self):
+        """顯示Queue狀態按鈕事件"""
+        status = self.get_queue_status()
+
+        if not status.get('available', False):
+            self.add_message("❌ Queue基礎設施不可用")
+            return
+
+        # 格式化狀態訊息
+        status_msg = f"""
+📊 Queue基礎設施狀態報告:
+
+🔧 初始化: {'✅ 已初始化' if status.get('initialized', False) else '❌ 未初始化'}
+🚀 運行狀態: {'✅ 運行中' if status.get('running', False) else '❌ 已停止'}
+
+📦 Queue管理器:
+  • Tick佇列: {status.get('queue_manager', {}).get('tick_queue_size', 0)}/{status.get('queue_manager', {}).get('tick_queue_maxsize', 0)}
+  • 日誌佇列: {status.get('queue_manager', {}).get('log_queue_size', 0)}/{status.get('queue_manager', {}).get('log_queue_maxsize', 0)}
+  • 已接收Tick: {status.get('queue_manager', {}).get('stats', {}).get('tick_received', 0)}
+  • 已處理Tick: {status.get('queue_manager', {}).get('stats', {}).get('tick_processed', 0)}
+
+🔄 Tick處理器:
+  • 處理線程: {'✅ 運行中' if status.get('tick_processor', {}).get('running', False) else '❌ 已停止'}
+  • 回調函數: {status.get('tick_processor', {}).get('callback_count', 0)} 個
+  • 處理計數: {status.get('tick_processor', {}).get('stats', {}).get('processed_count', 0)}
+  • 錯誤計數: {status.get('tick_processor', {}).get('stats', {}).get('error_count', 0)}
+
+🖥️ UI更新器:
+  • 更新循環: {'✅ 運行中' if status.get('ui_updater', {}).get('running', False) else '❌ 已停止'}
+  • 更新間隔: {status.get('ui_updater', {}).get('update_interval', 0)}ms
+  • UI更新次數: {status.get('ui_updater', {}).get('stats', {}).get('ui_updates', 0)}
+  • 日誌更新次數: {status.get('ui_updater', {}).get('stats', {}).get('log_updates', 0)}
+        """
+
+        self.add_message(status_msg)
+
+    def on_toggle_queue_mode(self):
+        """切換Queue模式按鈕事件"""
+        if not QUEUE_INFRASTRUCTURE_AVAILABLE:
+            self.add_message("❌ Queue基礎設施不可用，無法切換模式")
+            return
+
+        try:
+            if self.queue_mode_enabled:
+                # 切換到傳統模式
+                self.stop_queue_services()
+                self.queue_mode_enabled = False
+                self.add_message("🔄 已切換到傳統模式")
+            else:
+                # 切換到Queue模式
+                if self.queue_infrastructure and self.queue_infrastructure.initialized:
+                    self.queue_mode_enabled = True
+                    self.add_message("🚀 已切換到Queue模式")
+                else:
+                    self.add_message("❌ Queue基礎設施未初始化，無法切換")
+                    return
+
+            self.update_queue_control_buttons()
+
+        except Exception as e:
+            self.add_message(f"❌ 切換模式錯誤: {str(e)}")
         self.stocks_ready = False  # 商品資料是否準備完成
 
         # 策略面板暫時移除
@@ -616,12 +899,15 @@ class FutureOrderFrame(tk.Frame):
                                         command=self.clear_trade_report, bg="lightgray")
         self.btn_clear_trade.grid(column=0, row=1, pady=5)
 
+        # 新增：Queue控制面板
+        self.create_queue_control_panel()
+
         # 策略控制面板 (暫時移除，改為獨立分頁)
         # if STRATEGY_AVAILABLE:
         #     self.create_strategy_panel()
 
         # 設定主框架的權重，讓訊息區域可以擴展到底部
-        self.grid_rowconfigure(8, weight=1)  # 修改為第8行（訊息區域）
+        self.grid_rowconfigure(9, weight=1)  # 修改為第9行（訊息區域，因為新增了Queue控制面板）
         self.grid_columnconfigure(0, weight=1)
 
     def create_strategy_panel(self):
@@ -1186,8 +1472,57 @@ class FutureOrderFrame(tk.Frame):
                     return 0
 
                 def OnNotifyTicksLONG(self, sMarketNo, nStockidx, nPtr, lDate, lTimehms, lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-                    """即時Tick資料事件"""
+                    """即時Tick資料事件 - Queue架構改造版本"""
                     try:
+                        # 🚀 階段2: Queue模式處理 (優先)
+                        if hasattr(self.parent, 'queue_mode_enabled') and self.parent.queue_mode_enabled:
+                            try:
+                                # 創建TickData物件
+                                tick_data = TickData(
+                                    market_no=sMarketNo,
+                                    stock_idx=nStockidx,
+                                    date=lDate,
+                                    time_hms=lTimehms,
+                                    time_millis=lTimemillismicros,
+                                    bid=nBid,
+                                    ask=nAsk,
+                                    close=nClose,
+                                    qty=nQty,
+                                    timestamp=datetime.now()
+                                )
+
+                                # 將Tick資料放入Queue (非阻塞)
+                                queue_manager = get_queue_manager()
+                                success = queue_manager.put_tick_data(tick_data)
+
+                                if success:
+                                    # Queue模式成功，只做最基本的UI更新
+                                    time_str = f"{lTimehms:06d}"
+                                    formatted_time = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
+
+                                    # 最小化UI操作 - 只更新價格顯示
+                                    try:
+                                        self.parent.label_price.config(text=str(nClose))
+                                        self.parent.label_time.config(text=formatted_time)
+
+                                        # 更新基本數據變數
+                                        corrected_price = nClose / 100.0 if nClose > 100000 else nClose
+                                        self.parent.last_price = corrected_price
+                                        self.parent.last_update_time = formatted_time
+                                    except:
+                                        pass  # 忽略UI更新錯誤
+
+                                    # Queue模式成功，直接返回，不執行傳統邏輯
+                                    return 0
+                                else:
+                                    # Queue滿了，記錄警告但繼續使用傳統模式
+                                    print("⚠️ Queue已滿，回退到傳統模式")
+
+                            except Exception as queue_error:
+                                # Queue處理失敗，記錄錯誤但繼續使用傳統模式
+                                print(f"❌ Queue處理錯誤: {queue_error}")
+
+                        # 🔄 傳統模式處理 (備用/回退)
                         # 簡化時間格式化
                         time_str = f"{lTimehms:06d}"
                         formatted_time = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"

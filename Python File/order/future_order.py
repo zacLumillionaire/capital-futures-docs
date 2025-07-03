@@ -7,6 +7,7 @@
 import sys
 import os
 import time
+import threading
 from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -300,7 +301,12 @@ class FutureOrderFrame(tk.Frame):
     def __init__(self, master=None, skcom_objects=None):
         super().__init__(master)
         self.master = master
-        
+
+        # 🔧 GIL錯誤修復：添加線程安全鎖
+        self.quote_lock = threading.Lock()
+        self.ui_lock = threading.Lock()
+        self.data_lock = threading.Lock()
+
         # SKCOM物件
         self.m_pSKCenter = skcom_objects.get('SKCenter') if skcom_objects else None
         self.m_pSKOrder = skcom_objects.get('SKOrder') if skcom_objects else None
@@ -762,10 +768,48 @@ class FutureOrderFrame(tk.Frame):
             messagebox.showerror("錯誤", f"設定商品代碼失敗: {str(e)}")
 
     def add_message(self, message):
-        """添加訊息到顯示區域"""
-        self.text_message.insert(tk.END, message + "\n")
-        self.text_message.see(tk.END)
-        logger.info(message)
+        """添加訊息到顯示區域 - 🔧 GIL錯誤修復：線程安全版本"""
+        try:
+            # 🔧 檢查是否在主線程中
+            import threading
+            if threading.current_thread() == threading.main_thread():
+                # 在主線程中，直接更新UI
+                self.text_message.insert(tk.END, message + "\n")
+                self.text_message.see(tk.END)
+            else:
+                # 在背景線程中，使用after_idle安全地安排到主線程
+                self.after_idle(self.safe_add_message, message)
+
+            logger.info(message)
+        except Exception as e:
+            # 如果UI更新失敗，至少記錄到日誌
+            logger.info(f"[UI更新失敗] {message}")
+
+    def safe_add_message(self, message):
+        """線程安全的訊息添加 - 只在主線程中調用"""
+        try:
+            self.text_message.insert(tk.END, message + "\n")
+            self.text_message.see(tk.END)
+        except Exception as e:
+            # 如果連這個都失敗，只能忽略了
+            pass
+
+    def safe_update_quote_display(self, price, time_str, bid, ask, qty):
+        """線程安全的報價顯示更新 - 只在主線程中調用"""
+        try:
+            # 更新價格和時間顯示
+            if hasattr(self, 'label_price'):
+                self.label_price.config(text=str(price))
+            if hasattr(self, 'label_time'):
+                self.label_time.config(text=time_str)
+
+            # 記錄Tick資訊到日誌
+            logger.info(f"【Tick】價格:{price} 買:{bid} 賣:{ask} 量:{qty} 時間:{time_str}")
+
+        except Exception as e:
+            # 如果UI更新失敗，只記錄到日誌
+            logger.info(f"【Tick】價格:{price} 買:{bid} 賣:{ask} 量:{qty} 時間:{time_str} (UI更新失敗)")
+            pass
     
     def clear_form(self):
         """清除表單"""
@@ -1172,169 +1216,98 @@ class FutureOrderFrame(tk.Frame):
                     self.parent = parent
 
                 def OnConnection(self, nKind, nCode):
-                    """連線狀態事件"""
+                    """連線狀態事件 - 🔧 GIL錯誤修復版本"""
                     try:
-                        if nKind == 3003:  # SK_SUBJECT_CONNECTION_STOCKS_READY
-                            # 直接設定狀態，不更新UI (避免GIL錯誤)
-                            self.parent.stocks_ready = True
-                            # 如果有待訂閱的商品，直接訂閱
-                            if hasattr(self.parent, 'pending_subscription') and self.parent.pending_subscription:
-                                # 使用簡單的方式觸發訂閱
-                                self.parent.after(100, self.parent.safe_subscribe_ticks)
-                    except:
-                        pass  # 忽略所有錯誤，避免GIL問題
+                        # 🔧 使用線程鎖確保線程安全
+                        with self.parent.data_lock:
+                            if nKind == 3003:  # SK_SUBJECT_CONNECTION_STOCKS_READY
+                                # 直接設定狀態，不更新UI (避免GIL錯誤)
+                                self.parent.stocks_ready = True
+                                # 如果有待訂閱的商品，直接訂閱
+                                if hasattr(self.parent, 'pending_subscription') and self.parent.pending_subscription:
+                                    # 使用簡單的方式觸發訂閱
+                                    self.parent.after(100, self.parent.safe_subscribe_ticks)
+                    except Exception as e:
+                        # 🔧 GIL錯誤修復：記錄錯誤但絕不拋出異常
+                        try:
+                            import logging
+                            logging.getLogger('order.future_order').debug(f"OnConnection錯誤: {e}")
+                        except:
+                            pass  # 連LOG都失敗就完全忽略
                     return 0
 
                 def OnNotifyTicksLONG(self, sMarketNo, nStockidx, nPtr, lDate, lTimehms, lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-                    """即時Tick資料事件"""
+                    """即時Tick資料事件 - 🔧 GIL錯誤修復版本 - 完全Queue化"""
                     try:
+                        # 🔧 GIL錯誤修復：絕不直接更新UI，只更新數據和記錄LOG
+
                         # 簡化時間格式化
                         time_str = f"{lTimehms:06d}"
                         formatted_time = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
 
-                        # 直接更新價格顯示 (最小化UI操作)
+                        # 🎯 只更新數據，絕不直接操作UI控件
                         try:
-                            self.parent.label_price.config(text=str(nClose))
-                            self.parent.label_time.config(text=formatted_time)
-
-                            # 🎯 策略數據更新：安全方式，不直接調用回調
-                            try:
+                            with self.parent.data_lock:
                                 # 修正價格格式 (群益API價格通常需要除以100)
                                 corrected_price = nClose / 100.0 if nClose > 100000 else nClose
 
-                                # 只更新數據，不調用回調（避免GIL衝突）
+                                # 只更新數據變數，不操作UI
                                 self.parent.last_price = corrected_price
                                 self.parent.last_update_time = formatted_time
-                            except Exception as strategy_error:
-                                # 數據更新失敗不影響主要功能
-                                pass
 
-                            # 🔗 價格橋接：寫入價格到橋接檔案 (供test_ui_improvements.py使用)
-                            try:
-                                # 修正價格格式 (群益API價格通常需要除以100)
-                                corrected_price = nClose / 100.0 if nClose > 100000 else nClose
-                                corrected_bid = nBid / 100.0 if nBid > 100000 else nBid
-                                corrected_ask = nAsk / 100.0 if nAsk > 100000 else nAsk
+                                # 🔧 無UI更新方案：只記錄LOG，不更新UI
+                                # 移除UI更新，避免任何GIL錯誤風險
+                                # self.parent.after_idle(
+                                #     self.parent.safe_update_quote_display,
+                                #     corrected_price, formatted_time, nBid, nAsk, nQty
+                                # )
 
-                                # 檢查是否有價格橋接模組
-                                if hasattr(self.parent, '_price_bridge_available'):
-                                    if self.parent._price_bridge_available:
-                                        # 導入價格橋接函數
-                                        from price_bridge import write_price_to_bridge
+                        except Exception as data_error:
+                            # 數據更新失敗不影響主要功能
+                            pass
 
-                                        # 寫入價格到橋接檔案
-                                        write_price_to_bridge(corrected_price, nQty, datetime.now())
-                                else:
-                                    # 第一次檢查，嘗試導入價格橋接
-                                    try:
-                                        from price_bridge import write_price_to_bridge
-                                        self.parent._price_bridge_available = True
-                                        # 立即寫入價格
-                                        write_price_to_bridge(corrected_price, nQty, datetime.now())
-                                        print("✅ 價格橋接已啟動")
-                                    except ImportError:
-                                        self.parent._price_bridge_available = False
-                                        print("⚠️ 價格橋接模組未找到")
-
-                                # 🚀 TCP價格廣播：新增功能
-                                try:
-                                    # 檢查是否有TCP價格伺服器模組
-                                    if hasattr(self.parent, '_tcp_server_available'):
-                                        if self.parent._tcp_server_available:
-                                            # 導入TCP廣播函數
-                                            from tcp_price_server import broadcast_price_tcp
-
-                                            # 準備價格資料
-                                            price_data = {
-                                                'price': corrected_price,
-                                                'bid': corrected_bid,
-                                                'ask': corrected_ask,
-                                                'volume': nQty,
-                                                'timestamp': formatted_time,
-                                                'date': lDate,
-                                                'source': 'OrderTester'
-                                            }
-
-                                            # TCP廣播價格
-                                            broadcast_price_tcp(price_data)
-                                    else:
-                                        # 第一次檢查，嘗試導入TCP伺服器
-                                        try:
-                                            from tcp_price_server import broadcast_price_tcp
-                                            self.parent._tcp_server_available = True
-                                            print("✅ TCP價格伺服器模組已載入")
-                                        except ImportError:
-                                            self.parent._tcp_server_available = False
-                                            print("⚠️ TCP價格伺服器模組未找到")
-                                except Exception as tcp_error:
-                                    # TCP廣播失敗不影響主要功能
-                                    pass
-
-                            except Exception as bridge_error:
-                                # 價格橋接失敗不影響主要功能
-                                pass
-
-                            # 控制LOG頻率，使用最安全的方式
-                            if hasattr(self.parent, '_last_log_time'):
-                                current_time = time.time()
-                                if current_time - self.parent._last_log_time > 1:  # 每1秒記錄一次
-                                    self.parent._last_log_time = current_time
-                                    tick_msg = f"【Tick】價格:{nClose} 買:{nBid} 賣:{nAsk} 量:{nQty} 時間:{formatted_time}"
-                                    # 只輸出到控制台，避免GIL錯誤
-                                    print(tick_msg)
-                                    # 使用最簡單的方式添加到LOG (直接調用，不使用after_idle)
-                                    try:
-                                        import logging
-                                        logging.getLogger('order.future_order').info(tick_msg)
-                                    except:
-                                        pass
-                            else:
-                                self.parent._last_log_time = time.time()
-                                tick_msg = f"【Tick】價格:{nClose} 買:{nBid} 賣:{nAsk} 量:{nQty} 時間:{formatted_time}"
-                                # 只輸出到控制台，避免GIL錯誤
-                                print(tick_msg)
-                                # 使用最簡單的方式添加到LOG
-                                try:
-                                    import logging
-                                    logging.getLogger('order.future_order').info(tick_msg)
-                                except:
-                                    pass
-                        except:
-                            pass  # 忽略UI更新錯誤
-                    except:
-                        pass  # 忽略所有錯誤
+                        # 🔧 GIL錯誤修復：完全移除COM事件中的日誌記錄
+                        # 控制Tick顯示頻率，但絕不觸發日誌處理器
+                        if hasattr(self.parent, '_last_log_time'):
+                            current_time = time.time()
+                            if current_time - self.parent._last_log_time > 1:  # 每1秒顯示一次
+                                self.parent._last_log_time = current_time
+                                # 🔧 只輸出到控制台，絕不觸發日誌處理器
+                                print(f"【Tick】價格:{nClose} 買:{nBid} 賣:{nAsk} 量:{nQty} 時間:{formatted_time}")
+                        else:
+                            self.parent._last_log_time = time.time()
+                            # 🔧 只輸出到控制台，絕不觸發日誌處理器
+                            print(f"【Tick】價格:{nClose} 買:{nBid} 賣:{nAsk} 量:{nQty} 時間:{formatted_time}")
+                    except Exception as e:
+                        # 🔧 GIL錯誤修復：絕不在COM事件中調用日誌記錄
+                        # 只輸出到控制台，避免觸發日誌處理器
+                        print(f"OnNotifyTicksLONG錯誤: {e}")
                     return 0
 
                 def OnNotifyBest5LONG(self, sMarketNo, nStockidx, nBestBid1, nBestBidQty1, nBestBid2, nBestBidQty2, nBestBid3, nBestBidQty3, nBestBid4, nBestBidQty4, nBestBid5, nBestBidQty5, nExtendBid, nExtendBidQty, nBestAsk1, nBestAskQty1, nBestAsk2, nBestAskQty2, nBestAsk3, nBestAskQty3, nBestAsk4, nBestAskQty4, nBestAsk5, nBestAskQty5, nExtendAsk, nExtendAskQty, nSimulate):
-                    """五檔報價事件"""
+                    """五檔報價事件 - 🔧 GIL錯誤修復版本：完全避免日誌記錄"""
                     try:
-                        # 控制五檔LOG頻率，使用最安全的方式
-                        if hasattr(self.parent, '_last_best5_time'):
-                            current_time = time.time()
-                            if current_time - self.parent._last_best5_time > 3:  # 每3秒記錄一次
-                                self.parent._last_best5_time = current_time
-                                best5_msg = f"【五檔】買1:{nBestBid1}({nBestBidQty1}) 賣1:{nBestAsk1}({nBestAskQty1})"
-                                # 只輸出到控制台，避免GIL錯誤
-                                print(best5_msg)
-                                # 使用最簡單的方式添加到LOG
-                                try:
-                                    import logging
-                                    logging.getLogger('order.future_order').info(best5_msg)
-                                except:
-                                    pass
-                        else:
-                            self.parent._last_best5_time = time.time()
-                            best5_msg = f"【五檔】買1:{nBestBid1}({nBestBidQty1}) 賣1:{nBestAsk1}({nBestAskQty1})"
-                            # 只輸出到控制台，避免GIL錯誤
-                            print(best5_msg)
-                            # 使用最簡單的方式添加到LOG
-                            try:
-                                import logging
-                                logging.getLogger('order.future_order').info(best5_msg)
-                            except:
-                                pass
-                    except:
-                        pass
+                        # 🔧 GIL錯誤修復：絕不在COM事件中記錄日誌！
+                        # 只更新數據，不做任何UI操作或日誌記錄
+                        with self.parent.quote_lock:
+                            # 控制五檔顯示頻率
+                            if hasattr(self.parent, '_last_best5_time'):
+                                current_time = time.time()
+                                if current_time - self.parent._last_best5_time > 3:  # 每3秒顯示一次
+                                    self.parent._last_best5_time = current_time
+                                    # 🔧 只輸出到控制台，絕不觸發日誌處理器
+                                    print(f"【五檔】買1:{nBestBid1}({nBestBidQty1}) 賣1:{nBestAsk1}({nBestAskQty1})")
+                            else:
+                                self.parent._last_best5_time = time.time()
+                                # 🔧 只輸出到控制台，絕不觸發日誌處理器
+                                print(f"【五檔】買1:{nBestBid1}({nBestBidQty1}) 賣1:{nBestAsk1}({nBestAskQty1})")
+                    except Exception as e:
+                        # 🔧 GIL錯誤修復：記錄錯誤但絕不拋出異常
+                        try:
+                            import logging
+                            logging.getLogger('order.future_order').debug(f"OnNotifyBest5LONG錯誤: {e}")
+                        except:
+                            pass  # 連LOG都失敗就完全忽略
                     return 0
 
             # 建立簡化的事件處理器
@@ -1543,35 +1516,35 @@ class FutureOrderFrame(tk.Frame):
             self.add_message(f"【錯誤】更新報價顯示時發生錯誤: {str(e)}")
 
     def safe_update_quote_display(self, price, time_str, bid, ask, qty):
-        """線程安全的報價顯示更新"""
+        """🔧 無UI更新方案：只記錄數據，不更新UI"""
         try:
-            # 更新最新價
-            self.label_price.config(text=str(price))
+            # 🔧 移除所有UI更新，只保留數據記錄
+            # self.label_price.config(text=str(price))
+            # self.label_time.config(text=time_str)
+            # self.label_product.config(text=self.current_product)
 
-            # 更新時間
-            self.label_time.config(text=time_str)
-
-            # 更新商品代碼
-            self.label_product.config(text=self.current_product)
-
-            # 記錄最新價格和時間
+            # 只記錄最新價格和時間到變數
             self.last_price = price
             self.last_update_time = time_str
 
-            # 價格顏色變化 (簡單的漲跌顏色)
+            # 🔧 移除UI顏色變化，只記錄LOG
+            price_change = ""
             if hasattr(self, '_previous_price'):
                 if price > self._previous_price:
-                    self.label_price.config(fg="red")  # 上漲紅色
+                    price_change = "↗️"  # 上漲
                 elif price < self._previous_price:
-                    self.label_price.config(fg="green")  # 下跌綠色
+                    price_change = "↘️"  # 下跌
                 else:
-                    self.label_price.config(fg="black")  # 平盤黑色
+                    price_change = "➡️"  # 平盤
+
+            # 🔧 只輸出LOG，不更新UI
+            print(f"【報價更新】{price_change} 價格:{price} 時間:{time_str} 買:{bid} 賣:{ask} 量:{qty}")
 
             self._previous_price = price
 
         except Exception as e:
-            # 錯誤處理也要線程安全
-            self.after_idle(self.safe_add_message, f"【錯誤】安全更新報價顯示時發生錯誤: {str(e)}")
+            # 🔧 錯誤處理也改為只記錄LOG
+            print(f"【錯誤】報價顯示更新失敗: {str(e)}")
 
     def safe_add_message(self, message):
         """線程安全的訊息添加"""

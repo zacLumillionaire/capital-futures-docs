@@ -27,6 +27,16 @@ from tkinter import messagebox,colorchooser,font,Button,Frame,Label
 # 數學計算用物件
 import math
 
+# 🔧 GIL錯誤修復：導入Queue管理器
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'Python File'))
+from queue_manager import (
+    put_reply_message, put_order_message, register_message_handler, MainThreadProcessor
+)
+from message_handlers import (
+    reply_handler, order_handler, set_ui_widget
+)
+
 # 顯示各功能狀態用的function
 def WriteMessage(strMsg,listInformation):
     listInformation.insert('end', strMsg)
@@ -210,72 +220,185 @@ class FrameReply(Frame):
             messagebox.showerror("error！",e)
 
 class SKReplyLibEvent:
+    """回報事件類 - 🔧 GIL錯誤修復：改為Queue模式"""
+
     def OnConnect(self, btrUserID, nErrorCode):
-        if nErrorCode == 0:
-            strMsg = btrUserID,"Connected!"
-        else :
-            strMsg = btrUserID,"Connect Error!"
-        WriteMessage(strMsg,ReplyInformation)
+        """連線事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包連線數據，放入Queue而不直接更新UI
+            reply_data = {
+                'type': 'connect',
+                'user_id': btrUserID,
+                'error_code': nErrorCode,
+                'message': f"{btrUserID} {'Connected!' if nErrorCode == 0 else 'Connect Error!'}"
+            }
+            put_reply_message(reply_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnDisconnect(self,btrUserID, nErrorCode):
-        if nErrorCode == 3002:
-            strMsg = "OnDisconnect 您已經斷線囉~~~"
-        else:
-            strMsg = nErrorCode
-        WriteMessage(strMsg,ReplyInformation)
+        """斷線事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包斷線數據，放入Queue而不直接更新UI
+            reply_data = {
+                'type': 'disconnect',
+                'user_id': btrUserID,
+                'error_code': nErrorCode,
+                'message': "OnDisconnect 您已經斷線囉~~~" if nErrorCode == 3002 else str(nErrorCode)
+            }
+            put_reply_message(reply_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnComplete(self,btrUserID):
-        WriteMessage("OnComplete",ReplyInformation)
+        """完成事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包完成數據，放入Queue而不直接更新UI
+            reply_data = {
+                'type': 'complete',
+                'user_id': btrUserID,
+                'message': "OnComplete"
+            }
+            put_reply_message(reply_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnData(self,btrUserID,bstrData):
-        cutData = bstrData.split(',')
-        print(cutData[0])
-        print(cutData[10])
-        WriteMessage("OnData"+"\n"+bstrData,ReplyInformation)
+        """數據事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包數據，放入Queue而不直接更新UI
+            reply_data = {
+                'type': 'data',
+                'user_id': btrUserID,
+                'raw_data': bstrData,
+                'message': f"OnData\n{bstrData}"
+            }
+            put_reply_message(reply_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnNewData(self,btrUserID,bstrData):
-        cutData = bstrData.split(',')
-        #strMsg = {" 委託序號 ": cutData[0] , " 委託種類 " : cutData[2] , " 委託狀態 " : cutData[3] ," 商品代碼 " : cutData[8] ,
-        # " 委託書號 " : cutData[10]," 價格 " : cutData[11] , " 數量 " : cutData[20] ,
-        #" 日期&時間 " : cutData[23] + " " +cutData[24] , "錯誤訊息" : cutData[-4] + " " + cutData[-3]}
-        #WriteMessage( strMsg,ReplyInformation)
-        WriteMessage("OnNewData"+"\n"+cutData ,ReplyInformation)
+        """新數據事件 - 🔧 使用Queue避免GIL錯誤 (最重要的委託回報)"""
+        try:
+            # 打包新數據，放入Queue而不直接更新UI
+            cutData = bstrData.split(',')
+            order_data = {
+                'type': 'new_data',
+                'user_id': btrUserID,
+                'raw_data': bstrData,
+                'parsed_data': cutData,
+                'message': f"OnNewData\n{cutData}"
+            }
+            put_order_message(order_data)  # 使用order_message因為這是委託回報
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnReplyMessage(self,bstrUserID, bstrMessages):
-        sConfirmCode = -1
-        WriteMessage(bstrMessages,ReplyInformation)
-        return sConfirmCode
+        """回報訊息事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            sConfirmCode = -1
+            # 打包回報訊息，放入Queue而不直接更新UI
+            reply_data = {
+                'type': 'reply_message',
+                'user_id': bstrUserID,
+                'message': bstrMessages
+            }
+            put_reply_message(reply_data)
+            return sConfirmCode
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            return -1
 
     def OnReplyClearMessage(self,bstrUserID):
-        WriteMessage("OnReplyClearMessage",ReplyInformation)
+        """清除訊息事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包清除訊息，放入Queue而不直接更新UI
+            reply_data = {
+                'type': 'clear_message',
+                'user_id': bstrUserID,
+                'message': "OnReplyClearMessage"
+            }
+            put_reply_message(reply_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnSolaceReplyDisconnect(self,btrUserID, nErrorCode):
-        if nErrorCode == 3002:
-            strMsg = "OnSolaceReplyDisconnect SK_SUBJECT_CONNECTION_DISCONNECT"
-        else:
-            strMsg = nErrorCode
-        WriteMessage(strMsg,ReplyInformation)
+        """Solace斷線事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包Solace斷線數據，放入Queue而不直接更新UI
+            reply_data = {
+                'type': 'solace_disconnect',
+                'user_id': btrUserID,
+                'error_code': nErrorCode,
+                'message': "OnSolaceReplyDisconnect SK_SUBJECT_CONNECTION_DISCONNECT" if nErrorCode == 3002 else str(nErrorCode)
+            }
+            put_reply_message(reply_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnSmartData(self,btrUserID,bstrData):
-        cutData = bstrData.split(',')
-        WriteMessage("OnSmartData"+"\n"+bstrData ,ReplyInformation)
+        """智慧單數據事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包智慧單數據，放入Queue而不直接更新UI
+            reply_data = {
+                'type': 'smart_data',
+                'user_id': btrUserID,
+                'raw_data': bstrData,
+                'message': f"OnSmartData\n{bstrData}"
+            }
+            put_reply_message(reply_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
     def OnReplyClear(self,bstrMarket):
-        strMsg = "Clear Market: " + bstrMarket
-        WriteMessage(strMsg,ReplyInformation)
+        """清除回報事件 - 🔧 使用Queue避免GIL錯誤"""
+        try:
+            # 打包清除回報數據，放入Queue而不直接更新UI
+            reply_data = {
+                'type': 'reply_clear',
+                'market': bstrMarket,
+                'message': f"Clear Market: {bstrMarket}"
+            }
+            put_reply_message(reply_data)
+        except Exception as e:
+            # 即使發生錯誤也不能讓COM事件崩潰
+            pass
 
 SKReplyEvent = SKReplyLibEvent()
 SKReplyLibEventHandler = comtypes.client.GetEvents(skR, SKReplyEvent)
 
 if __name__ == '__main__':
     root = Tk()
-    root.title("PythonExampleReply")
+    root.title("PythonExampleReply - 🔧 GIL錯誤修復版本")
     root["background"] = "#ffdbdb"
+
+    # 🔧 GIL錯誤修復：註冊訊息處理器
+    register_message_handler('reply', reply_handler)
+    register_message_handler('order', order_handler)
 
     frLogin = FrameLogin(master = root)
 
     #TabControl
     root.TabControl = Notebook(root)
-    root.TabControl.add(FrameReply(master = root),text="Reply")
+    reply_frame = FrameReply(master = root)
+    root.TabControl.add(reply_frame, text="Reply")
     root.TabControl.grid(column = 0, row = 2, sticky = E + W)
+
+    # 🔧 GIL錯誤修復：設置UI控件引用
+    set_ui_widget('reply_listbox', ReplyInformation)
+    set_ui_widget('order_listbox', ReplyInformation)  # 委託回報也使用同一個listbox
+    set_ui_widget('global_listbox', GlobalListInformation)
+
+    # 🔧 GIL錯誤修復：啟動主線程Queue處理器
+    processor = MainThreadProcessor(root, interval_ms=50)
+    processor.start()
+
     root.mainloop()

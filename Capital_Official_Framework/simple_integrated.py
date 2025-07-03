@@ -26,17 +26,47 @@ class SimpleIntegratedApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("群益簡化整合交易系統")
-        self.root.geometry("1000x700")
-        
+        self.root.geometry("1200x800")  # 增加寬度以容納策略面板
+
         # 使用者配置
         self.config = get_user_config()
-        
+
         # 狀態變數
         self.logged_in = False
-        
+
+        # 🎯 策略相關變數初始化
+        self.strategy_enabled = False
+        self.strategy_monitoring = False
+
+        # 區間計算相關
+        self.range_high = 0
+        self.range_low = 0
+        self.range_calculated = False
+        self.in_range_period = False
+        self.range_prices = []
+        self.range_start_hour = 8    # 預設08:46開始
+        self.range_start_minute = 46
+        self._last_range_minute = None
+        self._range_start_time = ""
+
+        # 部位管理相關
+        self.current_position = None
+        self.first_breakout_detected = False
+        self.waiting_for_entry = False
+        self.breakout_signal = None
+        self.breakout_direction = None
+
+        # 價格追蹤（不即時更新UI，只記錄）
+        self.latest_price = 0
+        self.latest_time = ""
+        self.price_count = 0  # 接收到的報價數量
+
+        # LOG控制變數
+        self.strategy_log_count = 0
+
         # 建立介面
         self.create_widgets()
-        
+
         # 註冊OnReplyMessage事件 (解決2017警告)
         self.register_reply_events()
 
@@ -45,10 +75,27 @@ class SimpleIntegratedApp:
     
     def create_widgets(self):
         """建立使用者介面"""
-        
-        # 主框架
-        main_frame = ttk.Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 建立筆記本控件（分頁結構）
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # 主要功能頁面
+        main_frame = ttk.Frame(notebook)
+        notebook.add(main_frame, text="主要功能")
+
+        # 策略監控頁面
+        strategy_frame = ttk.Frame(notebook)
+        notebook.add(strategy_frame, text="策略監控")
+
+        # 建立主要功能頁面內容
+        self.create_main_page(main_frame)
+
+        # 建立策略監控頁面內容
+        self.create_strategy_page(strategy_frame)
+
+    def create_main_page(self, main_frame):
+        """建立主要功能頁面"""
         
         # 登入區域
         login_frame = ttk.LabelFrame(main_frame, text="系統登入", padding=10)
@@ -179,6 +226,8 @@ class SimpleIntegratedApp:
         # 參數說明
         ttk.Label(params_frame3, text="💡 ROD=整日有效 IOC=立即成交否則取消 FOK=全部成交否則取消",
                  foreground="gray").grid(row=0, column=2, columnspan=6, sticky="w", padx=10)
+
+
     
     def register_reply_events(self):
         """註冊OnReplyMessage事件 - 解決2017警告"""
@@ -535,6 +584,10 @@ class SimpleIntegratedApp:
                         price_msg = f"📊 {formatted_time} 成交:{price:.0f} 買:{bid:.0f} 賣:{ask:.0f} 量:{nQty}"
                         self.parent.write_message_direct(price_msg)
 
+                        # 🎯 策略邏輯整合（關鍵新增部分）- 無UI更新版本
+                        if hasattr(self.parent, 'strategy_enabled') and self.parent.strategy_enabled:
+                            self.parent.process_strategy_logic_safe(price, formatted_time)
+
                     except Exception as e:
                         # 如果出錯，也按照群益方式直接寫入
                         self.parent.write_message_direct(f"❌ 報價處理錯誤: {e}")
@@ -686,6 +739,415 @@ class SimpleIntegratedApp:
             import traceback
             self.add_log(f"📋 錯誤詳情: {traceback.format_exc()}")
     
+
+
+    def create_strategy_page(self, strategy_frame):
+        """建立策略監控頁面"""
+        # 策略監控面板
+        self.create_strategy_panel(strategy_frame)
+
+        # 策略日誌區域
+        self.create_strategy_log_area(strategy_frame)
+
+    def create_strategy_panel(self, parent_frame):
+        """創建策略監控面板 - 簡化版，避免頻繁UI更新"""
+        try:
+            # 策略控制框架
+            strategy_frame = ttk.LabelFrame(parent_frame, text="🎯 開盤區間突破策略監控", padding=10)
+            strategy_frame.pack(fill="x", pady=(10, 0))
+
+            # 第一行：策略控制按鈕
+            control_row = ttk.Frame(strategy_frame)
+            control_row.pack(fill="x", pady=(0, 5))
+
+            self.btn_start_strategy = ttk.Button(control_row, text="🚀 啟動策略監控",
+                                              command=self.start_strategy)
+            self.btn_start_strategy.pack(side="left", padx=5)
+
+            self.btn_stop_strategy = ttk.Button(control_row, text="🛑 停止策略監控",
+                                             command=self.stop_strategy, state="disabled")
+            self.btn_stop_strategy.pack(side="left", padx=5)
+
+            # 策略狀態顯示（靜態，不頻繁更新）
+            ttk.Label(control_row, text="狀態:").pack(side="left", padx=(20, 5))
+            self.strategy_status_var = tk.StringVar(value="策略未啟動")
+            ttk.Label(control_row, textvariable=self.strategy_status_var, foreground="blue").pack(side="left", padx=5)
+
+            # 第二行：區間設定
+            range_row = ttk.Frame(strategy_frame)
+            range_row.pack(fill="x", pady=5)
+
+            # 區間時間設定
+            ttk.Label(range_row, text="監控區間:").pack(side="left", padx=5)
+            self.range_time_var = tk.StringVar(value="08:46-08:48")
+            ttk.Label(range_row, textvariable=self.range_time_var,
+                     font=("Arial", 10, "bold"), foreground="purple").pack(side="left", padx=5)
+
+            # 手動設定區間時間
+            ttk.Label(range_row, text="設定開始時間:").pack(side="left", padx=(20, 2))
+            self.entry_range_time = ttk.Entry(range_row, width=8)
+            self.entry_range_time.insert(0, "08:46")
+            self.entry_range_time.pack(side="left", padx=2)
+
+            ttk.Button(range_row, text="套用", command=self.apply_range_time).pack(side="left", padx=2)
+
+            # 第三行：區間結果顯示（只在計算完成時更新）
+            result_row = ttk.Frame(strategy_frame)
+            result_row.pack(fill="x", pady=5)
+
+            ttk.Label(result_row, text="區間結果:").pack(side="left", padx=5)
+            self.range_result_var = tk.StringVar(value="等待計算")
+            ttk.Label(result_row, textvariable=self.range_result_var, foreground="green").pack(side="left", padx=5)
+
+            # 第四行：突破和部位狀態（只在狀態變化時更新）
+            status_row = ttk.Frame(strategy_frame)
+            status_row.pack(fill="x", pady=5)
+
+            ttk.Label(status_row, text="突破狀態:").pack(side="left", padx=5)
+            self.breakout_status_var = tk.StringVar(value="等待突破")
+            ttk.Label(status_row, textvariable=self.breakout_status_var, foreground="orange").pack(side="left", padx=5)
+
+            ttk.Label(status_row, text="部位:").pack(side="left", padx=(20, 5))
+            self.position_status_var = tk.StringVar(value="無部位")
+            ttk.Label(status_row, textvariable=self.position_status_var, foreground="purple").pack(side="left", padx=5)
+
+            # 第五行：統計資訊（不頻繁更新）
+            stats_row = ttk.Frame(strategy_frame)
+            stats_row.pack(fill="x", pady=5)
+
+            ttk.Label(stats_row, text="接收報價:").pack(side="left", padx=5)
+            self.price_count_var = tk.StringVar(value="0")
+            ttk.Label(stats_row, textvariable=self.price_count_var, foreground="gray").pack(side="left", padx=5)
+
+            ttk.Button(stats_row, text="📊 查看策略狀態", command=self.show_strategy_status).pack(side="left", padx=(20, 5))
+
+            self.add_log("✅ 策略監控面板創建完成（安全模式）")
+
+        except Exception as e:
+            self.add_log(f"❌ 策略面板創建失敗: {e}")
+
+    def create_strategy_log_area(self, parent_frame):
+        """創建策略日誌區域"""
+        try:
+            # 策略日誌框架
+            log_frame = ttk.LabelFrame(parent_frame, text="📋 策略監控日誌", padding=5)
+            log_frame.pack(fill="both", expand=True, pady=(10, 0))
+
+            # 策略日誌文字框
+            self.text_strategy_log = tk.Text(log_frame, height=12, wrap=tk.WORD,
+                                           font=("Consolas", 9), bg="#f8f9fa")
+
+            # 滾動條
+            scrollbar_strategy = ttk.Scrollbar(log_frame, orient="vertical",
+                                             command=self.text_strategy_log.yview)
+            self.text_strategy_log.configure(yscrollcommand=scrollbar_strategy.set)
+
+            # 佈局
+            self.text_strategy_log.pack(side="left", fill="both", expand=True)
+            scrollbar_strategy.pack(side="right", fill="y")
+
+            # 初始化訊息
+            self.add_strategy_log("📋 策略監控日誌系統已初始化")
+
+        except Exception as e:
+            self.add_log(f"❌ 策略日誌區域創建失敗: {e}")
+
+    def add_strategy_log(self, message):
+        """策略日誌 - 主線程安全，只記錄重要事件"""
+        try:
+            if hasattr(self, 'text_strategy_log'):
+                timestamp = time.strftime("%H:%M:%S")
+                formatted_message = f"[{timestamp}] {message}\n"
+
+                self.text_strategy_log.insert(tk.END, formatted_message)
+                self.text_strategy_log.see(tk.END)
+
+                # 控制UI更新頻率
+                self.strategy_log_count += 1
+
+                # 每5條策略LOG才強制更新一次UI（減少頻率）
+                if self.strategy_log_count % 5 == 0:
+                    self.root.update_idletasks()
+
+        except Exception as e:
+            # 靜默處理，不影響策略邏輯
+            pass
+
+    def process_strategy_logic_safe(self, price, time_str):
+        """安全的策略邏輯處理 - 避免頻繁UI更新"""
+        try:
+            # 只更新內部變數，不更新UI
+            self.latest_price = price
+            self.latest_time = time_str
+            self.price_count += 1
+
+            # 每100個報價更新一次統計（減少UI更新頻率）
+            if self.price_count % 100 == 0:
+                self.price_count_var.set(str(self.price_count))
+
+            # 區間計算邏輯
+            self.update_range_calculation_safe(price, time_str)
+
+            # 突破檢測（區間計算完成後）
+            if self.range_calculated and not self.first_breakout_detected:
+                self.check_breakout_signals_safe(price, time_str)
+
+            # 出場條件檢查（有部位時）
+            if self.current_position:
+                self.check_exit_conditions_safe(price, time_str)
+
+        except Exception as e:
+            # 靜默處理錯誤，避免影響報價處理
+            pass
+
+    def update_range_calculation_safe(self, price, time_str):
+        """安全的區間計算 - 只在關鍵時刻更新UI"""
+        try:
+            # 檢查是否在區間時間內
+            if self.is_in_range_time_safe(time_str):
+                if not self.in_range_period:
+                    # 開始收集區間數據
+                    self.in_range_period = True
+                    self.range_prices = []
+                    self._range_start_time = time_str
+                    # 重要事件：記錄到策略日誌
+                    self.add_strategy_log(f"📊 開始收集區間數據: {time_str}")
+
+                # 收集價格數據
+                self.range_prices.append(price)
+
+            elif self.in_range_period and not self.range_calculated:
+                # 區間結束，計算高低點
+                if self.range_prices:
+                    self.range_high = max(self.range_prices)
+                    self.range_low = min(self.range_prices)
+                    self.range_calculated = True
+                    self.in_range_period = False
+
+                    # 只在計算完成時更新UI
+                    range_text = f"高:{self.range_high:.0f} 低:{self.range_low:.0f} 大小:{self.range_high-self.range_low:.0f}"
+                    self.range_result_var.set(range_text)
+
+                    # 重要事件：記錄到策略日誌
+                    self.add_strategy_log(f"✅ 區間計算完成: {range_text}")
+                    self.add_strategy_log(f"📊 收集數據點數: {len(self.range_prices)} 筆")
+
+        except Exception as e:
+            pass
+
+    def is_in_range_time_safe(self, time_str):
+        """安全的時間檢查 - 精確2分鐘區間"""
+        try:
+            hour, minute, second = map(int, time_str.split(':'))
+            current_total_seconds = hour * 3600 + minute * 60 + second
+            start_total_seconds = self.range_start_hour * 3600 + self.range_start_minute * 60
+            end_total_seconds = start_total_seconds + 120  # 精確2分鐘
+
+            return start_total_seconds <= current_total_seconds < end_total_seconds
+        except:
+            return False
+
+    def check_breakout_signals_safe(self, price, time_str):
+        """安全的突破檢測 - 只在突破時更新UI"""
+        try:
+            if not self.current_position:  # 無部位時檢查進場
+                if price > self.range_high:
+                    self.enter_position_safe("LONG", price, time_str)
+                elif price < self.range_low:
+                    self.enter_position_safe("SHORT", price, time_str)
+        except Exception as e:
+            pass
+
+    def enter_position_safe(self, direction, price, time_str):
+        """安全的建倉處理 - 只在建倉時更新UI"""
+        try:
+            # 重要事件：記錄到策略日誌
+            self.add_strategy_log(f"🚀 {direction} 突破進場 @{price:.0f} 時間:{time_str}")
+
+            # 記錄部位資訊
+            self.current_position = {
+                'direction': direction,
+                'entry_price': price,
+                'entry_time': time_str,
+                'quantity': 1
+            }
+
+            # 標記已檢測到第一次突破
+            self.first_breakout_detected = True
+
+            # 只在建倉時更新UI
+            self.breakout_status_var.set(f"✅ {direction}突破")
+            self.position_status_var.set(f"{direction} @{price:.0f}")
+
+            # 這裡可以整合實際下單邏輯
+            # self.place_strategy_order(direction, price)
+
+        except Exception as e:
+            self.add_strategy_log(f"❌ 建倉失敗: {e}")
+
+    def check_exit_conditions_safe(self, price, time_str):
+        """安全的出場檢查 - 只在出場時更新UI"""
+        try:
+            if not self.current_position:
+                return
+
+            direction = self.current_position['direction']
+            entry_price = self.current_position['entry_price']
+
+            # 簡單的停損邏輯
+            stop_loss_points = 15
+            should_exit = False
+            exit_reason = ""
+
+            if direction == "LONG":
+                if price <= entry_price - stop_loss_points:
+                    should_exit = True
+                    exit_reason = f"停損 {entry_price - stop_loss_points:.0f}"
+            else:  # SHORT
+                if price >= entry_price + stop_loss_points:
+                    should_exit = True
+                    exit_reason = f"停損 {entry_price + stop_loss_points:.0f}"
+
+            if should_exit:
+                self.exit_position_safe(price, time_str, exit_reason)
+
+        except Exception as e:
+            pass
+
+    def exit_position_safe(self, price, time_str, reason):
+        """安全的出場處理 - 只在出場時更新UI"""
+        try:
+            if not self.current_position:
+                return
+
+            direction = self.current_position['direction']
+            entry_price = self.current_position['entry_price']
+            pnl = (price - entry_price) if direction == "LONG" else (entry_price - price)
+
+            # 重要事件：記錄到策略日誌
+            self.add_strategy_log(f"🔚 {direction} 出場 @{price:.0f} 原因:{reason} 損益:{pnl:.0f}點")
+
+            # 清除部位
+            self.current_position = None
+
+            # 只在出場時更新UI
+            self.position_status_var.set("無部位")
+
+        except Exception as e:
+            self.add_strategy_log(f"❌ 出場處理錯誤: {e}")
+
+    def start_strategy(self):
+        """啟動策略監控"""
+        try:
+            self.strategy_enabled = True
+            self.strategy_monitoring = True
+
+            # 重置策略狀態
+            self.range_calculated = False
+            self.first_breakout_detected = False
+            self.current_position = None
+            self.price_count = 0
+
+            # 更新UI
+            self.btn_start_strategy.config(state="disabled")
+            self.btn_stop_strategy.config(state="normal")
+            self.strategy_status_var.set("✅ 監控中")
+            self.range_result_var.set("等待區間")
+            self.breakout_status_var.set("等待突破")
+            self.position_status_var.set("無部位")
+            self.price_count_var.set("0")
+
+            # 重要事件：記錄到策略日誌
+            self.add_strategy_log("🚀 策略監控已啟動（安全模式）")
+            self.add_strategy_log(f"📊 監控區間: {self.range_time_var.get()}")
+
+        except Exception as e:
+            self.add_strategy_log(f"❌ 策略啟動失敗: {e}")
+
+    def stop_strategy(self):
+        """停止策略監控"""
+        try:
+            self.strategy_enabled = False
+            self.strategy_monitoring = False
+
+            # 更新UI
+            self.btn_start_strategy.config(state="normal")
+            self.btn_stop_strategy.config(state="disabled")
+            self.strategy_status_var.set("⏹️ 已停止")
+
+            # 重要事件：記錄到策略日誌
+            self.add_strategy_log("🛑 策略監控已停止")
+
+        except Exception as e:
+            self.add_strategy_log(f"❌ 策略停止失敗: {e}")
+
+    def apply_range_time(self):
+        """套用區間時間設定"""
+        try:
+            time_input = self.entry_range_time.get().strip()
+
+            # 解析時間格式 HH:MM
+            if ':' in time_input:
+                hour, minute = map(int, time_input.split(':'))
+            else:
+                self.add_log("❌ 時間格式錯誤，請使用 HH:MM 格式")
+                return
+
+            # 設定區間開始時間
+            self.range_start_hour = hour
+            self.range_start_minute = minute
+
+            # 計算結束時間（+2分鐘）
+            end_minute = minute + 2
+            end_hour = hour
+            if end_minute >= 60:
+                end_minute -= 60
+                end_hour += 1
+
+            # 更新顯示
+            range_display = f"{hour:02d}:{minute:02d}-{end_hour:02d}:{end_minute:02d}"
+            self.range_time_var.set(range_display)
+
+            # 重置區間數據
+            self.range_calculated = False
+            self.in_range_period = False
+            self.range_prices = []
+
+            # 重要事件：記錄到策略日誌
+            self.add_strategy_log(f"✅ 區間時間已設定: {range_display}")
+
+        except ValueError:
+            self.add_strategy_log("❌ 時間格式錯誤，請使用 HH:MM 格式")
+        except Exception as e:
+            self.add_strategy_log(f"❌ 套用區間時間失敗: {e}")
+
+    def show_strategy_status(self):
+        """顯示詳細策略狀態"""
+        try:
+            status_info = f"""
+策略監控狀態報告
+==================
+監控狀態: {'啟動' if self.strategy_enabled else '停止'}
+接收報價: {self.price_count} 筆
+最新價格: {self.latest_price:.0f} ({self.latest_time})
+
+區間計算:
+- 監控時間: {self.range_time_var.get()}
+- 計算狀態: {'已完成' if self.range_calculated else '等待中'}
+- 區間高點: {self.range_high:.0f if self.range_calculated else '--'}
+- 區間低點: {self.range_low:.0f if self.range_calculated else '--'}
+- 數據點數: {len(self.range_prices)}
+
+突破狀態:
+- 突破檢測: {'已觸發' if self.first_breakout_detected else '等待中'}
+- 當前部位: {self.current_position['direction'] + ' @' + str(self.current_position['entry_price']) if self.current_position else '無部位'}
+            """
+
+            messagebox.showinfo("策略狀態", status_info)
+
+        except Exception as e:
+            self.add_strategy_log(f"❌ 顯示狀態失敗: {e}")
+
     def add_log(self, message):
         """添加日誌"""
         timestamp = time.strftime("%H:%M:%S")

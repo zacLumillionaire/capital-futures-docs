@@ -74,11 +74,15 @@ class SimpleIntegratedApp:
         self.monitoring_stats = {
             'last_quote_count': 0,
             'last_quote_time': None,
-            'quote_status': '未知'
+            'quote_status': '未知',
+            'strategy_status': '未啟動',
+            'last_strategy_activity': 0,
+            'strategy_activity_count': 0
         }
 
         # Console輸出控制
         self.console_quote_enabled = True
+        self.console_strategy_enabled = True  # 策略Console輸出控制
 
         # 五檔數據存儲
         self.best5_data = None
@@ -167,7 +171,7 @@ class SimpleIntegratedApp:
         self.btn_connect_quote = ttk.Button(btn_frame, text="連線報價", command=self.connect_quote, state="disabled")
         self.btn_connect_quote.pack(side=tk.LEFT, padx=5)
         
-        self.btn_subscribe_quote = ttk.Button(btn_frame, text="訂閱MTX00", command=self.subscribe_quote, state="disabled")
+        self.btn_subscribe_quote = ttk.Button(btn_frame, text="訂閱報價", command=self.subscribe_quote, state="disabled")
         self.btn_subscribe_quote.pack(side=tk.LEFT, padx=5)
 
         # 停止報價按鈕 (永遠可用)
@@ -186,6 +190,9 @@ class SimpleIntegratedApp:
 
         # 🚨 Console模式：隱藏Queue控制面板
         # self.create_queue_control_panel(main_frame)
+
+        # 📊 商品選擇面板
+        self.create_product_selection_panel(main_frame)
 
         # 📊 狀態監控面板
         self.create_status_display_panel(main_frame)
@@ -1049,31 +1056,18 @@ class SimpleIntegratedApp:
             self.add_log(f"❌ 策略日誌區域創建失敗: {e}")
 
     def add_strategy_log(self, message):
-        """策略日誌 - 主線程安全，只記錄重要事件"""
+        """策略日誌 - Console化版本，避免UI更新造成GIL問題"""
         try:
-            # 🚨 檢查是否在主線程中
-            import threading
-            if threading.current_thread() != threading.main_thread():
-                # 如果不在主線程，只記錄到內部列表，不更新UI
-                if not hasattr(self, '_pending_strategy_logs'):
-                    self._pending_strategy_logs = []
-                timestamp = time.strftime("%H:%M:%S")
-                self._pending_strategy_logs.append(f"[{timestamp}] {message}")
-                return
+            # 添加時間戳
+            timestamp = time.strftime("%H:%M:%S")
+            formatted_message = f"[{timestamp}] {message}"
 
-            if hasattr(self, 'text_strategy_log'):
-                timestamp = time.strftime("%H:%M:%S")
-                formatted_message = f"[{timestamp}] {message}\n"
+            # 🎯 可控制的策略Console輸出（主要）
+            if getattr(self, 'console_strategy_enabled', True):
+                print(f"[STRATEGY] {formatted_message}")
 
-                self.text_strategy_log.insert(tk.END, formatted_message)
-                self.text_strategy_log.see(tk.END)
-
-                # 控制UI更新頻率
-                self.strategy_log_count += 1
-
-                # 每5條策略LOG才強制更新一次UI（減少頻率）
-                if self.strategy_log_count % 5 == 0:
-                    self.root.update_idletasks()
+            # 🚨 完全移除UI更新，避免GIL風險
+            # 策略日誌完全使用Console模式
 
         except Exception as e:
             # 靜默處理，不影響策略邏輯
@@ -1082,11 +1076,16 @@ class SimpleIntegratedApp:
     def process_strategy_logic_safe(self, price, time_str):
         """安全的策略邏輯處理 - 避免頻繁UI更新"""
         try:
-            # 🔍 調試信息
-            if price == 0:
-                print(f"⚠️ 策略收到0價格數據，時間: {time_str}")
-            elif self.price_count % 50 == 0:  # 每50筆報價顯示一次
-                print(f"🔍 策略收到: price={price}, time={time_str}, count={self.price_count}")
+            # 🔍 可控制的策略Console輸出
+            if getattr(self, 'console_strategy_enabled', True):
+                if price == 0:
+                    print(f"⚠️ 策略收到0價格數據，時間: {time_str}")
+                elif self.price_count % 50 == 0:  # 每50筆報價顯示一次
+                    print(f"🔍 策略收到: price={price}, time={time_str}, count={self.price_count}")
+
+            # 更新策略活動統計（用於監聽器）
+            self.monitoring_stats['strategy_activity_count'] += 1
+            self.monitoring_stats['last_strategy_activity'] = time.time()
 
             # 只更新內部變數，不更新UI
             self.latest_price = price
@@ -1357,9 +1356,15 @@ class SimpleIntegratedApp:
             self.position_status_var.set("無部位")
             self.price_count_var.set("0")
 
+            # 初始化策略監控統計
+            self.monitoring_stats['strategy_activity_count'] = 0
+            self.monitoring_stats['last_strategy_activity'] = time.time()
+            self.monitoring_stats['strategy_status'] = '策略運行中'
+
             # 重要事件：記錄到策略日誌
-            self.add_strategy_log("🚀 策略監控已啟動（安全模式）")
+            self.add_strategy_log("🚀 策略監控已啟動（Console模式）")
             self.add_strategy_log(f"📊 監控區間: {self.range_time_var.get()}")
+            self.add_strategy_log("💡 策略監控已完全Console化，避免GIL問題")
 
         except Exception as e:
             self.add_strategy_log(f"❌ 策略啟動失敗: {e}")
@@ -1374,6 +1379,9 @@ class SimpleIntegratedApp:
             self.btn_start_strategy.config(state="normal")
             self.btn_stop_strategy.config(state="disabled")
             self.strategy_status_var.set("⏹️ 已停止")
+
+            # 更新策略監控統計
+            self.monitoring_stats['strategy_status'] = '已停止'
 
             # 重要事件：記錄到策略日誌
             self.add_strategy_log("🛑 策略監控已停止")
@@ -1583,6 +1591,11 @@ class SimpleIntegratedApp:
                                            command=self.toggle_console_quote)
         self.btn_toggle_console.pack(side="left", padx=5)
 
+        # 策略Console控制按鈕
+        self.btn_toggle_strategy_console = ttk.Button(control_row, text="🔇 關閉策略Console",
+                                                    command=self.toggle_console_strategy)
+        self.btn_toggle_strategy_console.pack(side="left", padx=5)
+
         # 說明文字
         ttk.Label(control_row, text="📊 狀態監控和報價信息請查看VS Code Console輸出",
                  foreground="blue").pack(side="left", padx=20)
@@ -1592,10 +1605,14 @@ class SimpleIntegratedApp:
         # self.label_last_update = ...
 
     def start_status_monitor(self):
-        """啟動狀態監控 - 智能提醒版本"""
+        """啟動狀態監控 - 智能提醒版本（可調整間隔）"""
         # 初始化狀態追蹤
         self.last_status = None
         self.status_unchanged_count = 0
+
+        # 🔧 監控參數配置
+        self.monitor_interval = 5000  # 監控間隔（毫秒）- 改為5秒
+        self.quote_timeout_threshold = 2  # 報價中斷判定閾值（檢查次數）- 10秒無報價才判定中斷
 
         def monitor_loop():
             try:
@@ -1610,10 +1627,16 @@ class SimpleIntegratedApp:
                     new_status = "報價中"
                     self.status_unchanged_count = 0
                 else:
-                    # 沒有新報價
-                    self.monitoring_stats['quote_status'] = "報價中斷"
-                    new_status = "報價中斷"
+                    # 沒有新報價，累計計數
                     self.status_unchanged_count += 1
+
+                    # 🎯 只有超過閾值才判定為中斷
+                    if self.status_unchanged_count >= self.quote_timeout_threshold:
+                        self.monitoring_stats['quote_status'] = "報價中斷"
+                        new_status = "報價中斷"
+                    else:
+                        # 還在容忍範圍內，保持原狀態
+                        new_status = self.monitoring_stats['quote_status']
 
                 # 🎯 智能提醒邏輯
                 should_notify = False
@@ -1624,26 +1647,34 @@ class SimpleIntegratedApp:
                     if new_status == "報價中":
                         status_msg = "✅ [MONITOR] 報價恢復正常"
                     else:
-                        status_msg = "❌ [MONITOR] 報價中斷"
+                        interval_seconds = (self.monitor_interval / 1000) * self.quote_timeout_threshold
+                        status_msg = f"❌ [MONITOR] 報價中斷 (超過{interval_seconds:.0f}秒無報價)"
                 elif new_status == "報價中斷":
-                    # 報價中斷時，每30秒提醒一次 (10次檢查 = 30秒)
-                    if self.status_unchanged_count % 10 == 0:
+                    # 報價中斷時，每6次檢查提醒一次 (6次 × 5秒 = 30秒)
+                    if self.status_unchanged_count % 6 == 0:
                         should_notify = True
-                        status_msg = f"⚠️ [MONITOR] 報價持續中斷 ({self.status_unchanged_count * 3}秒)"
+                        total_seconds = self.status_unchanged_count * (self.monitor_interval / 1000)
+                        status_msg = f"⚠️ [MONITOR] 報價持續中斷 ({total_seconds:.0f}秒)"
 
                 # 只在需要時輸出
                 if should_notify:
                     timestamp = time.strftime("%H:%M:%S")
                     print(f"{status_msg} (檢查時間: {timestamp})")
 
+                # 🎯 策略狀態監控
+                self.monitor_strategy_status()
+
             except Exception as e:
                 print(f"❌ [MONITOR] 狀態監控錯誤: {e}")
 
-            # 排程下一次檢查（3秒間隔）
-            self.root.after(3000, monitor_loop)
+            # 排程下一次檢查（使用可配置間隔）
+            self.root.after(self.monitor_interval, monitor_loop)
 
         # 啟動監控
-        print("🎯 [MONITOR] 狀態監聽器啟動 - 只在狀態變化或中斷時提醒")
+        interval_sec = self.monitor_interval / 1000
+        timeout_sec = interval_sec * self.quote_timeout_threshold
+        print(f"🎯 [MONITOR] 狀態監聽器啟動")
+        print(f"📊 [MONITOR] 檢查間隔: {interval_sec}秒, 中斷判定: {timeout_sec}秒無報價")
         monitor_loop()
 
     def toggle_console_quote(self):
@@ -1663,6 +1694,154 @@ class SimpleIntegratedApp:
 
         except Exception as e:
             print(f"❌ [CONSOLE] 切換Console輸出錯誤: {e}")
+
+    def toggle_console_strategy(self):
+        """切換策略Console輸出"""
+        try:
+            self.console_strategy_enabled = not self.console_strategy_enabled
+
+            if self.console_strategy_enabled:
+                self.btn_toggle_strategy_console.config(text="🔇 關閉策略Console")
+                print("✅ [CONSOLE] 策略Console輸出已啟用")
+                print("💡 [CONSOLE] 策略監控數據將顯示在Console中")
+            else:
+                self.btn_toggle_strategy_console.config(text="🔊 開啟策略Console")
+                print("🔇 [CONSOLE] 策略Console輸出已關閉")
+                print("💡 [CONSOLE] 策略仍在運行，但不顯示在Console中")
+                print("📊 [CONSOLE] 狀態監聽器仍會檢測策略狀態")
+
+        except Exception as e:
+            print(f"❌ [CONSOLE] 切換策略Console輸出錯誤: {e}")
+
+    def configure_monitor_settings(self, interval_seconds=5, timeout_seconds=10):
+        """配置監控設定
+
+        Args:
+            interval_seconds: 檢查間隔（秒）
+            timeout_seconds: 報價中斷判定時間（秒）
+        """
+        try:
+            self.monitor_interval = interval_seconds * 1000  # 轉換為毫秒
+            self.quote_timeout_threshold = max(1, timeout_seconds // interval_seconds)
+
+            print(f"🔧 [MONITOR] 監控設定已更新:")
+            print(f"   檢查間隔: {interval_seconds}秒")
+            print(f"   中斷判定: {timeout_seconds}秒無報價")
+            print(f"   檢查次數閾值: {self.quote_timeout_threshold}")
+
+        except Exception as e:
+            print(f"❌ [MONITOR] 監控設定更新失敗: {e}")
+
+    def monitor_strategy_status(self):
+        """監控策略狀態 - 仿照報價監控的智能提醒機制"""
+        try:
+            # 檢查策略是否啟動
+            if not getattr(self, 'strategy_enabled', False):
+                # 策略未啟動，不需要監控
+                return
+
+            # 獲取當前策略活動統計
+            current_activity = self.monitoring_stats.get('strategy_activity_count', 0)
+            last_activity = self.monitoring_stats.get('last_strategy_activity', 0)
+            current_time = time.time()
+
+            # 檢查策略是否有活動（最近10秒內有活動）
+            if current_time - last_activity < 10:
+                new_strategy_status = "策略運行中"
+            else:
+                new_strategy_status = "策略中斷"
+
+            # 獲取之前的狀態
+            previous_strategy_status = self.monitoring_stats.get('strategy_status', '未知')
+
+            # 更新狀態
+            self.monitoring_stats['strategy_status'] = new_strategy_status
+
+            # 智能提醒邏輯（只在狀態變化時提醒）
+            if previous_strategy_status != new_strategy_status:
+                timestamp = time.strftime("%H:%M:%S")
+                if new_strategy_status == "策略運行中":
+                    print(f"✅ [MONITOR] 策略恢復正常 (檢查時間: {timestamp})")
+                else:
+                    print(f"❌ [MONITOR] 策略中斷 (檢查時間: {timestamp})")
+
+        except Exception as e:
+            # 靜默處理，不影響主監控邏輯
+            pass
+
+    def create_product_selection_panel(self, parent_frame):
+        """創建商品選擇面板 - 最低風險實施"""
+        try:
+            # 商品選項定義
+            self.PRODUCT_OPTIONS = {
+                "MTX00": "小台指當月",
+                "TM0000": "微型台指當月",
+                "MXF00": "小台指次月",
+                "TMF00": "微型台指次月"
+            }
+
+            # 創建面板
+            product_frame = ttk.LabelFrame(parent_frame, text="📊 報價商品選擇", padding=5)
+            product_frame.pack(fill="x", pady=5)
+
+            # 商品選擇行
+            product_row = ttk.Frame(product_frame)
+            product_row.pack(fill="x", pady=2)
+
+            # 商品選擇標籤
+            ttk.Label(product_row, text="商品:").pack(side="left")
+
+            # 商品下拉選單 - 初始化為當前配置值
+            current_product = self.config.get('DEFAULT_PRODUCT', 'MTX00')
+            self.product_var = tk.StringVar(value=current_product)
+            self.product_combo = ttk.Combobox(product_row, textvariable=self.product_var,
+                                             values=list(self.PRODUCT_OPTIONS.keys()),
+                                             state="readonly", width=10)
+            self.product_combo.pack(side="left", padx=5)
+
+            # 商品說明標籤
+            desc = self.PRODUCT_OPTIONS.get(current_product, "未知商品")
+            self.product_desc = ttk.Label(product_row, text=desc, foreground="blue")
+            self.product_desc.pack(side="left", padx=10)
+
+            # 狀態顯示
+            self.product_status = ttk.Label(product_row, text="(未訂閱)", foreground="gray")
+            self.product_status.pack(side="left", padx=5)
+
+            # 綁定選擇變更事件
+            self.product_combo.bind('<<ComboboxSelected>>', self.on_product_selection_changed)
+
+            # 初始化時更新訂閱按鈕文字
+            if hasattr(self, 'btn_subscribe_quote'):
+                self.btn_subscribe_quote.config(text=f"訂閱{current_product}")
+
+            print(f"✅ [PRODUCT] 商品選擇面板初始化完成，當前商品: {current_product}")
+
+        except Exception as e:
+            print(f"❌ [PRODUCT] 商品選擇面板創建錯誤: {e}")
+
+    def on_product_selection_changed(self, event=None):
+        """商品選擇變更事件 - 只更新顯示，不影響現有功能"""
+        try:
+            selected_product = self.product_var.get()
+
+            # 更新商品說明
+            desc = self.PRODUCT_OPTIONS.get(selected_product, "未知商品")
+            self.product_desc.config(text=desc)
+
+            # 更新配置變數（不影響當前運行）
+            self.config['DEFAULT_PRODUCT'] = selected_product
+
+            # 更新訂閱按鈕文字（如果按鈕存在）
+            if hasattr(self, 'btn_subscribe_quote'):
+                self.btn_subscribe_quote.config(text=f"訂閱{selected_product}")
+
+            # Console提示
+            print(f"📊 [PRODUCT] 商品選擇變更為: {selected_product} ({desc})")
+            print("💡 [PRODUCT] 新商品將在下次報價訂閱時生效")
+
+        except Exception as e:
+            print(f"❌ [PRODUCT] 商品選擇變更錯誤: {e}")
 
     def run(self):
         """執行應用程式"""

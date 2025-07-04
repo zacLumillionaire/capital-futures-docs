@@ -12,10 +12,14 @@ else:
 
 import comtypes.gen.SKCOMLib as sk
 
+# 初始化Global_IID變數
+Global_IID = None
+
 def SetID(id):
     iid = id
     global Global_IID
     Global_IID = iid
+    print(f"🔧 [Global] SetID called: {Global_IID}")
 
 global skO, skC, skQ, skR, skOSQ, skOOQ
 

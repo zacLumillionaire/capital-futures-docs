@@ -9,7 +9,7 @@ import os
 import sys
 import time
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 
 # 加入order_service路徑
 order_service_path = os.path.join(os.path.dirname(__file__), 'order_service')
@@ -25,6 +25,44 @@ from user_config import get_user_config
 QUEUE_INFRASTRUCTURE_AVAILABLE = False
 print("💡 使用Console模式，所有信息將在VS Code中顯示")
 print("🎯 這將大幅降低GIL錯誤風險，提升系統穩定性")
+
+# 🎯 多組策略系統導入
+try:
+    from multi_group_database import MultiGroupDatabaseManager
+    from multi_group_config import MultiGroupStrategyConfig, create_preset_configs
+    from multi_group_position_manager import MultiGroupPositionManager
+    from risk_management_engine import RiskManagementEngine
+    from multi_group_ui_panel import MultiGroupConfigPanel
+    from multi_group_console_logger import get_logger, LogCategory
+
+    MULTI_GROUP_AVAILABLE = True
+    print("✅ 多組策略系統模組載入成功")
+except ImportError as e:
+    MULTI_GROUP_AVAILABLE = False
+    print(f"⚠️ 多組策略系統模組載入失敗: {e}")
+    print("💡 將使用原有的單組策略系統")
+
+# 🚀 實際下單功能模組導入
+try:
+    from real_time_quote_manager import RealTimeQuoteManager
+    REAL_ORDER_MODULES_AVAILABLE = True
+    print("✅ 實際下單模組載入成功")
+except ImportError as e:
+    REAL_ORDER_MODULES_AVAILABLE = False
+    print(f"⚠️ 實際下單模組載入失敗: {e}")
+    print("💡 系統將以模擬模式運行")
+
+# 🚀 Stage2 虛實單整合系統模組導入
+try:
+    from virtual_real_order_manager import VirtualRealOrderManager
+    from unified_order_tracker import UnifiedOrderTracker
+    from order_mode_ui_controller import OrderModeUIController
+    VIRTUAL_REAL_ORDER_AVAILABLE = True
+    print("✅ Stage2 虛實單整合系統模組載入成功")
+except ImportError as e:
+    VIRTUAL_REAL_ORDER_AVAILABLE = False
+    print(f"⚠️ Stage2 虛實單整合系統模組載入失敗: {e}")
+    print("💡 將使用原有的下單系統")
 
 class SimpleIntegratedApp:
     """簡化版整合交易應用程式"""
@@ -66,6 +104,8 @@ class SimpleIntegratedApp:
         self.latest_price = 0
         self.latest_time = ""
         self.price_count = 0  # 接收到的報價數量
+        self.best5_count = 0  # 接收到的五檔報價數量
+        # self.last_quote_time = time.time()  # 已移除，避免GIL風險
 
         # LOG控制變數
         self.strategy_log_count = 0
@@ -73,6 +113,8 @@ class SimpleIntegratedApp:
         # 🎯 狀態監聽器相關變數
         self.monitoring_stats = {
             'last_quote_count': 0,
+            'last_tick_count': 0,
+            'last_best5_count': 0,
             'last_quote_time': None,
             'quote_status': '未知',
             'strategy_status': '未啟動',
@@ -80,9 +122,43 @@ class SimpleIntegratedApp:
             'strategy_activity_count': 0
         }
 
+        # 🎯 多組策略系統初始化
+        self.multi_group_enabled = False
+        self.multi_group_db_manager = None
+        self.multi_group_position_manager = None
+        self.multi_group_risk_engine = None
+        self.multi_group_config_panel = None
+        self.multi_group_logger = None
+
+        # 🎯 多組策略狀態管理
+        self.multi_group_prepared = False  # 策略是否已準備
+        self.multi_group_auto_start = False  # 是否自動啟動
+        self.multi_group_running = False  # 策略是否運行中
+        self._auto_start_triggered = False  # 防止重複觸發自動啟動
+
+        if MULTI_GROUP_AVAILABLE:
+            self.init_multi_group_system()
+
+        # 🚀 實際下單系統初始化
+        self.real_order_enabled = False
+        self.real_time_quote_manager = None
+        if REAL_ORDER_MODULES_AVAILABLE:
+            self.init_real_order_system()
+
+        # 🚀 Stage2 虛實單整合系統初始化
+        self.virtual_real_order_manager = None
+        self.unified_order_tracker = None
+        self.order_mode_ui_controller = None
+        self.virtual_real_system_enabled = False
+        if VIRTUAL_REAL_ORDER_AVAILABLE:
+            self.init_virtual_real_order_system()
+
         # Console輸出控制
         self.console_quote_enabled = True
         self.console_strategy_enabled = True  # 策略Console輸出控制
+
+        # 🔧 監控系統總開關 (開發階段可關閉)
+        self.monitoring_enabled = False  # 預設關閉，避免GIL風險
 
         # 五檔數據存儲
         self.best5_data = None
@@ -105,7 +181,62 @@ class SimpleIntegratedApp:
 
         # 註冊回報事件 (接收下單狀態)
         self.register_order_reply_events()
-    
+
+    def init_real_order_system(self):
+        """初始化實際下單系統"""
+        try:
+            if not REAL_ORDER_MODULES_AVAILABLE:
+                print("[REAL_ORDER] ⚠️ 實際下單模組不可用，跳過初始化")
+                return
+
+            # 初始化即時報價管理器
+            self.real_time_quote_manager = RealTimeQuoteManager(console_enabled=True)
+
+            # 設定實際下單系統狀態
+            self.real_order_enabled = True
+
+            print("[REAL_ORDER] ✅ 實際下單系統初始化完成")
+            print("[REAL_ORDER] 📊 五檔ASK價格提取系統已就緒")
+
+        except Exception as e:
+            print(f"[REAL_ORDER] ❌ 實際下單系統初始化失敗: {e}")
+            self.real_order_enabled = False
+            self.real_time_quote_manager = None
+
+    def init_virtual_real_order_system(self):
+        """初始化Stage2虛實單整合系統"""
+        try:
+            if not VIRTUAL_REAL_ORDER_AVAILABLE:
+                print("[VIRTUAL_REAL] ⚠️ 虛實單整合系統模組不可用，跳過初始化")
+                return
+
+            # 1. 初始化虛實單切換管理器
+            self.virtual_real_order_manager = VirtualRealOrderManager(
+                quote_manager=self.real_time_quote_manager,
+                strategy_config=getattr(self, 'strategy_config', None),
+                console_enabled=True,
+                default_account=self.config.get('FUTURES_ACCOUNT', 'F0200006363839')
+            )
+
+            # 2. 初始化統一回報追蹤器
+            self.unified_order_tracker = UnifiedOrderTracker(
+                strategy_manager=self,
+                console_enabled=True
+            )
+
+            # 3. 設定系統狀態
+            self.virtual_real_system_enabled = True
+
+            print("[VIRTUAL_REAL] ✅ Stage2虛實單整合系統初始化完成")
+            print("[VIRTUAL_REAL] 🔄 預設模式: 虛擬模式 (安全)")
+            print("[VIRTUAL_REAL] 📊 統一回報追蹤系統已就緒")
+
+        except Exception as e:
+            print(f"[VIRTUAL_REAL] ❌ 虛實單整合系統初始化失敗: {e}")
+            self.virtual_real_system_enabled = False
+            self.virtual_real_order_manager = None
+            self.unified_order_tracker = None
+
     def create_widgets(self):
         """建立使用者介面"""
 
@@ -409,6 +540,14 @@ class SimpleIntegratedApp:
                             else:
                                 self.parent.add_log(f"📋 回報: {order_type} - {type_desc}")
 
+                            # 🚀 Stage2 統一回報追蹤整合
+                            if hasattr(self.parent, 'unified_order_tracker') and self.parent.unified_order_tracker:
+                                try:
+                                    # 將完整的回報數據傳遞給統一追蹤器
+                                    self.parent.unified_order_tracker.process_real_order_reply(bstrData)
+                                except Exception as tracker_error:
+                                    print(f"❌ [REPLY] 統一追蹤器處理失敗: {tracker_error}")
+
                     except Exception as e:
                         print(f"❌ [REPLY] OnNewData處理錯誤: {e}")
                         self.parent.add_log(f"❌ 回報處理錯誤: {e}")
@@ -439,7 +578,8 @@ class SimpleIntegratedApp:
             password = self.entry_password.get().strip()
             
             if not user_id or not password:
-                messagebox.showerror("錯誤", "請輸入身分證字號和密碼")
+                print("❌ [LOGIN] 請輸入身分證字號和密碼")
+                self.add_log("❌ 請輸入身分證字號和密碼")
                 return
             
             self.add_log("🔐 開始登入...")
@@ -459,35 +599,51 @@ class SimpleIntegratedApp:
                 # 登入成功
                 self.logged_in = True
                 Global.SetID(user_id)
-                
+
+                # 🔧 確保Global_IID已設定 (修復實單模式切換問題)
+                if hasattr(Global, 'Global_IID'):
+                    print(f"✅ [LOGIN] Global_IID已設定: {Global.Global_IID}")
+                else:
+                    print(f"⚠️ [LOGIN] Global_IID未設定，手動設定...")
+                    Global.Global_IID = user_id
+                    print(f"✅ [LOGIN] Global_IID已手動設定: {Global.Global_IID}")
+
                 self.label_status.config(text="狀態: 已登入", foreground="green")
                 self.btn_login.config(state="disabled")
                 self.btn_init_order.config(state="normal")
                 self.btn_connect_quote.config(state="normal")
-                
+
                 self.add_log("✅ 登入成功！")
                 
             elif nCode == 2017:
                 # 這個警告現在應該不會出現了
                 self.add_log("⚠️ 收到2017警告，但OnReplyMessage已註冊，繼續執行...")
-                
+
                 self.logged_in = True
                 Global.SetID(user_id)
-                
+
+                # 🔧 確保Global_IID已設定 (修復實單模式切換問題)
+                if hasattr(Global, 'Global_IID'):
+                    print(f"✅ [LOGIN] Global_IID已設定: {Global.Global_IID}")
+                else:
+                    print(f"⚠️ [LOGIN] Global_IID未設定，手動設定...")
+                    Global.Global_IID = user_id
+                    print(f"✅ [LOGIN] Global_IID已手動設定: {Global.Global_IID}")
+
                 self.label_status.config(text="狀態: 已登入", foreground="green")
                 self.btn_login.config(state="disabled")
                 self.btn_init_order.config(state="normal")
                 self.btn_connect_quote.config(state="normal")
-                
+
                 self.add_log("✅ 登入成功 (已處理警告)！")
                 
             else:
+                print(f"❌ [LOGIN] 登入失敗: {msg}")
                 self.add_log(f"❌ 登入失敗: {msg}")
-                messagebox.showerror("登入失敗", f"登入失敗: {msg}")
-                
+
         except Exception as e:
+            print(f"❌ [LOGIN] 登入錯誤: {e}")
             self.add_log(f"❌ 登入錯誤: {e}")
-            messagebox.showerror("錯誤", f"登入錯誤: {e}")
     
     def init_order(self):
         """初始化下單模組"""
@@ -730,6 +886,9 @@ class SimpleIntegratedApp:
                         if hasattr(self.parent, 'price_count'):
                             self.parent.price_count += 1
 
+                        # 🔧 移除時間操作，避免GIL風險
+                        # self.parent.last_quote_time = time.time()  # 已移除
+
                     except Exception as e:
                         # Console錯誤輸出
                         print(f"❌ [ERROR] 報價處理錯誤: {e}")
@@ -766,6 +925,13 @@ class SimpleIntegratedApp:
                                 print(f"   賣5: {ask5:.0f}({nBestAskQty5})  賣4: {ask4:.0f}({nBestAskQty4})  賣3: {ask3:.0f}({nBestAskQty3})  賣2: {ask2:.0f}({nBestAskQty2})  賣1: {ask1:.0f}({nBestAskQty1})")
                                 print(f"   買1: {bid1:.0f}({nBestBidQty1})  買2: {bid2:.0f}({nBestBidQty2})  買3: {bid3:.0f}({nBestBidQty3})  買4: {bid4:.0f}({nBestBidQty4})  買5: {bid5:.0f}({nBestBidQty5})")
 
+                            # ✅ 更新五檔報價計數器（Monitor檢測用）
+                            if hasattr(self.parent, 'best5_count'):
+                                self.parent.best5_count += 1
+
+                            # 🔧 移除時間操作，避免GIL風險
+                            # self.parent.last_quote_time = current_time  # 已移除
+
                             # 🎯 為策略保存五檔數據
                             self.parent.best5_data = {
                                 'bid1': nBestBid1 / 100.0 if nBestBid1 > 0 else 0,
@@ -778,6 +944,36 @@ class SimpleIntegratedApp:
                                 'ask_qtys': [nBestAskQty1, nBestAskQty2, nBestAskQty3, nBestAskQty4, nBestAskQty5],
                                 'timestamp': current_time
                             }
+
+                            # 🚀 實際下單系統：更新即時報價管理器
+                            if hasattr(self.parent, 'real_time_quote_manager') and self.parent.real_time_quote_manager:
+                                try:
+                                    # 🎯 Stage2 商品監控整合：自動識別當前監控商品
+                                    product_code = self.parent.get_current_monitoring_product()
+
+                                    # 更新五檔數據到實際下單系統
+                                    self.parent.real_time_quote_manager.update_best5_data(
+                                        market_no=sMarketNo,
+                                        stock_idx=nStockidx,
+                                        ask1=nBestAsk1/100.0, ask1_qty=nBestAskQty1,
+                                        ask2=nBestAsk2/100.0, ask2_qty=nBestAskQty2,
+                                        ask3=nBestAsk3/100.0, ask3_qty=nBestAskQty3,
+                                        ask4=nBestAsk4/100.0, ask4_qty=nBestAskQty4,
+                                        ask5=nBestAsk5/100.0, ask5_qty=nBestAskQty5,
+                                        bid1=nBestBid1/100.0, bid1_qty=nBestBidQty1,
+                                        bid2=nBestBid2/100.0, bid2_qty=nBestBidQty2,
+                                        bid3=nBestBid3/100.0, bid3_qty=nBestBidQty3,
+                                        bid4=nBestBid4/100.0, bid4_qty=nBestBidQty4,
+                                        bid5=nBestBid5/100.0, bid5_qty=nBestBidQty5,
+                                        product_code=product_code
+                                    )
+
+                                    # 🔄 移除UI更新，避免GIL問題
+                                    # UI更新會在背景線程中引起GIL錯誤，已移除
+
+                                except Exception as e:
+                                    # 靜默處理，不影響原有功能
+                                    pass
 
                     except Exception as e:
                         print(f"❌ [BEST5] 五檔處理錯誤: {e}")
@@ -836,26 +1032,20 @@ class SimpleIntegratedApp:
             print(f"📋 [ORDER] 新平倉: {new_close}")
             print(f"📋 [ORDER] 盤別: {reserved}")
 
+            # Console輸出下單資訊
+            print("🧪 [ORDER] 準備執行測試下單")
+            print(f"📊 [ORDER] 帳號: {account}")
+            print(f"📊 [ORDER] 商品: {product}")
+            print(f"📊 [ORDER] 買賣: {buysell}")
+            print(f"📊 [ORDER] 價格: {price}")
+            print(f"📊 [ORDER] 數量: {quantity}口")
+            print(f"📊 [ORDER] 委託類型: {trade_type}")
+            print(f"📊 [ORDER] 當沖: {day_trade}")
+            print(f"📊 [ORDER] 新平倉: {new_close}")
+            print(f"⚡ [ORDER] 執行真實下單...")
+
             # UI日誌只顯示簡要信息
-            self.add_log(f"🧪 準備下單: {buysell} {product} {price}@{quantity}口")
-
-            # 確認下單
-            result = messagebox.askyesno("確認下單",
-                f"確定要下單嗎？\n\n"
-                f"帳號: {account}\n"
-                f"商品: {product}\n"
-                f"買賣: {buysell}\n"
-                f"價格: {price}\n"
-                f"數量: {quantity}口\n"
-                f"委託類型: {trade_type}\n"
-                f"當沖: {day_trade}\n"
-                f"新平倉: {new_close}\n"
-                f"盤別: {reserved}\n\n"
-                f"⚠️ 這是真實下單，會產生實際交易！")
-
-            if not result:
-                self.add_log("❌ 使用者取消下單")
-                return
+            self.add_log(f"🧪 執行下單: {buysell} {product} {price}@{quantity}口")
 
             # 執行下單 (使用群益官方方式)
             order_params = {
@@ -946,11 +1136,24 @@ class SimpleIntegratedApp:
 
     def create_strategy_page(self, strategy_frame):
         """建立策略監控頁面"""
-        # 策略監控面板
-        self.create_strategy_panel(strategy_frame)
+        # 創建策略頁面的Notebook
+        strategy_notebook = ttk.Notebook(strategy_frame)
+        strategy_notebook.pack(fill="both", expand=True, padx=5, pady=5)
 
+        # 原有策略監控頁面
+        original_strategy_frame = ttk.Frame(strategy_notebook)
+        strategy_notebook.add(original_strategy_frame, text="📊 原有策略監控")
+
+        # 策略監控面板
+        self.create_strategy_panel(original_strategy_frame)
         # 策略日誌區域
-        self.create_strategy_log_area(strategy_frame)
+        self.create_strategy_log_area(original_strategy_frame)
+
+        # 多組策略配置頁面
+        if self.multi_group_enabled:
+            multi_group_frame = ttk.Frame(strategy_notebook)
+            strategy_notebook.add(multi_group_frame, text="🎯 多組策略配置")
+            self.create_multi_group_strategy_page(multi_group_frame)
 
     def create_strategy_panel(self, parent_frame):
         """創建策略監控面板 - 簡化版，避免頻繁UI更新"""
@@ -975,6 +1178,16 @@ class SimpleIntegratedApp:
             ttk.Label(control_row, text="狀態:").pack(side="left", padx=(20, 5))
             self.strategy_status_var = tk.StringVar(value="策略未啟動")
             ttk.Label(control_row, textvariable=self.strategy_status_var, foreground="blue").pack(side="left", padx=5)
+
+            # 收盤平倉控制
+            self.single_strategy_eod_close_var = tk.BooleanVar(value=False)  # 預設關閉
+            eod_check = tk.Checkbutton(
+                control_row,
+                text="🕐 收盤平倉 (13:30)",
+                variable=self.single_strategy_eod_close_var,
+                command=self.toggle_single_strategy_eod_close
+            )
+            eod_check.pack(side="left", padx=(20, 5))
 
             # 第二行：區間設定
             range_row = ttk.Frame(strategy_frame)
@@ -1024,10 +1237,216 @@ class SimpleIntegratedApp:
 
             ttk.Button(stats_row, text="📊 查看策略狀態", command=self.show_strategy_status).pack(side="left", padx=(20, 5))
 
+            # 🚀 Stage2 虛實單切換控制整合
+            if hasattr(self, 'virtual_real_system_enabled') and self.virtual_real_system_enabled:
+                try:
+                    # 初始化UI控制器 (如果還沒有的話)
+                    if not hasattr(self, 'order_mode_ui_controller') or not self.order_mode_ui_controller:
+                        self.order_mode_ui_controller = OrderModeUIController(
+                            parent_frame=strategy_frame,
+                            order_manager=self.virtual_real_order_manager
+                        )
+
+                        # 添加模式變更回調
+                        self.order_mode_ui_controller.add_mode_change_callback(self.on_order_mode_changed)
+
+                        print("[UI_CONTROLLER] ✅ 虛實單切換UI控制器已整合到策略面板")
+
+                except Exception as ui_error:
+                    print(f"[UI_CONTROLLER] ❌ UI控制器整合失敗: {ui_error}")
+
             self.add_log("✅ 策略監控面板創建完成（安全模式）")
 
         except Exception as e:
             self.add_log(f"❌ 策略面板創建失敗: {e}")
+
+    def on_order_mode_changed(self, is_real_mode: bool):
+        """虛實單模式變更回調"""
+        try:
+            mode_desc = "實單" if is_real_mode else "虛擬"
+            print(f"[ORDER_MODE] 🔄 策略系統收到模式變更通知: {mode_desc}模式")
+
+            # 更新策略日誌
+            self.add_strategy_log(f"🔄 下單模式切換: {mode_desc}模式")
+
+            # 如果有報價管理器，刷新商品資訊
+            if hasattr(self, 'order_mode_ui_controller') and self.order_mode_ui_controller:
+                self.order_mode_ui_controller.refresh_product_info()
+
+        except Exception as e:
+            print(f"[ORDER_MODE] ❌ 模式變更回調失敗: {e}")
+
+    def get_current_monitoring_product(self) -> str:
+        """
+        取得當前監控商品代碼
+
+        Returns:
+            str: 商品代碼 (MTX00/TM0000)
+        """
+        try:
+            # 從商品選擇下拉選單取得
+            if hasattr(self, 'product_var') and self.product_var:
+                selected_product = self.product_var.get()
+                if selected_product in ['MTX00', 'TM0000']:
+                    return selected_product
+
+            # 從配置取得
+            if hasattr(self, 'config') and self.config:
+                config_product = self.config.get('DEFAULT_PRODUCT', 'MTX00')
+                if config_product in ['MTX00', 'TM0000']:
+                    return config_product
+
+            # 預設返回MTX00
+            return "MTX00"
+
+        except Exception as e:
+            print(f"[PRODUCT] ❌ 取得當前監控商品失敗: {e}")
+            return "MTX00"
+
+    def create_multi_group_strategy_page(self, parent_frame):
+        """創建多組策略配置頁面"""
+        try:
+            # 多組策略配置面板
+            def on_config_change(config):
+                """配置變更回調"""
+                if self.multi_group_position_manager:
+                    self.multi_group_position_manager.strategy_config = config
+                    if self.multi_group_logger:
+                        self.multi_group_logger.config_change(
+                            f"配置更新: {config.total_groups}組×{config.lots_per_group}口"
+                        )
+
+            self.multi_group_config_panel = MultiGroupConfigPanel(
+                parent_frame,
+                on_config_change=on_config_change
+            )
+
+            # 多組策略控制區域
+            control_frame = ttk.LabelFrame(parent_frame, text="🎮 多組策略控制")
+            control_frame.pack(fill="x", padx=5, pady=5)
+
+            # 控制按鈕行
+            button_row = tk.Frame(control_frame)
+            button_row.pack(fill="x", padx=5, pady=5)
+
+            # 多組策略準備按鈕
+            self.btn_prepare_multi_group = ttk.Button(
+                button_row,
+                text="📋 準備多組策略",
+                command=self.prepare_multi_group_strategy
+            )
+            self.btn_prepare_multi_group.pack(side="left", padx=5)
+
+            # 多組策略手動啟動按鈕
+            self.btn_start_multi_group = ttk.Button(
+                button_row,
+                text="🚀 手動啟動",
+                command=self.manual_start_multi_group_strategy,
+                state="disabled"
+            )
+            self.btn_start_multi_group.pack(side="left", padx=5)
+
+            # 多組策略停止按鈕
+            self.btn_stop_multi_group = ttk.Button(
+                button_row,
+                text="🛑 停止策略",
+                command=self.stop_multi_group_strategy,
+                state="disabled"
+            )
+            self.btn_stop_multi_group.pack(side="left", padx=5)
+
+            # 自動啟動選項
+            self.auto_start_var = tk.BooleanVar(value=True)
+            auto_start_check = tk.Checkbutton(
+                button_row,
+                text="🤖 區間完成後自動啟動",
+                variable=self.auto_start_var,
+                command=self.toggle_auto_start
+            )
+            auto_start_check.pack(side="left", padx=10)
+
+            # 執行頻率控制
+            freq_frame = tk.Frame(button_row)
+            freq_frame.pack(side="left", padx=20)
+
+            tk.Label(freq_frame, text="執行頻率:", font=("Arial", 9)).pack(side="left", padx=5)
+            self.multi_group_frequency_var = tk.StringVar(value="一天一次")
+            freq_combo = ttk.Combobox(
+                freq_frame,
+                textvariable=self.multi_group_frequency_var,
+                values=["一天一次", "可重複執行", "測試模式"],
+                state="readonly",
+                width=10,
+                font=("Arial", 9)
+            )
+            freq_combo.pack(side="left", padx=5)
+            freq_combo.bind("<<ComboboxSelected>>", self.on_multi_group_frequency_changed)
+
+            # 收盤平倉控制
+            eod_frame = tk.Frame(button_row)
+            eod_frame.pack(side="left", padx=20)
+
+            self.multi_group_eod_close_var = tk.BooleanVar(value=False)  # 預設關閉
+            eod_check = tk.Checkbutton(
+                eod_frame,
+                text="🕐 收盤平倉 (13:30)",
+                variable=self.multi_group_eod_close_var,
+                command=self.toggle_multi_group_eod_close
+            )
+            eod_check.pack(side="left", padx=5)
+
+            # 狀態顯示行
+            status_row = tk.Frame(control_frame)
+            status_row.pack(fill="x", padx=5, pady=5)
+
+            tk.Label(status_row, text="策略狀態:", font=("Arial", 9, "bold")).pack(side="left")
+
+            self.multi_group_status_label = tk.Label(
+                status_row,
+                text="⏸️ 未準備",
+                fg="gray"
+            )
+            self.multi_group_status_label.pack(side="left", padx=10)
+
+            # 詳細狀態顯示
+            self.multi_group_detail_label = tk.Label(
+                status_row,
+                text="請先配置策略參數",
+                fg="blue",
+                font=("Arial", 8)
+            )
+            self.multi_group_detail_label.pack(side="left", padx=10)
+
+            # Console控制區域
+            console_frame = ttk.LabelFrame(parent_frame, text="🎛️ Console輸出控制")
+            console_frame.pack(fill="x", padx=5, pady=5)
+
+            console_row = tk.Frame(console_frame)
+            console_row.pack(fill="x", padx=5, pady=5)
+
+            # Console控制按鈕
+            categories = [
+                ("策略", LogCategory.STRATEGY),
+                ("部位", LogCategory.POSITION),
+                ("風險", LogCategory.RISK),
+                ("配置", LogCategory.CONFIG),
+                ("系統", LogCategory.SYSTEM)
+            ]
+
+            for name, category in categories:
+                btn = ttk.Button(
+                    console_row,
+                    text=f"🔇 關閉{name}",
+                    command=lambda cat=category, n=name: self.toggle_multi_group_console(cat, n)
+                )
+                btn.pack(side="left", padx=2)
+
+            print("✅ 多組策略配置頁面創建完成")
+
+        except Exception as e:
+            print(f"❌ 多組策略頁面創建失敗: {e}")
+            if self.multi_group_logger:
+                self.multi_group_logger.system_error(f"頁面創建失敗: {e}")
 
     def create_strategy_log_area(self, parent_frame):
         """創建策略日誌區域"""
@@ -1083,18 +1502,20 @@ class SimpleIntegratedApp:
                 elif self.price_count % 50 == 0:  # 每50筆報價顯示一次
                     print(f"🔍 策略收到: price={price}, time={time_str}, count={self.price_count}")
 
-            # 更新策略活動統計（用於監聽器）
-            self.monitoring_stats['strategy_activity_count'] += 1
-            self.monitoring_stats['last_strategy_activity'] = time.time()
+            # 🔧 簡化統計更新，避免複雜時間操作 (僅在監控啟用時)
+            if getattr(self, 'monitoring_enabled', True):
+                self.monitoring_stats['strategy_activity_count'] += 1
+                # self.monitoring_stats['last_strategy_activity'] = time.time()  # 已移除
 
             # 只更新內部變數，不更新UI
             self.latest_price = price
             self.latest_time = time_str
             self.price_count += 1
 
-            # 每100個報價更新一次統計（減少UI更新頻率）
-            if self.price_count % 100 == 0:
-                self.price_count_var.set(str(self.price_count))
+            # 移除UI更新，避免GIL問題
+            # UI更新會在背景線程中引起GIL錯誤，改用Console輸出
+            if self.price_count % 1000 == 0:  # 每1000筆報價輸出一次統計
+                print(f"📊 [STRATEGY] 報價統計: {self.price_count}筆")
 
             # 解析時間
             hour, minute, second = map(int, time_str.split(':'))
@@ -1117,6 +1538,10 @@ class SimpleIntegratedApp:
             # 出場條件檢查（有部位時）
             if self.current_position:
                 self.check_exit_conditions_safe(price, time_str)
+
+            # 🎯 多組策略風險管理檢查
+            if self.multi_group_enabled and self.multi_group_risk_engine:
+                self.check_multi_group_exit_conditions(price, time_str)
 
         except Exception as e:
             # 靜默處理錯誤，避免影響報價處理
@@ -1146,13 +1571,18 @@ class SimpleIntegratedApp:
                     self.range_calculated = True
                     self.in_range_period = False
 
-                    # 只在計算完成時更新UI
+                    # 移除UI更新，改用Console輸出
                     range_text = f"高:{self.range_high:.0f} 低:{self.range_low:.0f} 大小:{self.range_high-self.range_low:.0f}"
-                    self.range_result_var.set(range_text)
+                    print(f"✅ [STRATEGY] 區間計算完成: {range_text}")
+                    # UI更新會在背景線程中引起GIL錯誤，已移除
 
                     # 重要事件：記錄到策略日誌
                     self.add_strategy_log(f"✅ 區間計算完成: {range_text}")
                     self.add_strategy_log(f"📊 收集數據點數: {len(self.range_prices)} 筆，開始監測突破")
+
+                    # 🎯 檢查是否需要自動啟動多組策略（防重複觸發）
+                    if not self._auto_start_triggered:
+                        self.check_auto_start_multi_group_strategy()
 
         except Exception as e:
             pass
@@ -1226,8 +1656,8 @@ class SimpleIntegratedApp:
                 self.add_strategy_log(f"🔥 {minute:02d}分K線收盤突破上緣！收盤:{close_price:.0f} > 上緣:{self.range_high:.0f}")
                 self.add_strategy_log(f"⏳ 等待下一個報價進場做多...")
 
-                # 更新UI狀態
-                self.breakout_status_var.set(f"🔥 LONG突破信號")
+                # 移除UI更新，避免GIL問題
+                print(f"🔥 [STRATEGY] LONG突破信號已觸發")
 
             elif close_price < self.range_low:
                 # 記錄第一次突破
@@ -1239,8 +1669,8 @@ class SimpleIntegratedApp:
                 self.add_strategy_log(f"🔥 {minute:02d}分K線收盤突破下緣！收盤:{close_price:.0f} < 下緣:{self.range_low:.0f}")
                 self.add_strategy_log(f"⏳ 等待下一個報價進場做空...")
 
-                # 更新UI狀態
-                self.breakout_status_var.set(f"🔥 SHORT突破信號")
+                # 移除UI更新，避免GIL問題
+                print(f"🔥 [STRATEGY] SHORT突破信號已觸發")
 
         except Exception as e:
             pass
@@ -1268,24 +1698,70 @@ class SimpleIntegratedApp:
                 'direction': direction,
                 'entry_price': price,
                 'entry_time': time_str,
-                'quantity': 1
+                'quantity': 1,
+                'peak_price': price,  # 峰值價格追蹤
+                'trailing_activated': False,  # 移動停利是否啟動
+                'trailing_activation_points': 15,  # 15點啟動移動停利
+                'trailing_pullback_percent': 0.20  # 20%回撤
             }
 
             # 標記已檢測到第一次突破
             self.first_breakout_detected = True
 
-            # 只在建倉時更新UI
-            self.breakout_status_var.set(f"✅ {direction}突破")
-            self.position_status_var.set(f"{direction} @{price:.0f}")
+            # 移除UI更新，避免GIL問題
+            print(f"✅ [STRATEGY] {direction}突破進場 @{price:.0f}")
+            # UI更新會在背景線程中引起GIL錯誤，已移除
 
-            # 這裡可以整合實際下單邏輯
-            # self.place_strategy_order(direction, price)
+            # 🚀 Stage2 虛實單整合下單邏輯
+            if hasattr(self, 'virtual_real_order_manager') and self.virtual_real_order_manager:
+                try:
+                    # 執行策略自動下單
+                    order_result = self.virtual_real_order_manager.execute_strategy_order(
+                        direction=direction,
+                        signal_source="strategy_breakout"
+                    )
+
+                    # 根據下單結果更新狀態和日誌
+                    if order_result.success:
+                        mode_desc = "實單" if order_result.mode == "real" else "虛擬"
+                        self.add_strategy_log(f"🚀 {direction} {mode_desc}下單成功 - ID:{order_result.order_id}")
+
+                        # 註冊到統一回報追蹤器
+                        if hasattr(self, 'unified_order_tracker') and self.unified_order_tracker:
+                            current_product = self.virtual_real_order_manager.get_current_product()
+                            if current_product:  # 確保商品不為None
+                                ask1_price = self.virtual_real_order_manager.get_ask1_price(current_product)
+                                quantity = self.virtual_real_order_manager.get_strategy_quantity()
+
+                                # 處理API序號
+                                api_seq_no = None
+                                if order_result.mode == "real" and order_result.api_result:
+                                    api_seq_no = str(order_result.api_result)
+
+                                self.unified_order_tracker.register_order(
+                                    order_id=order_result.order_id,
+                                    product=current_product,
+                                    direction=direction,
+                                    quantity=quantity,
+                                    price=ask1_price or price,
+                                    is_virtual=(order_result.mode == "virtual"),
+                                    signal_source="strategy_breakout",
+                                    api_seq_no=api_seq_no
+                                )
+                    else:
+                        self.add_strategy_log(f"❌ {direction} 下單失敗: {order_result.error}")
+
+                except Exception as order_error:
+                    self.add_strategy_log(f"❌ 下單系統錯誤: {order_error}")
+            else:
+                # 原有邏輯：僅記錄，不實際下單
+                self.add_strategy_log(f"💡 {direction} 策略信號 (未啟用下單系統)")
 
         except Exception as e:
             self.add_strategy_log(f"❌ 建倉失敗: {e}")
 
     def check_exit_conditions_safe(self, price, time_str):
-        """安全的出場檢查 - 只在出場時更新UI"""
+        """安全的出場檢查 - 包含移動停利和收盤平倉"""
         try:
             if not self.current_position:
                 return
@@ -1293,44 +1769,126 @@ class SimpleIntegratedApp:
             direction = self.current_position['direction']
             entry_price = self.current_position['entry_price']
 
-            # 簡單的停損邏輯
-            stop_loss_points = 15
-            should_exit = False
-            exit_reason = ""
+            # 🕐 檢查收盤平倉 (13:30) - 受控制開關影響
+            if hasattr(self, 'single_strategy_eod_close_var') and self.single_strategy_eod_close_var.get():
+                hour, minute, second = map(int, time_str.split(':'))
+                if hour >= 13 and minute >= 30:
+                    self.exit_position_safe(price, time_str, "收盤平倉")
+                    return
 
+            # 🛡️ 檢查初始停損 (區間邊界)
+            if direction == "LONG" and price <= self.range_low:
+                self.exit_position_safe(price, time_str, f"初始停損 {self.range_low:.0f}")
+                return
+            elif direction == "SHORT" and price >= self.range_high:
+                self.exit_position_safe(price, time_str, f"初始停損 {self.range_high:.0f}")
+                return
+
+            # 🎯 移動停利邏輯
+            self.check_trailing_stop_logic(price, time_str)
+
+        except Exception as e:
+            pass
+
+    def check_trailing_stop_logic(self, price, time_str):
+        """移動停利邏輯檢查"""
+        try:
+            if not self.current_position:
+                return
+
+            direction = self.current_position['direction']
+            entry_price = self.current_position['entry_price']
+            peak_price = self.current_position['peak_price']
+            trailing_activated = self.current_position['trailing_activated']
+            activation_points = self.current_position['trailing_activation_points']
+            pullback_percent = self.current_position['trailing_pullback_percent']
+
+            # 更新峰值價格
             if direction == "LONG":
-                if price <= entry_price - stop_loss_points:
-                    should_exit = True
-                    exit_reason = f"停損 {entry_price - stop_loss_points:.0f}"
+                if price > peak_price:
+                    self.current_position['peak_price'] = price
+                    peak_price = price
             else:  # SHORT
-                if price >= entry_price + stop_loss_points:
-                    should_exit = True
-                    exit_reason = f"停損 {entry_price + stop_loss_points:.0f}"
+                if price < peak_price:
+                    self.current_position['peak_price'] = price
+                    peak_price = price
 
-            if should_exit:
-                self.exit_position_safe(price, time_str, exit_reason)
+            # 檢查移動停利啟動條件
+            if not trailing_activated:
+                activation_triggered = False
+
+                if direction == "LONG":
+                    activation_triggered = price >= entry_price + activation_points
+                else:  # SHORT
+                    activation_triggered = price <= entry_price - activation_points
+
+                if activation_triggered:
+                    self.current_position['trailing_activated'] = True
+                    self.add_strategy_log(f"🔔 移動停利已啟動！峰值價格: {peak_price:.0f}")
+                    return
+
+            # 如果移動停利已啟動，檢查回撤出場條件
+            if trailing_activated:
+                if direction == "LONG":
+                    total_gain = peak_price - entry_price
+                    pullback_amount = total_gain * pullback_percent
+                    trailing_stop_price = peak_price - pullback_amount
+
+                    if price <= trailing_stop_price:
+                        pnl = trailing_stop_price - entry_price
+                        self.exit_position_safe(trailing_stop_price, time_str,
+                                              f"移動停利 (峰值:{peak_price:.0f} 回撤:{pullback_amount:.1f}點)")
+                        return
+
+                else:  # SHORT
+                    total_gain = entry_price - peak_price
+                    pullback_amount = total_gain * pullback_percent
+                    trailing_stop_price = peak_price + pullback_amount
+
+                    if price >= trailing_stop_price:
+                        pnl = entry_price - trailing_stop_price
+                        self.exit_position_safe(trailing_stop_price, time_str,
+                                              f"移動停利 (峰值:{peak_price:.0f} 回撤:{pullback_amount:.1f}點)")
+                        return
 
         except Exception as e:
             pass
 
     def exit_position_safe(self, price, time_str, reason):
-        """安全的出場處理 - 只在出場時更新UI"""
+        """安全的出場處理 - 包含完整損益計算"""
         try:
             if not self.current_position:
                 return
 
             direction = self.current_position['direction']
             entry_price = self.current_position['entry_price']
+            entry_time = self.current_position['entry_time']
+
+            # 計算損益
             pnl = (price - entry_price) if direction == "LONG" else (entry_price - price)
+            pnl_money = pnl * 50  # 每點50元
+
+            # 計算持倉時間
+            try:
+                entry_h, entry_m, entry_s = map(int, entry_time.split(':'))
+                exit_h, exit_m, exit_s = map(int, time_str.split(':'))
+                entry_seconds = entry_h * 3600 + entry_m * 60 + entry_s
+                exit_seconds = exit_h * 3600 + exit_m * 60 + exit_s
+                hold_seconds = exit_seconds - entry_seconds
+                hold_minutes = hold_seconds // 60
+            except:
+                hold_minutes = 0
 
             # 重要事件：記錄到策略日誌
-            self.add_strategy_log(f"🔚 {direction} 出場 @{price:.0f} 原因:{reason} 損益:{pnl:.0f}點")
+            self.add_strategy_log(f"🔚 {direction} 出場 @{price:.0f} 原因:{reason}")
+            self.add_strategy_log(f"📊 損益:{pnl:+.0f}點 ({pnl_money:+.0f}元) 持倉:{hold_minutes}分鐘")
 
             # 清除部位
             self.current_position = None
 
-            # 只在出場時更新UI
-            self.position_status_var.set("無部位")
+            # 移除UI更新，避免GIL問題
+            print(f"📊 [STRATEGY] 部位狀態: 無部位")
+            # UI更新會在背景線程中引起GIL錯誤，已移除
 
         except Exception as e:
             self.add_strategy_log(f"❌ 出場處理錯誤: {e}")
@@ -1356,10 +1914,11 @@ class SimpleIntegratedApp:
             self.position_status_var.set("無部位")
             self.price_count_var.set("0")
 
-            # 初始化策略監控統計
-            self.monitoring_stats['strategy_activity_count'] = 0
-            self.monitoring_stats['last_strategy_activity'] = time.time()
-            self.monitoring_stats['strategy_status'] = '策略運行中'
+            # 初始化策略監控統計 (僅在監控啟用時)
+            if getattr(self, 'monitoring_enabled', True):
+                self.monitoring_stats['strategy_activity_count'] = 0
+                self.monitoring_stats['last_strategy_activity'] = time.time()
+                self.monitoring_stats['strategy_status'] = '策略運行中'
 
             # 重要事件：記錄到策略日誌
             self.add_strategy_log("🚀 策略監控已啟動（Console模式）")
@@ -1380,8 +1939,9 @@ class SimpleIntegratedApp:
             self.btn_stop_strategy.config(state="disabled")
             self.strategy_status_var.set("⏹️ 已停止")
 
-            # 更新策略監控統計
-            self.monitoring_stats['strategy_status'] = '已停止'
+            # 更新策略監控統計 (僅在監控啟用時)
+            if getattr(self, 'monitoring_enabled', True):
+                self.monitoring_stats['strategy_status'] = '已停止'
 
             # 重要事件：記錄到策略日誌
             self.add_strategy_log("🛑 策略監控已停止")
@@ -1451,7 +2011,10 @@ class SimpleIntegratedApp:
 - 當前部位: {self.current_position['direction'] + ' @' + str(self.current_position['entry_price']) if self.current_position else '無部位'}
             """
 
-            messagebox.showinfo("策略狀態", status_info)
+            # 改用Console輸出策略狀態
+            print("📊 [STRATEGY] 策略狀態報告:")
+            print(status_info)
+            self.add_log("📊 策略狀態已輸出到Console")
 
         except Exception as e:
             self.add_strategy_log(f"❌ 顯示狀態失敗: {e}")
@@ -1596,6 +2159,14 @@ class SimpleIntegratedApp:
                                                     command=self.toggle_console_strategy)
         self.btn_toggle_strategy_console.pack(side="left", padx=5)
 
+        # 🔧 監控系統總開關按鈕
+        self.btn_toggle_monitoring = ttk.Button(control_row, text="🔊 啟用監控",
+                                               command=self.toggle_monitoring)
+        self.btn_toggle_monitoring.pack(side="left", padx=5)
+
+        # 開發模式說明
+        ttk.Label(control_row, text="(開發模式)", foreground="orange").pack(side="left", padx=2)
+
         # 說明文字
         ttk.Label(control_row, text="📊 狀態監控和報價信息請查看VS Code Console輸出",
                  foreground="blue").pack(side="left", padx=20)
@@ -1606,24 +2177,42 @@ class SimpleIntegratedApp:
 
     def start_status_monitor(self):
         """啟動狀態監控 - 智能提醒版本（可調整間隔）"""
+        # 🔧 檢查監控開關
+        if not getattr(self, 'monitoring_enabled', True):
+            print("🔇 [MONITOR] 狀態監控已停用 (開發模式)")
+            print("💡 [MONITOR] 如需啟用監控，請點擊 '啟用監控' 按鈕")
+            return
+
         # 初始化狀態追蹤
         self.last_status = None
         self.status_unchanged_count = 0
 
-        # 🔧 監控參數配置
-        self.monitor_interval = 5000  # 監控間隔（毫秒）- 改為5秒
-        self.quote_timeout_threshold = 2  # 報價中斷判定閾值（檢查次數）- 10秒無報價才判定中斷
+        # 🔧 監控參數配置 (針對期貨市場優化)
+        self.monitor_interval = 8000  # 監控間隔（毫秒）- 改為8秒
+        self.quote_timeout_threshold = 4  # 報價中斷判定閾值（檢查次數）- 32秒無報價才判定中斷
 
         def monitor_loop():
             try:
-                # 檢查報價狀態
-                current_count = getattr(self, 'price_count', 0)
+                # 🔧 檢查監控開關 (動態檢查，可隨時切換)
+                if not getattr(self, 'monitoring_enabled', True):
+                    # 監控已停用，跳過本次檢查，但繼續排程下次檢查
+                    self.root.after(self.monitor_interval, monitor_loop)
+                    return
+
+                # 🔧 簡化的報價狀態檢查 - 避免複雜時間操作
+                current_tick_count = getattr(self, 'price_count', 0)
+                current_best5_count = getattr(self, 'best5_count', 0)
                 previous_status = self.monitoring_stats['quote_status']
 
-                if current_count > self.monitoring_stats['last_quote_count']:
+                # 檢查是否有新的報價數據（成交或五檔）
+                has_new_tick = current_tick_count > self.monitoring_stats.get('last_tick_count', 0)
+                has_new_best5 = current_best5_count > self.monitoring_stats.get('last_best5_count', 0)
+
+                if has_new_tick or has_new_best5:
                     # 有新報價
                     self.monitoring_stats['quote_status'] = "報價中"
-                    self.monitoring_stats['last_quote_count'] = current_count
+                    self.monitoring_stats['last_tick_count'] = current_tick_count
+                    self.monitoring_stats['last_best5_count'] = current_best5_count
                     new_status = "報價中"
                     self.status_unchanged_count = 0
                 else:
@@ -1713,6 +2302,439 @@ class SimpleIntegratedApp:
         except Exception as e:
             print(f"❌ [CONSOLE] 切換策略Console輸出錯誤: {e}")
 
+    def toggle_monitoring(self):
+        """切換監控系統總開關"""
+        try:
+            self.monitoring_enabled = not self.monitoring_enabled
+
+            if self.monitoring_enabled:
+                self.btn_toggle_monitoring.config(text="🔇 停用監控")
+                print("✅ [MONITOR] 狀態監控系統已啟用")
+                print("📊 [MONITOR] 將開始監控報價和策略狀態")
+                # 重新啟動監控
+                self.start_status_monitor()
+            else:
+                self.btn_toggle_monitoring.config(text="🔊 啟用監控")
+                print("🔇 [MONITOR] 狀態監控系統已停用")
+                print("💡 [MONITOR] 核心功能不受影響，僅停止狀態監控")
+                print("🎯 [MONITOR] 開發模式：避免GIL風險")
+
+        except Exception as e:
+            print(f"❌ [MONITOR] 切換監控系統錯誤: {e}")
+
+    def init_multi_group_system(self):
+        """初始化多組策略系統"""
+        try:
+            # 初始化Console日誌器
+            self.multi_group_logger = get_logger()
+            self.multi_group_logger.system_info("多組策略系統初始化開始")
+
+            # 初始化資料庫管理器
+            self.multi_group_db_manager = MultiGroupDatabaseManager("multi_group_strategy.db")
+
+            # 初始化風險管理引擎
+            self.multi_group_risk_engine = RiskManagementEngine(self.multi_group_db_manager)
+
+            # 設定預設配置
+            presets = create_preset_configs()
+            default_config = presets["平衡配置 (2口×2組)"]
+
+            # 初始化部位管理器
+            self.multi_group_position_manager = MultiGroupPositionManager(
+                self.multi_group_db_manager,
+                default_config
+            )
+
+            self.multi_group_enabled = True
+            self.multi_group_logger.system_info("多組策略系統初始化完成")
+            print("✅ 多組策略系統初始化成功")
+
+        except Exception as e:
+            self.multi_group_enabled = False
+            print(f"❌ 多組策略系統初始化失敗: {e}")
+            if hasattr(self, 'multi_group_logger') and self.multi_group_logger:
+                self.multi_group_logger.system_error(f"初始化失敗: {e}")
+
+    def toggle_auto_start(self):
+        """切換自動啟動選項"""
+        self.multi_group_auto_start = self.auto_start_var.get()
+        status = "開啟" if self.multi_group_auto_start else "關閉"
+        if self.multi_group_logger:
+            self.multi_group_logger.config_change(f"自動啟動已{status}")
+        print(f"🤖 [CONFIG] 區間完成後自動啟動: {status}")
+
+    def toggle_multi_group_eod_close(self):
+        """切換多組策略收盤平倉選項"""
+        try:
+            enable_eod_close = self.multi_group_eod_close_var.get()
+
+            # 更新風險管理引擎設定
+            if self.multi_group_risk_engine:
+                self.multi_group_risk_engine.set_eod_close_settings(enable_eod_close, 13, 30)
+
+            status = "啟用" if enable_eod_close else "停用"
+            if self.multi_group_logger:
+                self.multi_group_logger.config_change(f"收盤平倉已{status}")
+            print(f"🕐 [CONFIG] 多組策略收盤平倉 (13:30): {status}")
+
+            if enable_eod_close:
+                print("⚠️ [CONFIG] 啟用收盤平倉後，所有部位將在13:30強制平倉")
+            else:
+                print("💡 [CONFIG] 收盤平倉已停用，適合測試階段使用")
+
+        except Exception as e:
+            print(f"❌ [CONFIG] 收盤平倉設定失敗: {e}")
+
+    def toggle_single_strategy_eod_close(self):
+        """切換單一策略收盤平倉選項"""
+        try:
+            enable_eod_close = self.single_strategy_eod_close_var.get()
+
+            status = "啟用" if enable_eod_close else "停用"
+            print(f"🕐 [CONFIG] 單一策略收盤平倉 (13:30): {status}")
+
+            if enable_eod_close:
+                print("⚠️ [CONFIG] 啟用收盤平倉後，所有部位將在13:30強制平倉")
+            else:
+                print("💡 [CONFIG] 收盤平倉已停用，適合測試階段使用")
+
+        except Exception as e:
+            print(f"❌ [CONFIG] 單一策略收盤平倉設定失敗: {e}")
+
+    def prepare_multi_group_strategy(self):
+        """準備多組策略"""
+        try:
+            if not self.multi_group_enabled:
+                print("⚠️ [STRATEGY] 多組策略系統未啟用")
+                self.add_log("⚠️ 多組策略系統未啟用")
+                return
+
+            if not self.logged_in:
+                print("⚠️ [STRATEGY] 請先登入系統")
+                self.add_log("⚠️ 請先登入系統")
+                return
+
+            # 檢查配置是否有效
+            if not self.multi_group_config_panel:
+                print("❌ [STRATEGY] 配置面板未初始化")
+                self.add_log("❌ 配置面板未初始化")
+                return
+
+            current_config = self.multi_group_config_panel.get_current_config()
+            if not current_config:
+                print("⚠️ [STRATEGY] 請先選擇策略配置")
+                self.add_log("⚠️ 請先選擇策略配置")
+                return
+
+            # 驗證配置
+            from multi_group_config import validate_config
+            errors = validate_config(current_config)
+            if errors:
+                error_msg = "配置驗證失敗: " + ", ".join(errors)
+                print(f"❌ [STRATEGY] {error_msg}")
+                self.add_log(f"❌ {error_msg}")
+                return
+
+            # 設定策略為準備狀態
+            self.multi_group_prepared = True
+            self.multi_group_auto_start = self.auto_start_var.get()
+
+            # 更新UI狀態
+            self.btn_prepare_multi_group.config(state="disabled")
+            self.btn_start_multi_group.config(state="normal")
+            self.multi_group_status_label.config(text="📋 已準備", fg="blue")
+
+            if self.multi_group_auto_start:
+                self.multi_group_detail_label.config(
+                    text="等待區間計算完成後自動啟動",
+                    fg="orange"
+                )
+            else:
+                self.multi_group_detail_label.config(
+                    text="準備完成，可手動啟動",
+                    fg="green"
+                )
+
+            # 記錄日誌
+            if self.multi_group_logger:
+                self.multi_group_logger.strategy_info(
+                    f"策略已準備: {current_config.total_groups}組×{current_config.lots_per_group}口, "
+                    f"自動啟動: {'是' if self.multi_group_auto_start else '否'}"
+                )
+
+            # Console輸出替代對話框
+            print("✅ [STRATEGY] 多組策略已準備完成！")
+            print(f"📊 [STRATEGY] 配置: {current_config.total_groups}組×{current_config.lots_per_group}口")
+            print(f"📊 [STRATEGY] 總部位數: {current_config.get_total_positions()}")
+            print(f"📊 [STRATEGY] 自動啟動: {'是' if self.multi_group_auto_start else '否'}")
+            if self.multi_group_auto_start:
+                print("🤖 [STRATEGY] 系統將在區間計算完成後自動啟動策略")
+            else:
+                print("👆 [STRATEGY] 請在區間計算完成後手動啟動策略")
+
+            # UI日誌
+            self.add_log(f"✅ 多組策略已準備: {current_config.total_groups}組×{current_config.lots_per_group}口")
+
+        except Exception as e:
+            print(f"❌ [STRATEGY] 準備策略失敗: {e}")
+            self.add_log(f"❌ 準備策略失敗: {e}")
+            if self.multi_group_logger:
+                self.multi_group_logger.strategy_error(f"準備失敗: {e}")
+
+    def manual_start_multi_group_strategy(self):
+        """手動啟動多組策略"""
+        try:
+            if not self.multi_group_prepared:
+                print("⚠️ [STRATEGY] 請先準備策略")
+                self.add_log("⚠️ 請先準備策略")
+                return
+
+            self.start_multi_group_strategy()
+
+        except Exception as e:
+            print(f"❌ [STRATEGY] 手動啟動失敗: {e}")
+            self.add_log(f"❌ 手動啟動失敗: {e}")
+
+    def start_multi_group_strategy(self):
+        """啟動多組策略"""
+        try:
+            if not self.multi_group_enabled:
+                print("⚠️ [STRATEGY] 多組策略系統未啟用")
+                self.add_log("⚠️ 多組策略系統未啟用")
+                return
+
+            if not self.logged_in:
+                print("⚠️ [STRATEGY] 請先登入系統")
+                self.add_log("⚠️ 請先登入系統")
+                return
+
+            # 檢查是否有區間數據
+            if not self.range_calculated:
+                print("⚠️ [STRATEGY] 請先計算開盤區間")
+                self.add_log("⚠️ 請先計算開盤區間")
+                return
+
+            # 檢查是否已經在運行中（防重複啟動）
+            if self.multi_group_running:
+                print("⚠️ [STRATEGY] 多組策略已在運行中")
+                self.add_log("⚠️ 多組策略已在運行中")
+                return
+
+            # 創建進場信號
+            direction = "LONG"  # 這裡可以根據突破方向動態設定
+            signal_time = time.strftime("%H:%M:%S")
+
+            group_ids = self.multi_group_position_manager.create_entry_signal(
+                direction=direction,
+                signal_time=signal_time,
+                range_high=self.range_high,
+                range_low=self.range_low
+            )
+
+            if group_ids:
+                # 更新運行狀態
+                self.multi_group_running = True
+
+                # 更新UI狀態
+                self.btn_prepare_multi_group.config(state="disabled")
+                self.btn_start_multi_group.config(state="disabled")
+                self.btn_stop_multi_group.config(state="normal")
+                self.multi_group_status_label.config(text="🎯 運行中", fg="green")
+                self.multi_group_detail_label.config(
+                    text=f"已創建{len(group_ids)}個策略組，監控中...",
+                    fg="green"
+                )
+
+                if self.multi_group_logger:
+                    self.multi_group_logger.strategy_info(
+                        f"多組策略啟動: {len(group_ids)}組, 區間{self.range_low}-{self.range_high}"
+                    )
+
+                # Console輸出啟動結果
+                print(f"✅ [STRATEGY] 多組策略已啟動，創建了 {len(group_ids)} 個策略組")
+                self.add_log(f"✅ 多組策略已啟動: {len(group_ids)}組")
+
+                # 標記為自動啟動
+                if self.multi_group_auto_start:
+                    self._auto_started = True
+            else:
+                print("❌ [STRATEGY] 創建策略組失敗")
+                self.add_log("❌ 創建策略組失敗")
+
+        except Exception as e:
+            print(f"❌ [STRATEGY] 啟動多組策略失敗: {e}")
+            self.add_log(f"❌ 啟動多組策略失敗: {e}")
+            if self.multi_group_logger:
+                self.multi_group_logger.strategy_error(f"啟動失敗: {e}")
+
+    def stop_multi_group_strategy(self):
+        """停止多組策略"""
+        try:
+            if not self.multi_group_enabled:
+                return
+
+            # 重置每日狀態
+            if self.multi_group_position_manager:
+                self.multi_group_position_manager.reset_daily_state()
+
+            # 重置狀態變數
+            self.multi_group_running = False
+            self.multi_group_prepared = False
+            self._auto_start_triggered = False  # 重置觸發標記
+            if hasattr(self, '_auto_started'):
+                delattr(self, '_auto_started')
+
+            # 更新UI狀態
+            self.btn_prepare_multi_group.config(state="normal")
+            self.btn_start_multi_group.config(state="disabled")
+            self.btn_stop_multi_group.config(state="disabled")
+            self.multi_group_status_label.config(text="⏸️ 已停止", fg="gray")
+            self.multi_group_detail_label.config(text="請重新配置策略", fg="blue")
+
+            if self.multi_group_logger:
+                self.multi_group_logger.strategy_info("多組策略已停止")
+
+            print("✅ [STRATEGY] 多組策略已停止")
+            self.add_log("✅ 多組策略已停止")
+
+        except Exception as e:
+            print(f"❌ [STRATEGY] 停止多組策略失敗: {e}")
+            self.add_log(f"❌ 停止多組策略失敗: {e}")
+            if self.multi_group_logger:
+                self.multi_group_logger.strategy_error(f"停止失敗: {e}")
+
+    def toggle_multi_group_console(self, category, name):
+        """切換多組策略Console輸出"""
+        try:
+            if not self.multi_group_logger:
+                return
+
+            new_state = self.multi_group_logger.toggle_category_console(category)
+
+            # 更新按鈕文字（這裡需要找到對應的按鈕，簡化處理）
+            state_text = "關閉" if new_state else "開啟"
+            print(f"🎛️ [CONSOLE] {name}Console輸出已{state_text}")
+
+        except Exception as e:
+            print(f"❌ [CONSOLE] 切換{name}Console失敗: {e}")
+
+    def check_auto_start_multi_group_strategy(self):
+        """檢查是否需要自動啟動多組策略"""
+        try:
+            # 🆕 檢查執行頻率設定
+            frequency = getattr(self, 'multi_group_frequency_var', None)
+            freq_setting = frequency.get() if frequency else "一天一次"
+
+            # 🆕 根據頻率設定檢查是否允許執行
+            if freq_setting == "一天一次":
+                # 檢查今天是否已有策略組
+                if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
+                    today_groups = self.multi_group_position_manager.db_manager.get_today_strategy_groups()
+                    if today_groups:
+                        print("📅 [STRATEGY] 一天一次模式：今日已執行過，跳過自動啟動")
+                        if self.multi_group_logger:
+                            self.multi_group_logger.strategy_info("一天一次模式：今日已執行過，跳過")
+                        return
+
+            # 檢查條件：已準備 + 自動啟動 + 未運行 + 區間已計算 + 未觸發過
+            if (self.multi_group_prepared and
+                self.multi_group_auto_start and
+                not self.multi_group_running and
+                self.range_calculated and
+                not self._auto_start_triggered):
+
+                # 立即設定觸發標記，防止重複調用
+                self._auto_start_triggered = True
+
+                if self.multi_group_logger:
+                    self.multi_group_logger.strategy_info(
+                        f"區間計算完成，自動啟動多組策略: 區間{self.range_low}-{self.range_high} (頻率:{freq_setting})"
+                    )
+
+                # 自動啟動策略
+                self.start_multi_group_strategy()
+
+                # 更新狀態顯示
+                self.multi_group_detail_label.config(
+                    text="已自動啟動，監控中...",
+                    fg="green"
+                )
+
+                print(f"🤖 [AUTO] 區間計算完成，自動啟動多組策略 (頻率:{freq_setting})")
+
+        except Exception as e:
+            # 如果啟動失敗，重置觸發標記
+            self._auto_start_triggered = False
+            if self.multi_group_logger:
+                self.multi_group_logger.system_error(f"自動啟動檢查失敗: {e}")
+            print(f"❌ [AUTO] 自動啟動檢查失敗: {e}")
+
+    def on_multi_group_frequency_changed(self, event=None):
+        """多組策略執行頻率變更事件"""
+        try:
+            frequency = self.multi_group_frequency_var.get()
+
+            if frequency == "一天一次":
+                self.add_log("📅 多組策略設定為一天一次執行")
+                print("📅 [STRATEGY] 多組策略設定為一天一次執行")
+
+            elif frequency == "可重複執行":
+                self.add_log("🔄 多組策略設定為可重複執行")
+                print("🔄 [STRATEGY] 多組策略設定為可重複執行")
+                print("💡 [STRATEGY] 每次區間計算完成都可以執行新的策略組")
+
+            elif frequency == "測試模式":
+                self.add_log("🧪 多組策略設定為測試模式")
+                print("🧪 [STRATEGY] 多組策略設定為測試模式 - 忽略所有執行限制")
+                # 重置觸發標記，允許立即重新執行
+                self._auto_start_triggered = False
+
+            # 記錄到多組策略日誌
+            if self.multi_group_logger:
+                self.multi_group_logger.system_info(f"執行頻率變更為: {frequency}")
+
+        except Exception as e:
+            self.add_log(f"❌ 執行頻率設定失敗: {e}")
+            print(f"❌ [STRATEGY] 執行頻率設定失敗: {e}")
+
+    def check_multi_group_exit_conditions(self, price, time_str):
+        """檢查多組策略出場條件"""
+        try:
+            if not self.multi_group_risk_engine:
+                return
+
+            # 檢查所有活躍部位的出場條件
+            exit_actions = self.multi_group_risk_engine.check_all_exit_conditions(price, time_str)
+
+            # 執行出場動作
+            for action in exit_actions:
+                success = self.multi_group_position_manager.update_position_exit(
+                    position_id=action['position_id'],
+                    exit_price=action['exit_price'],
+                    exit_time=action['exit_time'],
+                    exit_reason=action['exit_reason'],
+                    pnl=action['pnl']
+                )
+
+                if success and self.multi_group_logger:
+                    self.multi_group_logger.position_exit(
+                        f"{action['exit_reason']} @ {action['exit_price']}",
+                        group_id=action.get('group_id', 0),
+                        position_id=action['position_id'],
+                        pnl=action['pnl']
+                    )
+
+                    # 更新保護性停損
+                    if action['exit_reason'] == '移動停利':
+                        self.multi_group_risk_engine.update_protective_stop_loss(
+                            action['position_id'],
+                            action.get('group_id', 0)
+                        )
+
+        except Exception as e:
+            if self.multi_group_logger:
+                self.multi_group_logger.system_error(f"多組風險管理檢查失敗: {e}")
+
     def configure_monitor_settings(self, interval_seconds=5, timeout_seconds=10):
         """配置監控設定
 
@@ -1735,6 +2757,10 @@ class SimpleIntegratedApp:
     def monitor_strategy_status(self):
         """監控策略狀態 - 仿照報價監控的智能提醒機制"""
         try:
+            # 🔧 檢查監控開關
+            if not getattr(self, 'monitoring_enabled', True):
+                return
+
             # 檢查策略是否啟動
             if not getattr(self, 'strategy_enabled', False):
                 # 策略未啟動，不需要監控
@@ -1757,13 +2783,12 @@ class SimpleIntegratedApp:
             # 更新狀態
             self.monitoring_stats['strategy_status'] = new_strategy_status
 
-            # 智能提醒邏輯（只在狀態變化時提醒）
+            # 🔧 簡化提醒邏輯，避免複雜字符串操作
             if previous_strategy_status != new_strategy_status:
-                timestamp = time.strftime("%H:%M:%S")
                 if new_strategy_status == "策略運行中":
-                    print(f"✅ [MONITOR] 策略恢復正常 (檢查時間: {timestamp})")
+                    print("✅ [MONITOR] 策略恢復正常")
                 else:
-                    print(f"❌ [MONITOR] 策略中斷 (檢查時間: {timestamp})")
+                    print("❌ [MONITOR] 策略中斷")
 
         except Exception as e:
             # 靜默處理，不影響主監控邏輯

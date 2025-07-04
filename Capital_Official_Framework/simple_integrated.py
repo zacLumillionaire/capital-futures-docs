@@ -20,6 +20,12 @@ if order_service_path not in sys.path:
 import Global
 from user_config import get_user_config
 
+# 🚀 Queue基礎設施導入 (GIL問題解決方案)
+# 🚨 Console模式：完全禁用Queue架構
+QUEUE_INFRASTRUCTURE_AVAILABLE = False
+print("💡 使用Console模式，所有信息將在VS Code中顯示")
+print("🎯 這將大幅降低GIL錯誤風險，提升系統穩定性")
+
 class SimpleIntegratedApp:
     """簡化版整合交易應用程式"""
     
@@ -64,6 +70,29 @@ class SimpleIntegratedApp:
         # LOG控制變數
         self.strategy_log_count = 0
 
+        # 🎯 狀態監聽器相關變數
+        self.monitoring_stats = {
+            'last_quote_count': 0,
+            'last_quote_time': None,
+            'quote_status': '未知'
+        }
+
+        # Console輸出控制
+        self.console_quote_enabled = True
+
+        # 五檔數據存儲
+        self.best5_data = None
+
+        # 🚨 Console模式：禁用Queue架構
+        # self.queue_infrastructure = None
+        # self.queue_mode_enabled = False
+
+        # 分鐘K線數據追蹤（新增）
+        self.current_minute_candle = None
+        self.minute_prices = []  # 當前分鐘內的價格
+        self.last_minute = None
+        self._last_range_minute = None
+
         # 建立介面
         self.create_widgets()
 
@@ -93,6 +122,9 @@ class SimpleIntegratedApp:
 
         # 建立策略監控頁面內容
         self.create_strategy_page(strategy_frame)
+
+        # 🎯 啟動狀態監聽器
+        self.start_status_monitor()
 
     def create_main_page(self, main_frame):
         """建立主要功能頁面"""
@@ -151,7 +183,13 @@ class SimpleIntegratedApp:
         # 重新連接回報按鈕
         self.btn_reconnect_reply = ttk.Button(btn_frame, text="重新連接回報", command=self.reconnect_reply)
         self.btn_reconnect_reply.pack(side=tk.LEFT, padx=5)
-        
+
+        # 🚨 Console模式：隱藏Queue控制面板
+        # self.create_queue_control_panel(main_frame)
+
+        # 📊 狀態監控面板
+        self.create_status_display_panel(main_frame)
+
         # 日誌區域
         log_frame = ttk.LabelFrame(main_frame, text="系統日誌", padding=10)
         log_frame.pack(fill=tk.BOTH, expand=True)
@@ -276,28 +314,97 @@ class SimpleIntegratedApp:
                     self.parent.add_log(msg)
 
                 def OnNewData(self, btrUserID, bstrData):
-                    """即時委託狀態回報 - 完全按照群益官方方式"""
+                    """即時委託狀態回報 - Console詳細版本"""
                     try:
                         cutData = bstrData.split(',')
-                        # 完全按照群益官方的方式處理
-                        self.parent.add_log(f"📋 OnNewData: {cutData}")
 
-                        # 解析重要欄位 (基於群益官方註解)
-                        if len(cutData) > 24:
-                            order_no = cutData[0]      # 委託序號
-                            order_type = cutData[2]    # 委託種類
-                            order_status = cutData[3]  # 委託狀態
-                            product = cutData[8]       # 商品代碼
-                            book_no = cutData[10]      # 委託書號
-                            price = cutData[11]        # 價格
-                            quantity = cutData[20]     # 數量
-                            date_time = f"{cutData[23]} {cutData[24]}"  # 日期&時間
+                        # 🚨 原始數據轉移到Console
+                        print(f"📋 [REPLY] OnNewData: {cutData}")
 
-                            # 顯示解析後的資訊
-                            self.parent.add_log(f"✅ 委託回報: 序號={order_no}, 狀態={order_status}, {product} {price}@{quantity}")
+                        # 解析重要欄位 (基於您提供的詳細解析)
+                        if len(cutData) > 33:
+                            # 基本信息
+                            seq_no = cutData[0]           # 委託序號
+                            market = cutData[1]           # 市場別 (TF=期貨)
+                            order_type = cutData[2]       # 委託種類 (N=新單, C=成交, X=取消, R=錯誤)
+                            status = cutData[3]           # 委託狀態
+
+                            # 帳號信息
+                            branch_code = cutData[4]      # 分公司代碼
+                            account = cutData[5]          # 期貨帳號
+
+                            # 商品信息
+                            product = cutData[8]          # 商品代碼
+                            book_no = cutData[10]         # 委託書號
+                            price = cutData[11]           # 委託/成交價格
+                            quantity = cutData[20]        # 委託/未成交數量
+
+                            # 時間信息
+                            date = cutData[23]            # 委託日期
+                            time = cutData[24]            # 委託時間
+
+                            # 成交信息 (修正欄位索引)
+                            match_no = cutData[38] if len(cutData) > 38 else ""  # 成交序號 (正確欄位)
+                            contract_month = cutData[33] if len(cutData) > 33 else ""  # 合約月份 (如202507)
+
+                            # 錯誤信息
+                            err_code = cutData[-4] if len(cutData) > 4 else ""   # 錯誤代碼
+                            err_msg = cutData[-3] if len(cutData) > 3 else ""    # 錯誤訊息
+                            original_seq = cutData[-1] if len(cutData) > 1 else ""  # 原始委託序號
+
+                            # 🎯 Console詳細輸出 (完整委託類型對照表)
+                            type_map = {
+                                'N': '新單 (New)',
+                                'D': '成交 (Deal/Done)',
+                                'C': '取消 (Cancel)',
+                                'U': '改量 (Update)',
+                                'P': '改價 (Price)',
+                                'B': '改價改量 (Both)',
+                                'S': '動態退單 (System)',
+                                'X': '刪除 (Delete)',
+                                'R': '錯誤 (Reject)'
+                            }
+                            type_desc = type_map.get(order_type, f'未知({order_type})')
+
+                            print(f"✅ [REPLY] 委託回報解析:")
+                            print(f"   📋 序號: {seq_no} (原始: {original_seq})")
+                            print(f"   📊 類型: {order_type} ({type_desc})")
+                            print(f"   🏷️ 商品: {product}")
+                            print(f"   💰 價格: {price}")
+                            print(f"   📦 數量: {quantity}")
+                            print(f"   ⏰ 時間: {date} {time}")
+                            if contract_month:
+                                print(f"   📅 合約月份: {contract_month}")
+                            if match_no:
+                                print(f"   🎯 成交序號: {match_no}")
+                            if err_code:
+                                print(f"   ❌ 錯誤: {err_code} - {err_msg}")
+
+                            # 🚨 UI日誌只顯示簡要信息 (完整類型支援)
+                            if order_type == 'N':
+                                self.parent.add_log(f"✅ 新單: {product} {price}@{quantity}")
+                            elif order_type == 'D':
+                                self.parent.add_log(f"🎯 成交: {product} {price}@{quantity}")
+                            elif order_type == 'C':
+                                self.parent.add_log(f"❌ 取消: {product} {price}@{quantity}")
+                            elif order_type == 'U':
+                                self.parent.add_log(f"📝 改量: {product} {price}@{quantity}")
+                            elif order_type == 'P':
+                                self.parent.add_log(f"💰 改價: {product} {price}@{quantity}")
+                            elif order_type == 'B':
+                                self.parent.add_log(f"🔄 改價改量: {product} {price}@{quantity}")
+                            elif order_type == 'S':
+                                self.parent.add_log(f"⚠️ 動態退單: {product}")
+                            elif order_type == 'X':
+                                self.parent.add_log(f"🗑️ 刪除: {product}")
+                            elif order_type == 'R':
+                                self.parent.add_log(f"❌ 錯誤: {err_msg}")
+                            else:
+                                self.parent.add_log(f"📋 回報: {order_type} - {type_desc}")
 
                     except Exception as e:
-                        self.parent.add_log(f"❌ OnNewData處理錯誤: {e}")
+                        print(f"❌ [REPLY] OnNewData處理錯誤: {e}")
+                        self.parent.add_log(f"❌ 回報處理錯誤: {e}")
 
                 def OnReplyMessage(self, bstrUserID, bstrMessages):
                     """回報訊息 - 必須回傳-1"""
@@ -382,20 +489,21 @@ class SimpleIntegratedApp:
                 self.add_log("❌ 請先登入系統")
                 return
             
-            self.add_log("🔧 初始化下單模組...")
-            
+            # 🚨 詳細初始化信息轉移到Console
+            print("🔧 [INIT] 初始化下單模組...")
+
             # 步驟1: 初始化SKOrderLib
             nCode = Global.skO.SKOrderLib_Initialize()
             msg = Global.skC.SKCenterLib_GetReturnCodeMessage(nCode)
-            self.add_log(f"📋 SKOrderLib初始化: {msg} (代碼: {nCode})")
-            
+            print(f"📋 [INIT] SKOrderLib初始化: {msg} (代碼: {nCode})")
+
             if nCode == 0 or nCode == 2003:  # 2003 = 已初始化
                 # 步驟2: 讀取憑證
                 user_id = self.entry_id.get().strip()
                 nCode = Global.skO.ReadCertByID(user_id)
                 msg = Global.skC.SKCenterLib_GetReturnCodeMessage(nCode)
-                self.add_log(f"📋 憑證讀取: {msg} (代碼: {nCode})")
-                
+                print(f"📋 [INIT] 憑證讀取: {msg} (代碼: {nCode})")
+
                 if nCode == 0:
                     self.btn_init_order.config(state="disabled")
                     self.btn_test_order.config(state="normal")  # 啟用下單測試按鈕
@@ -403,12 +511,14 @@ class SimpleIntegratedApp:
                     # 初始化回報連線 (群益官方方式)
                     self.init_reply_connection()
 
+                    # UI日誌只顯示簡要成功信息
                     self.add_log("✅ 下單模組初始化完成")
-                    self.add_log("💡 現在可以測試下單功能")
+                    print("💡 [INIT] 現在可以測試下單功能")
                 else:
+                    print(f"❌ [INIT] 憑證讀取失敗: {msg}")
                     self.add_log(f"❌ 憑證讀取失敗: {msg}")
                     if nCode == 1001:
-                        self.add_log("💡 提示: 可能需要向群益申請期貨API下單權限")
+                        print("💡 [INIT] 提示: 可能需要向群益申請期貨API下單權限")
             else:
                 self.add_log(f"❌ SKOrderLib初始化失敗: {msg}")
                 
@@ -495,8 +605,19 @@ class SimpleIntegratedApp:
             # 註冊報價事件 (使用群益官方方式)
             self.register_quote_events()
 
-            # 使用群益官方的方式 - RequestTicks返回tuple
-            result = Global.skQ.SKQuoteLib_RequestTicks(0, product)
+            # 🔧 修復TypeError: 確保參數類型正確
+            try:
+                # 嘗試不同的參數類型
+                result = Global.skQ.SKQuoteLib_RequestTicks(0, str(product))
+            except Exception as e1:
+                self.add_log(f"⚠️ 第一次嘗試失敗: {e1}")
+                try:
+                    # 嘗試整數參數
+                    result = Global.skQ.SKQuoteLib_RequestTicks(0, 0)
+                except Exception as e2:
+                    self.add_log(f"⚠️ 第二次嘗試失敗: {e2}")
+                    # 使用原始方式
+                    result = Global.skQ.SKQuoteLib_RequestTicks(0, product)
 
             # 處理返回結果 (可能是tuple或單一值)
             if isinstance(result, tuple):
@@ -563,16 +684,10 @@ class SimpleIntegratedApp:
                     self.parent = parent
 
                 def OnNotifyTicksLONG(self, sMarketNo, nStockidx, nPtr, lDate, lTimehms, lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-                    """即時報價事件 - 完全按照群益官方方式處理"""
+                    """簡化版報價事件 - Console輸出為主"""
                     try:
-                        # 完全按照群益官方的方式格式化訊息
-                        strMsg = f"[OnNotifyTicksLONG] {nStockidx} {nPtr} {lDate} {lTimehms} {lTimemillismicros} {nBid} {nAsk} {nClose} {nQty} {nSimulate}"
-
-                        # 完全按照群益官方的方式直接更新UI (不使用after)
-                        self.parent.write_message_direct(strMsg)
-
-                        # 同時解析價格資訊
-                        price = nClose / 100.0
+                        # 解析價格資訊
+                        corrected_price = nClose / 100.0
                         bid = nBid / 100.0
                         ask = nAsk / 100.0
 
@@ -580,17 +695,87 @@ class SimpleIntegratedApp:
                         time_str = f"{lTimehms:06d}"
                         formatted_time = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
 
-                        # 顯示解析後的價格資訊
-                        price_msg = f"📊 {formatted_time} 成交:{price:.0f} 買:{bid:.0f} 賣:{ask:.0f} 量:{nQty}"
-                        self.parent.write_message_direct(price_msg)
+                        # ✅ 可控制的Console輸出 - 增強版包含五檔信息
+                        if getattr(self.parent, 'console_quote_enabled', True):
+                            # 基本TICK信息
+                            tick_msg = f"[TICK] {formatted_time} 成交:{corrected_price:.0f} 買:{bid:.0f} 賣:{ask:.0f} 量:{nQty}"
 
-                        # 🎯 策略邏輯整合（關鍵新增部分）- 無UI更新版本
+                            # 如果有五檔數據，添加最佳買賣價
+                            if hasattr(self.parent, 'best5_data') and self.parent.best5_data:
+                                best5 = self.parent.best5_data
+                                tick_msg += f" | 最佳買:{best5['bid1']:.0f}({best5['bid1_qty']}) 最佳賣:{best5['ask1']:.0f}({best5['ask1_qty']})"
+
+                            print(tick_msg)
+
+                        # 🚨 移除UI日誌輸出，完全使用Console模式
+                        # self.parent.write_message_direct(strMsg)
+                        # self.parent.write_message_direct(price_msg)
+
+                        # 🎯 策略邏輯整合
                         if hasattr(self.parent, 'strategy_enabled') and self.parent.strategy_enabled:
-                            self.parent.process_strategy_logic_safe(price, formatted_time)
+                            self.parent.process_strategy_logic_safe(corrected_price, formatted_time)
+
+                        # ✅ 更新內部數據變數（Monitor依賴這些）
+                        self.parent.last_price = corrected_price
+                        self.parent.last_update_time = formatted_time
+
+                        # ✅ 更新報價計數器（Monitor檢測用）
+                        if hasattr(self.parent, 'price_count'):
+                            self.parent.price_count += 1
 
                     except Exception as e:
-                        # 如果出錯，也按照群益方式直接寫入
-                        self.parent.write_message_direct(f"❌ 報價處理錯誤: {e}")
+                        # Console錯誤輸出
+                        print(f"❌ [ERROR] 報價處理錯誤: {e}")
+
+                    return 0
+
+                def OnNotifyBest5LONG(self, sMarketNo, nStockidx, nBestBid1, nBestBidQty1, nBestBid2, nBestBidQty2, nBestBid3, nBestBidQty3, nBestBid4, nBestBidQty4, nBestBid5, nBestBidQty5, nExtendBid, nExtendBidQty, nBestAsk1, nBestAskQty1, nBestAsk2, nBestAskQty2, nBestAsk3, nBestAskQty3, nBestAsk4, nBestAskQty4, nBestAsk5, nBestAskQty5, nExtendAsk, nExtendAskQty, nSimulate):
+                    """五檔報價事件 - Console版本"""
+                    try:
+                        # 控制五檔輸出頻率，避免過多信息
+                        if not hasattr(self.parent, '_last_best5_time'):
+                            self.parent._last_best5_time = 0
+
+                        current_time = time.time()
+                        if current_time - self.parent._last_best5_time > 2:  # 每2秒輸出一次
+                            self.parent._last_best5_time = current_time
+
+                            # 可控制的Console輸出
+                            if getattr(self.parent, 'console_quote_enabled', True):
+                                # 轉換價格 (群益API價格需要除以100)
+                                bid1 = nBestBid1 / 100.0 if nBestBid1 > 0 else 0
+                                bid2 = nBestBid2 / 100.0 if nBestBid2 > 0 else 0
+                                bid3 = nBestBid3 / 100.0 if nBestBid3 > 0 else 0
+                                bid4 = nBestBid4 / 100.0 if nBestBid4 > 0 else 0
+                                bid5 = nBestBid5 / 100.0 if nBestBid5 > 0 else 0
+
+                                ask1 = nBestAsk1 / 100.0 if nBestAsk1 > 0 else 0
+                                ask2 = nBestAsk2 / 100.0 if nBestAsk2 > 0 else 0
+                                ask3 = nBestAsk3 / 100.0 if nBestAsk3 > 0 else 0
+                                ask4 = nBestAsk4 / 100.0 if nBestAsk4 > 0 else 0
+                                ask5 = nBestAsk5 / 100.0 if nBestAsk5 > 0 else 0
+
+                                print(f"📊 [BEST5] 五檔報價:")
+                                print(f"   賣5: {ask5:.0f}({nBestAskQty5})  賣4: {ask4:.0f}({nBestAskQty4})  賣3: {ask3:.0f}({nBestAskQty3})  賣2: {ask2:.0f}({nBestAskQty2})  賣1: {ask1:.0f}({nBestAskQty1})")
+                                print(f"   買1: {bid1:.0f}({nBestBidQty1})  買2: {bid2:.0f}({nBestBidQty2})  買3: {bid3:.0f}({nBestBidQty3})  買4: {bid4:.0f}({nBestBidQty4})  買5: {bid5:.0f}({nBestBidQty5})")
+
+                            # 🎯 為策略保存五檔數據
+                            self.parent.best5_data = {
+                                'bid1': nBestBid1 / 100.0 if nBestBid1 > 0 else 0,
+                                'bid1_qty': nBestBidQty1,
+                                'ask1': nBestAsk1 / 100.0 if nBestAsk1 > 0 else 0,
+                                'ask1_qty': nBestAskQty1,
+                                'bid_prices': [nBestBid1/100.0, nBestBid2/100.0, nBestBid3/100.0, nBestBid4/100.0, nBestBid5/100.0],
+                                'bid_qtys': [nBestBidQty1, nBestBidQty2, nBestBidQty3, nBestBidQty4, nBestBidQty5],
+                                'ask_prices': [nBestAsk1/100.0, nBestAsk2/100.0, nBestAsk3/100.0, nBestAsk4/100.0, nBestAsk5/100.0],
+                                'ask_qtys': [nBestAskQty1, nBestAskQty2, nBestAskQty3, nBestAskQty4, nBestAskQty5],
+                                'timestamp': current_time
+                            }
+
+                    except Exception as e:
+                        print(f"❌ [BEST5] 五檔處理錯誤: {e}")
+
+                    return 0
 
             # 註冊事件 (使用群益官方方式)
             self.quote_event = SKQuoteLibEvents(self)
@@ -628,19 +813,24 @@ class SimpleIntegratedApp:
             reserved = self.combo_reserved.get()
 
             if not product or not price or not quantity:
+                print("❌ [ORDER] 請填入完整的下單參數")
                 self.add_log("❌ 請填入完整的下單參數")
                 return
 
-            self.add_log(f"🧪 準備測試下單...")
-            self.add_log(f"📋 帳號: {account}")
-            self.add_log(f"📋 商品: {product}")
-            self.add_log(f"📋 買賣: {buysell}")
-            self.add_log(f"📋 價格: {price}")
-            self.add_log(f"📋 數量: {quantity}口")
-            self.add_log(f"📋 委託類型: {trade_type}")
-            self.add_log(f"📋 當沖: {day_trade}")
-            self.add_log(f"📋 新平倉: {new_close}")
-            self.add_log(f"📋 盤別: {reserved}")
+            # 🚨 詳細下單信息轉移到Console
+            print(f"🧪 [ORDER] 準備測試下單...")
+            print(f"📋 [ORDER] 帳號: {account}")
+            print(f"📋 [ORDER] 商品: {product}")
+            print(f"📋 [ORDER] 買賣: {buysell}")
+            print(f"📋 [ORDER] 價格: {price}")
+            print(f"📋 [ORDER] 數量: {quantity}口")
+            print(f"📋 [ORDER] 委託類型: {trade_type}")
+            print(f"📋 [ORDER] 當沖: {day_trade}")
+            print(f"📋 [ORDER] 新平倉: {new_close}")
+            print(f"📋 [ORDER] 盤別: {reserved}")
+
+            # UI日誌只顯示簡要信息
+            self.add_log(f"🧪 準備下單: {buysell} {product} {price}@{quantity}口")
 
             # 確認下單
             result = messagebox.askyesno("確認下單",
@@ -681,7 +871,7 @@ class SimpleIntegratedApp:
         """執行期貨下單 - 基於群益官方方式"""
         try:
             buysell = order_params['buysell']
-            self.add_log(f"🚀 執行{buysell}下單...")
+            print(f"🚀 [ORDER] 執行{buysell}下單...")
 
             # 檢查Global模組中的期貨下單功能
             if hasattr(Global, 'skO') and Global.skO:
@@ -713,7 +903,7 @@ class SimpleIntegratedApp:
                 # 設定盤別
                 oOrder.sReserved = 1 if order_params['reserved'] == "T盤預約" else 0
 
-                self.add_log(f"📋 下單物件設定完成")
+                print(f"📋 [ORDER] 下單物件設定完成")
 
                 # 執行下單
                 result = Global.skO.SendFutureOrderCLR(user_id, True, oOrder)
@@ -724,14 +914,20 @@ class SimpleIntegratedApp:
                     msg = Global.skC.SKCenterLib_GetReturnCodeMessage(nCode)
 
                     if nCode == 0:
-                        self.add_log(f"✅ 下單成功: {msg}")
-                        self.add_log(f"📋 委託序號: {message}")
+                        print(f"✅ [ORDER] 下單成功: {msg}")
+                        print(f"📋 [ORDER] 委託序號: {message}")
+                        # UI日誌只顯示簡要成功信息
+                        self.add_log(f"✅ 下單成功，序號: {message}")
                     else:
-                        self.add_log(f"❌ 下單失敗: {msg} (代碼: {nCode})")
+                        print(f"❌ [ORDER] 下單失敗: {msg} (代碼: {nCode})")
+                        # UI日誌顯示失敗信息
+                        self.add_log(f"❌ 下單失敗: {msg}")
                 else:
+                    print(f"📋 [ORDER] 下單結果: {result}")
                     self.add_log(f"📋 下單結果: {result}")
 
             else:
+                print("❌ [ORDER] 下單物件未初始化")
                 self.add_log("❌ 下單物件未初始化")
 
         except Exception as e:
@@ -855,6 +1051,16 @@ class SimpleIntegratedApp:
     def add_strategy_log(self, message):
         """策略日誌 - 主線程安全，只記錄重要事件"""
         try:
+            # 🚨 檢查是否在主線程中
+            import threading
+            if threading.current_thread() != threading.main_thread():
+                # 如果不在主線程，只記錄到內部列表，不更新UI
+                if not hasattr(self, '_pending_strategy_logs'):
+                    self._pending_strategy_logs = []
+                timestamp = time.strftime("%H:%M:%S")
+                self._pending_strategy_logs.append(f"[{timestamp}] {message}")
+                return
+
             if hasattr(self, 'text_strategy_log'):
                 timestamp = time.strftime("%H:%M:%S")
                 formatted_message = f"[{timestamp}] {message}\n"
@@ -876,6 +1082,12 @@ class SimpleIntegratedApp:
     def process_strategy_logic_safe(self, price, time_str):
         """安全的策略邏輯處理 - 避免頻繁UI更新"""
         try:
+            # 🔍 調試信息
+            if price == 0:
+                print(f"⚠️ 策略收到0價格數據，時間: {time_str}")
+            elif self.price_count % 50 == 0:  # 每50筆報價顯示一次
+                print(f"🔍 策略收到: price={price}, time={time_str}, count={self.price_count}")
+
             # 只更新內部變數，不更新UI
             self.latest_price = price
             self.latest_time = time_str
@@ -885,11 +1097,22 @@ class SimpleIntegratedApp:
             if self.price_count % 100 == 0:
                 self.price_count_var.set(str(self.price_count))
 
+            # 解析時間
+            hour, minute, second = map(int, time_str.split(':'))
+
             # 區間計算邏輯
             self.update_range_calculation_safe(price, time_str)
 
-            # 突破檢測（區間計算完成後）
+            # 更新分鐘K線數據（用於突破檢測）
+            if self.range_calculated:
+                self.update_minute_candle_safe(price, hour, minute, second)
+
+            # 突破檢測（區間計算完成後，使用1分K收盤價）
             if self.range_calculated and not self.first_breakout_detected:
+                self.check_minute_candle_breakout_safe()
+
+            # 執行進場（檢測到突破信號後的下一個報價）
+            if self.range_calculated and self.waiting_for_entry:
                 self.check_breakout_signals_safe(price, time_str)
 
             # 出場條件檢查（有部位時）
@@ -930,7 +1153,7 @@ class SimpleIntegratedApp:
 
                     # 重要事件：記錄到策略日誌
                     self.add_strategy_log(f"✅ 區間計算完成: {range_text}")
-                    self.add_strategy_log(f"📊 收集數據點數: {len(self.range_prices)} 筆")
+                    self.add_strategy_log(f"📊 收集數據點數: {len(self.range_prices)} 筆，開始監測突破")
 
         except Exception as e:
             pass
@@ -947,14 +1170,91 @@ class SimpleIntegratedApp:
         except:
             return False
 
-    def check_breakout_signals_safe(self, price, time_str):
-        """安全的突破檢測 - 只在突破時更新UI"""
+    def update_minute_candle_safe(self, price, hour, minute, second):
+        """更新分鐘K線數據 - 參考OrderTester.py邏輯"""
         try:
-            if not self.current_position:  # 無部位時檢查進場
-                if price > self.range_high:
-                    self.enter_position_safe("LONG", price, time_str)
-                elif price < self.range_low:
-                    self.enter_position_safe("SHORT", price, time_str)
+            current_minute = minute
+
+            # 如果是新的分鐘，處理上一分鐘的K線
+            if self.last_minute is not None and current_minute != self.last_minute:
+                if self.minute_prices:
+                    # 計算上一分鐘的K線
+                    open_price = self.minute_prices[0]
+                    close_price = self.minute_prices[-1]
+                    high_price = max(self.minute_prices)
+                    low_price = min(self.minute_prices)
+
+                    self.current_minute_candle = {
+                        'minute': self.last_minute,
+                        'open': open_price,
+                        'high': high_price,
+                        'low': low_price,
+                        'close': close_price,
+                        'start_time': f"{hour:02d}:{self.last_minute:02d}:00"
+                    }
+
+                # 重置當前分鐘的價格數據
+                self.minute_prices = []
+
+            # 添加當前價格到分鐘數據
+            self.minute_prices.append(price)
+            self.last_minute = current_minute
+
+        except Exception as e:
+            pass
+
+    def check_minute_candle_breakout_safe(self):
+        """檢查分鐘K線收盤價是否突破區間 - 參考OrderTester.py邏輯"""
+        try:
+            if not self.current_minute_candle or not self.range_high or not self.range_low:
+                return
+
+            # 如果已經檢測到第一次突破，就不再檢測
+            if self.first_breakout_detected:
+                return
+
+            close_price = self.current_minute_candle['close']
+            minute = self.current_minute_candle['minute']
+
+            # 檢查第一次突破
+            if close_price > self.range_high:
+                # 記錄第一次突破
+                self.first_breakout_detected = True
+                self.breakout_direction = 'LONG'
+                self.waiting_for_entry = True
+
+                # 重要事件：記錄到策略日誌
+                self.add_strategy_log(f"🔥 {minute:02d}分K線收盤突破上緣！收盤:{close_price:.0f} > 上緣:{self.range_high:.0f}")
+                self.add_strategy_log(f"⏳ 等待下一個報價進場做多...")
+
+                # 更新UI狀態
+                self.breakout_status_var.set(f"🔥 LONG突破信號")
+
+            elif close_price < self.range_low:
+                # 記錄第一次突破
+                self.first_breakout_detected = True
+                self.breakout_direction = 'SHORT'
+                self.waiting_for_entry = True
+
+                # 重要事件：記錄到策略日誌
+                self.add_strategy_log(f"🔥 {minute:02d}分K線收盤突破下緣！收盤:{close_price:.0f} < 下緣:{self.range_low:.0f}")
+                self.add_strategy_log(f"⏳ 等待下一個報價進場做空...")
+
+                # 更新UI狀態
+                self.breakout_status_var.set(f"🔥 SHORT突破信號")
+
+        except Exception as e:
+            pass
+
+    def check_breakout_signals_safe(self, price, time_str):
+        """執行進場 - 在檢測到突破信號後的下一個報價進場"""
+        try:
+            # 如果等待進場且有突破方向
+            if self.waiting_for_entry and self.breakout_direction and not self.current_position:
+                direction = self.breakout_direction
+                self.waiting_for_entry = False  # 重置等待狀態
+                self.enter_position_safe(direction, price, time_str)
+
         except Exception as e:
             pass
 
@@ -1154,14 +1454,229 @@ class SimpleIntegratedApp:
         self.text_log.insert(tk.END, f"[{timestamp}] {message}\n")
         self.text_log.see(tk.END)
         self.root.update_idletasks()
-    
+
+    def create_queue_control_panel(self, parent_frame):
+        """創建Queue架構控制面板"""
+        if not QUEUE_INFRASTRUCTURE_AVAILABLE:
+            return
+
+        # Queue控制框架
+        queue_frame = ttk.LabelFrame(parent_frame, text="🚀 Queue架構控制", padding=5)
+        queue_frame.pack(fill="x", pady=5)
+
+        # 狀態顯示
+        self.queue_status_var = tk.StringVar(value="⏸️ 已初始化")
+        ttk.Label(queue_frame, text="狀態:").pack(side="left")
+        ttk.Label(queue_frame, textvariable=self.queue_status_var).pack(side="left", padx=5)
+
+        # 控制按鈕
+        ttk.Button(queue_frame, text="🚀 啟動Queue服務",
+                  command=self.start_queue_services).pack(side="left", padx=2)
+        ttk.Button(queue_frame, text="🛑 停止Queue服務",
+                  command=self.stop_queue_services).pack(side="left", padx=2)
+        ttk.Button(queue_frame, text="📊 查看狀態",
+                  command=self.show_queue_status).pack(side="left", padx=2)
+        ttk.Button(queue_frame, text="🔄 切換模式",
+                  command=self.toggle_queue_mode).pack(side="left", padx=2)
+
+    def start_queue_services(self):
+        """啟動Queue基礎設施服務"""
+        if not self.queue_infrastructure:
+            self.add_log("❌ Queue基礎設施未初始化")
+            return
+
+        try:
+            # 初始化並啟動
+            if self.queue_infrastructure.initialize():
+                if self.queue_infrastructure.start_all():
+                    # 🔧 修復後重新啟用策略回調 (已解決線程安全問題)
+                    self.queue_infrastructure.add_strategy_callback(
+                        self.process_queue_strategy_data
+                    )
+
+                    self.queue_mode_enabled = True
+                    self.queue_status_var.set("✅ 運行中")
+                    self.add_log("🚀 Queue服務啟動成功")
+                    self.add_log("✅ 策略回調已啟用 (線程安全版本)")
+                else:
+                    self.add_log("❌ Queue服務啟動失敗")
+            else:
+                self.add_log("❌ Queue基礎設施初始化失敗")
+        except Exception as e:
+            self.add_log(f"❌ 啟動Queue服務錯誤: {e}")
+
+    def stop_queue_services(self):
+        """停止Queue基礎設施服務"""
+        try:
+            if self.queue_infrastructure:
+                self.queue_infrastructure.stop_all()
+
+            self.queue_mode_enabled = False
+            self.queue_status_var.set("⏸️ 已停止")
+            self.add_log("🛑 Queue服務已停止")
+        except Exception as e:
+            self.add_log(f"❌ 停止Queue服務錯誤: {e}")
+
+    def toggle_queue_mode(self):
+        """切換Queue模式"""
+        if self.queue_mode_enabled:
+            self.queue_mode_enabled = False
+            self.queue_status_var.set("🔄 傳統模式")
+            self.add_log("🔄 已切換到傳統模式")
+        else:
+            if self.queue_infrastructure and self.queue_infrastructure.running:
+                self.queue_mode_enabled = True
+                self.queue_status_var.set("✅ Queue模式")
+                self.add_log("🚀 已切換到Queue模式")
+            else:
+                self.add_log("⚠️ 請先啟動Queue服務")
+
+    def show_queue_status(self):
+        """顯示Queue狀態"""
+        if not self.queue_infrastructure:
+            self.add_log("❌ Queue基礎設施未初始化")
+            return
+
+        try:
+            # 顯示基本狀態
+            self.add_log("📊 Queue狀態:")
+            self.add_log(f"   - 初始化狀態: {'✅' if self.queue_infrastructure.initialized else '❌'}")
+            self.add_log(f"   - 運行狀態: {'✅' if self.queue_infrastructure.running else '❌'}")
+            self.add_log(f"   - Queue模式: {'✅' if self.queue_mode_enabled else '❌'}")
+
+            # 嘗試獲取Queue管理器統計
+            if hasattr(self.queue_infrastructure, 'queue_manager') and self.queue_infrastructure.queue_manager:
+                stats = self.queue_infrastructure.queue_manager.stats
+                self.add_log(f"   - Tick接收: {stats.get('tick_received', 0)}")
+                self.add_log(f"   - Tick處理: {stats.get('tick_processed', 0)}")
+                self.add_log(f"   - 佇列錯誤: {stats.get('queue_full_errors', 0)}")
+                self.add_log(f"   - 處理錯誤: {stats.get('processing_errors', 0)}")
+        except Exception as e:
+            self.add_log(f"❌ 獲取Queue狀態錯誤: {e}")
+
+    def process_queue_strategy_data(self, tick_data_dict):
+        """處理來自Queue的策略數據"""
+        try:
+            # 從Queue數據中提取價格和時間
+            price = tick_data_dict.get('corrected_close', 0)
+            formatted_time = tick_data_dict.get('formatted_time', '')
+
+            # 調用現有的策略邏輯 (格式完全相同)
+            if hasattr(self, 'strategy_enabled') and self.strategy_enabled:
+                self.process_strategy_logic_safe(price, formatted_time)
+
+        except Exception as e:
+            # 靜默處理錯誤，不影響Queue處理
+            pass
+
+    def create_status_display_panel(self, parent_frame):
+        """創建狀態顯示面板 - Console版本，避免動態UI更新"""
+        status_frame = ttk.LabelFrame(parent_frame, text="📊 Console控制面板", padding=5)
+        status_frame.pack(fill="x", pady=5)
+
+        # 控制按鈕行
+        control_row = ttk.Frame(status_frame)
+        control_row.pack(fill="x", pady=2)
+
+        # Console控制按鈕
+        self.btn_toggle_console = ttk.Button(control_row, text="🔇 關閉報價Console",
+                                           command=self.toggle_console_quote)
+        self.btn_toggle_console.pack(side="left", padx=5)
+
+        # 說明文字
+        ttk.Label(control_row, text="📊 狀態監控和報價信息請查看VS Code Console輸出",
+                 foreground="blue").pack(side="left", padx=20)
+
+        # 🚨 移除動態更新的UI元素，避免GIL錯誤
+        # self.label_quote_status = ...
+        # self.label_last_update = ...
+
+    def start_status_monitor(self):
+        """啟動狀態監控 - 智能提醒版本"""
+        # 初始化狀態追蹤
+        self.last_status = None
+        self.status_unchanged_count = 0
+
+        def monitor_loop():
+            try:
+                # 檢查報價狀態
+                current_count = getattr(self, 'price_count', 0)
+                previous_status = self.monitoring_stats['quote_status']
+
+                if current_count > self.monitoring_stats['last_quote_count']:
+                    # 有新報價
+                    self.monitoring_stats['quote_status'] = "報價中"
+                    self.monitoring_stats['last_quote_count'] = current_count
+                    new_status = "報價中"
+                    self.status_unchanged_count = 0
+                else:
+                    # 沒有新報價
+                    self.monitoring_stats['quote_status'] = "報價中斷"
+                    new_status = "報價中斷"
+                    self.status_unchanged_count += 1
+
+                # 🎯 智能提醒邏輯
+                should_notify = False
+
+                if previous_status != new_status:
+                    # 狀態變化時一定提醒
+                    should_notify = True
+                    if new_status == "報價中":
+                        status_msg = "✅ [MONITOR] 報價恢復正常"
+                    else:
+                        status_msg = "❌ [MONITOR] 報價中斷"
+                elif new_status == "報價中斷":
+                    # 報價中斷時，每30秒提醒一次 (10次檢查 = 30秒)
+                    if self.status_unchanged_count % 10 == 0:
+                        should_notify = True
+                        status_msg = f"⚠️ [MONITOR] 報價持續中斷 ({self.status_unchanged_count * 3}秒)"
+
+                # 只在需要時輸出
+                if should_notify:
+                    timestamp = time.strftime("%H:%M:%S")
+                    print(f"{status_msg} (檢查時間: {timestamp})")
+
+            except Exception as e:
+                print(f"❌ [MONITOR] 狀態監控錯誤: {e}")
+
+            # 排程下一次檢查（3秒間隔）
+            self.root.after(3000, monitor_loop)
+
+        # 啟動監控
+        print("🎯 [MONITOR] 狀態監聽器啟動 - 只在狀態變化或中斷時提醒")
+        monitor_loop()
+
+    def toggle_console_quote(self):
+        """切換報價Console輸出"""
+        try:
+            self.console_quote_enabled = not self.console_quote_enabled
+
+            if self.console_quote_enabled:
+                self.btn_toggle_console.config(text="🔇 關閉報價Console")
+                print("✅ [CONSOLE] 報價Console輸出已啟用")
+                print("💡 [CONSOLE] 報價數據將顯示在Console中")
+            else:
+                self.btn_toggle_console.config(text="🔊 開啟報價Console")
+                print("🔇 [CONSOLE] 報價Console輸出已關閉")
+                print("💡 [CONSOLE] 報價仍在處理，但不顯示在Console中")
+                print("📊 [CONSOLE] 狀態監聽器仍會檢測報價狀態")
+
+        except Exception as e:
+            print(f"❌ [CONSOLE] 切換Console輸出錯誤: {e}")
+
     def run(self):
         """執行應用程式"""
         self.add_log("🚀 群益簡化整合交易系統啟動")
         self.add_log(f"📋 期貨帳號: {self.config['FUTURES_ACCOUNT']}")
         self.add_log(f"📋 預設商品: {self.config['DEFAULT_PRODUCT']}")
         self.add_log("💡 請點擊「登入」開始使用")
-        
+
+        # 顯示Queue架構狀態
+        if QUEUE_INFRASTRUCTURE_AVAILABLE:
+            self.add_log("✅ Queue基礎設施可用，可使用Queue模式避免GIL錯誤")
+        else:
+            self.add_log("⚠️ Queue基礎設施不可用，將使用傳統模式")
+
         self.root.mainloop()
 
 if __name__ == "__main__":

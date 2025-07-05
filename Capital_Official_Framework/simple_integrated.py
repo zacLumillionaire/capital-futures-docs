@@ -134,6 +134,7 @@ class SimpleIntegratedApp:
         self.multi_group_prepared = False  # 策略是否已準備
         self.multi_group_auto_start = False  # 是否自動啟動
         self.multi_group_running = False  # 策略是否運行中
+        self.multi_group_monitoring_ready = False  # 監控準備狀態（等待突破信號）
         self._auto_start_triggered = False  # 防止重複觸發自動啟動
 
         if MULTI_GROUP_AVAILABLE:
@@ -231,11 +232,53 @@ class SimpleIntegratedApp:
             print("[VIRTUAL_REAL] 🔄 預設模式: 虛擬模式 (安全)")
             print("[VIRTUAL_REAL] 📊 統一回報追蹤系統已就緒")
 
+            # 🔧 更新多組策略管理器的下單組件
+            self._update_multi_group_order_components()
+
         except Exception as e:
             print(f"[VIRTUAL_REAL] ❌ 虛實單整合系統初始化失敗: {e}")
             self.virtual_real_system_enabled = False
             self.virtual_real_order_manager = None
             self.unified_order_tracker = None
+
+    def _update_multi_group_order_components(self):
+        """更新多組策略管理器的下單組件"""
+        try:
+            if (self.multi_group_enabled and
+                self.multi_group_position_manager and
+                self.virtual_real_order_manager and
+                self.unified_order_tracker):
+
+                # 設置下單組件
+                self.multi_group_position_manager.order_manager = self.virtual_real_order_manager
+                self.multi_group_position_manager.order_tracker = self.unified_order_tracker
+
+                # 🔧 新增：確保總量追蹤管理器已初始化
+                if not hasattr(self.multi_group_position_manager, 'total_lot_manager') or \
+                   not self.multi_group_position_manager.total_lot_manager:
+                    from total_lot_manager import TotalLotManager
+                    self.multi_group_position_manager.total_lot_manager = TotalLotManager()
+                    print("[MULTI_GROUP] ✅ 總量追蹤管理器初始化完成")
+
+                # 🔧 保留：確保簡化追蹤器已初始化 (向後相容)
+                if not hasattr(self.multi_group_position_manager, 'simplified_tracker') or \
+                   not self.multi_group_position_manager.simplified_tracker:
+                    from simplified_order_tracker import SimplifiedOrderTracker
+                    self.multi_group_position_manager.simplified_tracker = SimplifiedOrderTracker()
+                    print("[MULTI_GROUP] ✅ 簡化追蹤器初始化完成")
+
+                # 重新設置回調機制
+                if hasattr(self.multi_group_position_manager, '_setup_order_callbacks'):
+                    self.multi_group_position_manager._setup_order_callbacks()
+                if hasattr(self.multi_group_position_manager, '_setup_total_lot_manager_callbacks'):
+                    self.multi_group_position_manager._setup_total_lot_manager_callbacks()
+                if hasattr(self.multi_group_position_manager, '_setup_simplified_tracker_callbacks'):
+                    self.multi_group_position_manager._setup_simplified_tracker_callbacks()
+
+                print("[MULTI_GROUP] ✅ 下單組件整合完成")
+
+        except Exception as e:
+            print(f"[MULTI_GROUP] ❌ 下單組件整合失敗: {e}")
 
     def create_widgets(self):
         """建立使用者介面"""
@@ -547,6 +590,26 @@ class SimpleIntegratedApp:
                                     self.parent.unified_order_tracker.process_real_order_reply(bstrData)
                                 except Exception as tracker_error:
                                     print(f"❌ [REPLY] 統一追蹤器處理失敗: {tracker_error}")
+
+                            # 🔧 新增：總量追蹤管理器整合
+                            if hasattr(self.parent, 'multi_group_position_manager') and self.parent.multi_group_position_manager:
+                                try:
+                                    # 檢查是否有總量追蹤管理器
+                                    if hasattr(self.parent.multi_group_position_manager, 'total_lot_manager') and \
+                                       self.parent.multi_group_position_manager.total_lot_manager:
+                                        # 將完整的回報數據傳遞給總量追蹤管理器
+                                        self.parent.multi_group_position_manager.total_lot_manager.process_order_reply(bstrData)
+                                except Exception as tracker_error:
+                                    print(f"❌ [REPLY] 總量追蹤管理器處理失敗: {tracker_error}")
+
+                                try:
+                                    # 🔧 保留：簡化追蹤器整合 (向後相容)
+                                    if hasattr(self.parent.multi_group_position_manager, 'simplified_tracker') and \
+                                       self.parent.multi_group_position_manager.simplified_tracker:
+                                        # 將完整的回報數據傳遞給簡化追蹤器
+                                        self.parent.multi_group_position_manager.simplified_tracker.process_order_reply(bstrData)
+                                except Exception as tracker_error:
+                                    print(f"❌ [REPLY] 簡化追蹤器處理失敗: {tracker_error}")
 
                     except Exception as e:
                         print(f"❌ [REPLY] OnNewData處理錯誤: {e}")
@@ -1682,10 +1745,168 @@ class SimpleIntegratedApp:
             if self.waiting_for_entry and self.breakout_direction and not self.current_position:
                 direction = self.breakout_direction
                 self.waiting_for_entry = False  # 重置等待狀態
-                self.enter_position_safe(direction, price, time_str)
+
+                # 🎯 多組策略進場邏輯
+                if self.multi_group_enabled and self.multi_group_running and self.multi_group_position_manager:
+                    self.execute_multi_group_entry(direction, price, time_str)
+                else:
+                    # 單一策略進場邏輯
+                    self.enter_position_safe(direction, price, time_str)
 
         except Exception as e:
             pass
+
+    def execute_multi_group_entry(self, direction, price, time_str):
+        """執行多組策略進場"""
+        try:
+            # 🎯 檢查是否為監控準備狀態（需要先創建策略組）
+            if hasattr(self, 'multi_group_monitoring_ready') and self.multi_group_monitoring_ready:
+                # 根據實際突破方向創建策略組
+                self.create_multi_group_strategy_with_direction(direction, time_str)
+                self.multi_group_monitoring_ready = False  # 重置監控準備狀態
+
+            # 獲取所有等待中的策略組
+            active_groups = self.multi_group_position_manager.strategy_config.get_active_groups()
+            from multi_group_config import GroupStatus
+            waiting_groups = [g for g in active_groups if g.status == GroupStatus.WAITING]
+
+            if not waiting_groups:
+                print("⚠️ [MULTI_GROUP] 沒有等待中的策略組")
+                return
+
+            print(f"🎯 [MULTI_GROUP] 開始執行 {len(waiting_groups)} 組進場")
+
+            # 逐組執行進場
+            success_count = 0
+            for group_config in waiting_groups:
+                # 查找對應的資料庫組ID
+                group_db_id = self._find_group_db_id(group_config.group_id)
+                if group_db_id:
+                    success = self.multi_group_position_manager.execute_group_entry(
+                        group_db_id=group_db_id,
+                        actual_price=price,
+                        actual_time=time_str
+                    )
+
+                    if success:
+                        success_count += 1
+                        print(f"✅ [MULTI_GROUP] 組別 {group_config.group_id} 進場成功")
+
+                        # 🔧 修復：execute_group_entry() 已經執行了下單，不需要重複執行
+                        # self._execute_multi_group_orders(group_config, direction, price)  # ← 移除重複下單
+                    else:
+                        print(f"❌ [MULTI_GROUP] 組別 {group_config.group_id} 進場失敗")
+                else:
+                    print(f"❌ [MULTI_GROUP] 找不到組別 {group_config.group_id} 的資料庫ID")
+
+            print(f"🎯 [MULTI_GROUP] 進場完成: {success_count}/{len(waiting_groups)} 組成功")
+
+            if self.multi_group_logger:
+                self.multi_group_logger.strategy_info(f"多組進場執行: {success_count}/{len(waiting_groups)} 組成功")
+
+        except Exception as e:
+            print(f"❌ [MULTI_GROUP] 多組進場執行失敗: {e}")
+            if self.multi_group_logger:
+                self.multi_group_logger.system_error(f"多組進場執行失敗: {e}")
+
+    def _find_group_db_id(self, group_id):
+        """查找組別的資料庫ID"""
+        try:
+            # 獲取今日策略組
+            today_groups = self.multi_group_position_manager.db_manager.get_today_strategy_groups()
+            for group in today_groups:
+                if group['group_id'] == group_id:
+                    return group['id']
+            return None
+        except Exception as e:
+            print(f"❌ [MULTI_GROUP] 查找組別DB ID失敗: {e}")
+            return None
+
+    def _execute_multi_group_orders(self, group_config, direction, price):
+        """執行多組策略的實際下單"""
+        try:
+            # 為該組的每口執行下單
+            for lot_rule in group_config.lot_rules:
+                if hasattr(self, 'virtual_real_order_manager') and self.virtual_real_order_manager:
+                    # 🎯 執行下單 - 明確指定1口，避免數量混亂
+                    order_result = self.virtual_real_order_manager.execute_strategy_order(
+                        direction=direction,
+                        quantity=1,  # 🔧 強制每筆1口FOK
+                        signal_source=f"multi_group_lot_{lot_rule.lot_id}"
+                    )
+
+                    if order_result.success:
+                        mode_desc = "實單" if order_result.mode == "real" else "虛擬"
+                        print(f"🚀 [MULTI_GROUP] 組別{group_config.group_id} 第{lot_rule.lot_id}口 {mode_desc}下單成功 - ID:{order_result.order_id}")
+
+                        # 註冊到統一回報追蹤器
+                        if hasattr(self, 'unified_order_tracker') and self.unified_order_tracker:
+                            current_product = self.virtual_real_order_manager.get_current_product()
+                            if current_product:
+                                ask1_price = self.virtual_real_order_manager.get_ask1_price(current_product)
+
+                                # 處理API序號
+                                api_seq_no = None
+                                if order_result.mode == "real" and order_result.api_result:
+                                    if isinstance(order_result.api_result, tuple) and len(order_result.api_result) >= 1:
+                                        api_seq_no = str(order_result.api_result[0])  # 只取第一個元素
+                                    else:
+                                        api_seq_no = str(order_result.api_result)
+
+                                self.unified_order_tracker.register_order(
+                                    order_id=order_result.order_id,
+                                    product=current_product,
+                                    direction=direction,
+                                    quantity=1,  # 🔧 多組策略每筆都是1口
+                                    price=ask1_price or price,
+                                    is_virtual=(order_result.mode == "virtual"),
+                                    signal_source=f"multi_group_G{group_config.group_id}_L{lot_rule.lot_id}",
+                                    api_seq_no=api_seq_no
+                                )
+                    else:
+                        print(f"❌ [MULTI_GROUP] 組別{group_config.group_id} 第{lot_rule.lot_id}口下單失敗: {order_result.error}")
+                else:
+                    print(f"💡 [MULTI_GROUP] 組別{group_config.group_id} 第{lot_rule.lot_id}口策略信號 (未啟用下單系統)")
+
+        except Exception as e:
+            print(f"❌ [MULTI_GROUP] 多組下單執行失敗: {e}")
+
+    def create_multi_group_strategy_with_direction(self, direction, time_str):
+        """根據實際突破方向創建策略組"""
+        try:
+            print(f"🎯 [MULTI_GROUP] 根據突破方向創建策略組: {direction}")
+
+            # 創建進場信號
+            group_ids = self.multi_group_position_manager.create_entry_signal(
+                direction=direction,  # 🎯 使用實際突破方向
+                signal_time=time_str,
+                range_high=self.range_high,
+                range_low=self.range_low
+            )
+
+            if group_ids:
+                # 移除動態UI更新，改為Console輸出
+                # self.multi_group_status_label.config(text="🎯 運行中", fg="green")
+                # self.multi_group_detail_label.config(text=f"已創建{len(group_ids)}個{direction}策略組", fg="green")
+
+                if self.multi_group_logger:
+                    self.multi_group_logger.strategy_info(
+                        f"多組策略啟動: {len(group_ids)}組 {direction}, 區間{self.range_low}-{self.range_high}"
+                    )
+
+                print(f"✅ [MULTI_GROUP] 已創建 {len(group_ids)} 個{direction}策略組")
+                self.add_log(f"✅ 多組策略已啟動: {len(group_ids)}組 {direction}")
+
+                return True
+            else:
+                print("❌ [MULTI_GROUP] 創建策略組失敗")
+                return False
+
+        except Exception as e:
+            print(f"❌ [MULTI_GROUP] 創建策略組失敗: {e}")
+            if self.multi_group_logger:
+                self.multi_group_logger.system_error(f"創建策略組失敗: {e}")
+            return False
 
     def enter_position_safe(self, direction, price, time_str):
         """安全的建倉處理 - 只在建倉時更新UI"""
@@ -1712,44 +1933,55 @@ class SimpleIntegratedApp:
             print(f"✅ [STRATEGY] {direction}突破進場 @{price:.0f}")
             # UI更新會在背景線程中引起GIL錯誤，已移除
 
-            # 🚀 Stage2 虛實單整合下單邏輯
+            # 🚀 Stage2 虛實單整合下單邏輯 - 多筆1口策略
             if hasattr(self, 'virtual_real_order_manager') and self.virtual_real_order_manager:
                 try:
-                    # 執行策略自動下單
-                    order_result = self.virtual_real_order_manager.execute_strategy_order(
-                        direction=direction,
-                        signal_source="strategy_breakout"
-                    )
+                    # 🎯 取得策略配置的總口數
+                    total_lots = self.virtual_real_order_manager.get_strategy_quantity()
 
-                    # 根據下單結果更新狀態和日誌
-                    if order_result.success:
-                        mode_desc = "實單" if order_result.mode == "real" else "虛擬"
-                        self.add_strategy_log(f"🚀 {direction} {mode_desc}下單成功 - ID:{order_result.order_id}")
+                    # 🔧 執行多筆1口下單（統一採用多筆1口策略）
+                    success_count = 0
+                    for lot_id in range(1, total_lots + 1):
+                        order_result = self.virtual_real_order_manager.execute_strategy_order(
+                            direction=direction,
+                            quantity=1,  # 🎯 強制每筆1口FOK
+                            signal_source=f"single_strategy_lot_{lot_id}"
+                        )
 
-                        # 註冊到統一回報追蹤器
-                        if hasattr(self, 'unified_order_tracker') and self.unified_order_tracker:
-                            current_product = self.virtual_real_order_manager.get_current_product()
-                            if current_product:  # 確保商品不為None
-                                ask1_price = self.virtual_real_order_manager.get_ask1_price(current_product)
-                                quantity = self.virtual_real_order_manager.get_strategy_quantity()
+                        if order_result.success:
+                            success_count += 1
+                            mode_desc = "實單" if order_result.mode == "real" else "虛擬"
+                            print(f"🚀 [STRATEGY] 第{lot_id}口 {mode_desc}下單成功 - ID:{order_result.order_id}")
 
-                                # 處理API序號
-                                api_seq_no = None
-                                if order_result.mode == "real" and order_result.api_result:
-                                    api_seq_no = str(order_result.api_result)
+                            # 註冊到統一回報追蹤器
+                            if hasattr(self, 'unified_order_tracker') and self.unified_order_tracker:
+                                current_product = self.virtual_real_order_manager.get_current_product()
+                                if current_product:
+                                    ask1_price = self.virtual_real_order_manager.get_ask1_price(current_product)
 
-                                self.unified_order_tracker.register_order(
-                                    order_id=order_result.order_id,
-                                    product=current_product,
-                                    direction=direction,
-                                    quantity=quantity,
-                                    price=ask1_price or price,
-                                    is_virtual=(order_result.mode == "virtual"),
-                                    signal_source="strategy_breakout",
-                                    api_seq_no=api_seq_no
-                                )
+                                    # 處理API序號
+                                    api_seq_no = None
+                                    if order_result.mode == "real" and order_result.api_result:
+                                        api_seq_no = str(order_result.api_result)
+
+                                    self.unified_order_tracker.register_order(
+                                        order_id=order_result.order_id,
+                                        product=current_product,
+                                        direction=direction,
+                                        quantity=1,  # 🎯 每筆都是1口
+                                        price=ask1_price or price,
+                                        is_virtual=(order_result.mode == "virtual"),
+                                        signal_source=f"single_strategy_lot_{lot_id}",
+                                        api_seq_no=api_seq_no
+                                    )
+                        else:
+                            print(f"❌ [STRATEGY] 第{lot_id}口下單失敗: {order_result.error}")
+
+                    # 更新策略日誌
+                    if success_count > 0:
+                        self.add_strategy_log(f"🚀 {direction} 下單完成: {success_count}/{total_lots} 口成功")
                     else:
-                        self.add_strategy_log(f"❌ {direction} 下單失敗: {order_result.error}")
+                        self.add_strategy_log(f"❌ {direction} 下單失敗: 所有口數都失敗")
 
                 except Exception as order_error:
                     self.add_strategy_log(f"❌ 下單系統錯誤: {order_error}")
@@ -2339,7 +2571,7 @@ class SimpleIntegratedApp:
             presets = create_preset_configs()
             default_config = presets["平衡配置 (2口×2組)"]
 
-            # 初始化部位管理器
+            # 初始化部位管理器（暫時不設置下單組件，稍後設置）
             self.multi_group_position_manager = MultiGroupPositionManager(
                 self.multi_group_db_manager,
                 default_config
@@ -2520,39 +2752,31 @@ class SimpleIntegratedApp:
                 self.add_log("⚠️ 多組策略已在運行中")
                 return
 
-            # 創建進場信號
-            direction = "LONG"  # 這裡可以根據突破方向動態設定
-            signal_time = time.strftime("%H:%M:%S")
+            # 🎯 手動啟動時使用預設方向，等待實際突破時動態調整
+            # 設定為監控準備狀態，不立即創建策略組
+            self.multi_group_monitoring_ready = True
 
-            group_ids = self.multi_group_position_manager.create_entry_signal(
-                direction=direction,
-                signal_time=signal_time,
-                range_high=self.range_high,
-                range_low=self.range_low
-            )
+            # 更新運行狀態（監控狀態）
+            self.multi_group_running = True
+
+            # 模擬創建成功的group_ids（實際創建將在突破時進行）
+            group_ids = [1]  # 假設會創建組別，實際數量在突破時確定
 
             if group_ids:
-                # 更新運行狀態
-                self.multi_group_running = True
-
-                # 更新UI狀態
+                # 更新UI狀態 (只修改按鈕狀態，避免GIL風險)
                 self.btn_prepare_multi_group.config(state="disabled")
                 self.btn_start_multi_group.config(state="disabled")
                 self.btn_stop_multi_group.config(state="normal")
-                self.multi_group_status_label.config(text="🎯 運行中", fg="green")
-                self.multi_group_detail_label.config(
-                    text=f"已創建{len(group_ids)}個策略組，監控中...",
-                    fg="green"
-                )
+                # 移除動態標籤更新，改為Console輸出
 
                 if self.multi_group_logger:
                     self.multi_group_logger.strategy_info(
-                        f"多組策略啟動: {len(group_ids)}組, 區間{self.range_low}-{self.range_high}"
+                        f"多組策略監控啟動, 區間{self.range_low}-{self.range_high}"
                     )
 
                 # Console輸出啟動結果
-                print(f"✅ [STRATEGY] 多組策略已啟動，創建了 {len(group_ids)} 個策略組")
-                self.add_log(f"✅ 多組策略已啟動: {len(group_ids)}組")
+                print(f"🎯 [STRATEGY] 多組策略監控已啟動，等待突破信號")
+                self.add_log(f"🎯 多組策略監控已啟動")
 
                 # 標記為自動啟動
                 if self.multi_group_auto_start:
@@ -2580,6 +2804,7 @@ class SimpleIntegratedApp:
             # 重置狀態變數
             self.multi_group_running = False
             self.multi_group_prepared = False
+            self.multi_group_monitoring_ready = False  # 重置監控準備狀態
             self._auto_start_triggered = False  # 重置觸發標記
             if hasattr(self, '_auto_started'):
                 delattr(self, '_auto_started')
@@ -2648,19 +2873,16 @@ class SimpleIntegratedApp:
 
                 if self.multi_group_logger:
                     self.multi_group_logger.strategy_info(
-                        f"區間計算完成，自動啟動多組策略: 區間{self.range_low}-{self.range_high} (頻率:{freq_setting})"
+                        f"區間計算完成，準備多組策略監控: 區間{self.range_low}-{self.range_high} (頻率:{freq_setting})"
                     )
 
-                # 自動啟動策略
-                self.start_multi_group_strategy()
+                # 🎯 新邏輯：準備多組策略監控，但不立即創建策略組
+                self.prepare_multi_group_monitoring()
 
-                # 更新狀態顯示
-                self.multi_group_detail_label.config(
-                    text="已自動啟動，監控中...",
-                    fg="green"
-                )
+                # 移除動態UI更新，改為Console輸出
+                # self.multi_group_detail_label.config(text="等待突破信號...", fg="orange")
 
-                print(f"🤖 [AUTO] 區間計算完成，自動啟動多組策略 (頻率:{freq_setting})")
+                print(f"🤖 [AUTO] 區間計算完成，準備多組策略監控 (頻率:{freq_setting})")
 
         except Exception as e:
             # 如果啟動失敗，重置觸發標記
@@ -2668,6 +2890,30 @@ class SimpleIntegratedApp:
             if self.multi_group_logger:
                 self.multi_group_logger.system_error(f"自動啟動檢查失敗: {e}")
             print(f"❌ [AUTO] 自動啟動檢查失敗: {e}")
+
+    def prepare_multi_group_monitoring(self):
+        """準備多組策略監控（不立即創建策略組）"""
+        try:
+            # 設定多組策略為監控狀態
+            self.multi_group_running = True
+            self.multi_group_monitoring_ready = True  # 新增監控準備狀態
+
+            # 更新UI狀態 (只修改按鈕狀態，避免GIL風險)
+            self.btn_prepare_multi_group.config(state="disabled")
+            self.btn_start_multi_group.config(state="disabled")
+            self.btn_stop_multi_group.config(state="normal")
+            # 移除動態標籤更新，改為Console輸出
+
+            if self.multi_group_logger:
+                self.multi_group_logger.strategy_info("多組策略監控已準備，等待突破信號")
+
+            print("🎯 [STRATEGY] 多組策略監控已準備，等待突破信號")
+            self.add_log("🎯 多組策略監控已準備")
+
+        except Exception as e:
+            print(f"❌ [STRATEGY] 準備多組策略監控失敗: {e}")
+            if self.multi_group_logger:
+                self.multi_group_logger.system_error(f"準備監控失敗: {e}")
 
     def on_multi_group_frequency_changed(self, event=None):
         """多組策略執行頻率變更事件"""

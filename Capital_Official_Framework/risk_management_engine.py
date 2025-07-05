@@ -47,11 +47,23 @@ class RiskManagementEngine:
         
         try:
             active_positions = self.db_manager.get_all_active_positions()
-            self.logger.debug(f"檢查 {len(active_positions)} 個活躍部位的出場條件")
+
+            # 🔧 過濾掉無效部位（PENDING狀態或entry_price為None的部位）
+            valid_positions = []
+            for position in active_positions:
+                if (position.get('entry_price') is not None and
+                    position.get('order_status') == 'FILLED'):
+                    valid_positions.append(position)
+                else:
+                    self.logger.debug(f"跳過無效部位: ID={position.get('id')}, "
+                                    f"entry_price={position.get('entry_price')}, "
+                                    f"order_status={position.get('order_status')}")
+
+            self.logger.debug(f"檢查 {len(valid_positions)}/{len(active_positions)} 個有效部位的出場條件")
             
             # 按組分組處理
             groups = {}
-            for position in active_positions:
+            for position in valid_positions:
                 group_id = position['group_id']
                 if group_id not in groups:
                     groups[group_id] = []
@@ -282,6 +294,11 @@ class RiskManagementEngine:
     def _update_position_risk_state(self, position: Dict, current_price: float, current_time: str):
         """更新部位風險管理狀態"""
         try:
+            # 🔧 檢查必要欄位
+            if position.get('entry_price') is None:
+                self.logger.debug(f"跳過部位{position.get('id')}風險狀態更新: entry_price為None")
+                return
+
             direction = position['direction']
             current_peak = position['peak_price'] or position['entry_price']
             

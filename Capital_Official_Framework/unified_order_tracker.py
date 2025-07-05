@@ -75,10 +75,14 @@ class UnifiedOrderTracker:
         # 訂單追蹤
         self.tracked_orders = {}  # {order_id: OrderInfo}
         self.api_seq_mapping = {} # {api_seq_no: order_id} API序號對應
+
+        # 🔧 新增：時間窗口映射 (用於群益API序號不匹配的情況)
+        self.pending_orders = {}   # {order_id: {'time': timestamp, 'price': price, 'direction': direction, 'product': product}}
         
         # 回調函數
         self.order_update_callbacks = []  # 訂單更新回調
         self.fill_callbacks = []          # 成交回調
+        self.cancel_callbacks = []        # 🔧 新增：取消回調
         
         # 統計數據
         self.total_tracked = 0
@@ -134,7 +138,18 @@ class UnifiedOrderTracker:
                 # 建立API序號對應 (實際訂單)
                 if api_seq_no:
                     self.api_seq_mapping[api_seq_no] = order_id
-                
+
+                # 🔧 新增：建立時間窗口映射 (用於群益API序號不匹配的情況)
+                if not is_virtual:
+                    import time
+                    self.pending_orders[order_id] = {
+                        'time': time.time(),
+                        'price': price,
+                        'direction': direction,
+                        'product': product,
+                        'quantity': quantity
+                    }
+
                 # 更新統計
                 self.total_tracked += 1
                 if is_virtual:
@@ -173,6 +188,8 @@ class UnifiedOrderTracker:
             # 解析回報數據
             fields = reply_data.split(',')
             if len(fields) < 48:
+                if self.console_enabled:
+                    print(f"[ORDER_TRACKER] ⚠️ 回報欄位不足: {len(fields)} < 48")
                 return False
             
             # 提取關鍵欄位 (根據您的OnNewData格式)
@@ -181,15 +198,32 @@ class UnifiedOrderTracker:
             stock_no = fields[8] if len(fields) > 8 else ""        # 商品代號
             price = float(fields[11]) if fields[11] else 0         # 價格
             qty = int(fields[20]) if fields[20] else 0             # 數量
-            seq_no = fields[47] if len(fields) > 47 else ""        # 序號
-            
-            # 根據API序號找到對應訂單
+            key_no = fields[0] if len(fields) > 0 else ""           # 委託序號（KeyNo）
+            seq_no = fields[47] if len(fields) > 47 else ""         # 序號（SeqNo）
+
+            # 🔧 修復：使用KeyNo作為主要識別，SeqNo作為備用
+            primary_id = key_no if key_no else seq_no
+
+            # 根據委託序號找到對應訂單
             with self.data_lock:
-                if seq_no not in self.api_seq_mapping:
+                if self.console_enabled:
+                    print(f"[ORDER_TRACKER] 🔍 處理回報: Type={order_type}, KeyNo={key_no}, SeqNo={seq_no}")
+                    print(f"[ORDER_TRACKER] 🔍 已追蹤序號: {list(self.api_seq_mapping.keys())}")
+
+                # 🔧 修復：先嘗試KeyNo，再嘗試SeqNo，最後嘗試API序號
+                order_id = None
+                if key_no and key_no in self.api_seq_mapping:
+                    order_id = self.api_seq_mapping[key_no]
+                elif seq_no and seq_no in self.api_seq_mapping:
+                    order_id = self.api_seq_mapping[seq_no]
+                elif primary_id and primary_id in self.api_seq_mapping:
+                    order_id = self.api_seq_mapping[primary_id]
+
+                if not order_id:
                     # 不是我們追蹤的訂單，忽略
+                    if self.console_enabled:
+                        print(f"[ORDER_TRACKER] ⚠️ 序號KeyNo={key_no}, SeqNo={seq_no}都不在追蹤列表中")
                     return False
-                
-                order_id = self.api_seq_mapping[seq_no]
                 if order_id not in self.tracked_orders:
                     return False
                 
@@ -277,10 +311,13 @@ class UnifiedOrderTracker:
         """處理取消回報"""
         order_info.status = OrderStatus.CANCELLED
         self.cancelled_orders += 1
-        
+
         if self.console_enabled:
             order_type_desc = "虛擬" if order_info.order_type == OrderType.VIRTUAL else "實際"
             print(f"[ORDER_TRACKER] 🗑️ {order_type_desc}取消: {order_info.order_id}")
+
+        # 🔧 新增：觸發取消回調
+        self._trigger_cancel_callbacks(order_info)
     
     def _process_reject_reply(self, order_info: OrderInfo, error_msg: str):
         """處理拒絕回報"""
@@ -317,6 +354,19 @@ class UnifiedOrderTracker:
     def add_fill_callback(self, callback: Callable[[OrderInfo], None]):
         """添加成交回調函數"""
         self.fill_callbacks.append(callback)
+
+    def add_cancel_callback(self, callback: Callable[[OrderInfo], None]):
+        """添加取消回調函數"""
+        self.cancel_callbacks.append(callback)
+
+    def _trigger_cancel_callbacks(self, order_info: OrderInfo):
+        """觸發取消回調"""
+        for callback in self.cancel_callbacks:
+            try:
+                callback(order_info)
+            except Exception as e:
+                if self.console_enabled:
+                    print(f"[ORDER_TRACKER] ⚠️ 取消回調失敗: {e}")
     
     def get_order_status(self, order_id: str) -> Optional[OrderInfo]:
         """取得訂單狀態"""

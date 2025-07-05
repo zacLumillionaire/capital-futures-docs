@@ -59,7 +59,7 @@ class MultiGroupDatabaseManager:
                         group_id INTEGER NOT NULL,
                         lot_id INTEGER NOT NULL,
                         direction TEXT NOT NULL,
-                        entry_price REAL NOT NULL,
+                        entry_price REAL,
                         entry_time TEXT NOT NULL,
                         exit_price REAL,
                         exit_time TEXT,
@@ -68,14 +68,25 @@ class MultiGroupDatabaseManager:
                         pnl_amount REAL,
                         rule_config TEXT,
                         status TEXT DEFAULT 'ACTIVE',
+                        order_id TEXT,
+                        api_seq_no TEXT,
+                        order_status TEXT DEFAULT 'PENDING',
+                        retry_count INTEGER DEFAULT 0,
+                        original_price REAL,
+                        max_slippage_points INTEGER DEFAULT 5,
+                        last_retry_time TEXT,
+                        retry_reason TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        
+
                         FOREIGN KEY (group_id) REFERENCES strategy_groups(id),
                         CHECK(direction IN ('LONG', 'SHORT')),
-                        CHECK(status IN ('ACTIVE', 'EXITED')),
+                        CHECK(status IN ('ACTIVE', 'EXITED', 'FAILED')),
+                        CHECK(order_status IN ('PENDING', 'FILLED', 'CANCELLED', 'REJECTED') OR order_status IS NULL),
                         CHECK(lot_id BETWEEN 1 AND 3),
-                        CHECK(exit_reason IN ('移動停利', '保護性停損', '初始停損', '手動出場') OR exit_reason IS NULL)
+                        CHECK(exit_reason IN ('移動停利', '保護性停損', '初始停損', '手動出場', 'FOK失敗', '下單失敗') OR exit_reason IS NULL),
+                        CHECK(retry_count >= 0 AND retry_count <= 5),
+                        CHECK(max_slippage_points > 0)
                     )
                 ''')
                 
@@ -93,7 +104,7 @@ class MultiGroupDatabaseManager:
                         previous_stop_loss REAL,
                         
                         FOREIGN KEY (position_id) REFERENCES position_records(id),
-                        CHECK(update_reason IN ('價格更新', '移動停利啟動', '保護性停損更新', '初始化') OR update_reason IS NULL)
+                        CHECK(update_reason IN ('價格更新', '移動停利啟動', '保護性停損更新', '初始化', '成交初始化') OR update_reason IS NULL)
                     )
                 ''')
                 
@@ -116,18 +127,138 @@ class MultiGroupDatabaseManager:
                     )
                 ''')
                 
+                # 檢查並升級現有資料庫結構
+                self._upgrade_database_schema(cursor)
+
                 # 創建性能優化索引
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_strategy_groups_date_status ON strategy_groups(date, status)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_position_records_group_status ON position_records(group_id, status)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_position_records_order_id ON position_records(order_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_position_records_api_seq_no ON position_records(api_seq_no)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_risk_states_position_update ON risk_management_states(position_id, last_update_time)')
-                
+
                 conn.commit()
                 logger.info("✅ 多組策略資料庫表結構創建完成")
                 
         except Exception as e:
             logger.error(f"❌ 資料庫初始化失敗: {e}")
             raise
-    
+
+    def _upgrade_database_schema(self, cursor):
+        """升級資料庫結構以支援訂單追蹤"""
+        try:
+            # 檢查是否需要添加新欄位
+            cursor.execute("PRAGMA table_info(position_records)")
+            columns = [column[1] for column in cursor.fetchall()]
+
+            # 添加 order_id 欄位
+            if 'order_id' not in columns:
+                cursor.execute('ALTER TABLE position_records ADD COLUMN order_id TEXT')
+                logger.info("✅ 添加 order_id 欄位")
+
+            # 添加 api_seq_no 欄位
+            if 'api_seq_no' not in columns:
+                cursor.execute('ALTER TABLE position_records ADD COLUMN api_seq_no TEXT')
+                logger.info("✅ 添加 api_seq_no 欄位")
+
+            # 添加 order_status 欄位
+            if 'order_status' not in columns:
+                cursor.execute('ALTER TABLE position_records ADD COLUMN order_status TEXT DEFAULT "PENDING"')
+                logger.info("✅ 添加 order_status 欄位")
+
+            # 檢查並修復 entry_price 的 NOT NULL 約束
+            self._fix_entry_price_constraint(cursor)
+
+            logger.info("✅ 資料庫結構升級完成")
+
+        except Exception as e:
+            logger.error(f"❌ 資料庫升級失敗: {e}")
+            # 不拋出異常，讓系統繼續運行
+
+    def _fix_entry_price_constraint(self, cursor):
+        """修復 entry_price 的 NOT NULL 約束問題"""
+        try:
+            # 檢查表結構中是否有 NOT NULL 約束
+            cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='position_records'")
+            table_sql = cursor.fetchone()
+
+            if table_sql and 'entry_price REAL NOT NULL' in table_sql[0]:
+                logger.info("🔧 檢測到舊的 entry_price NOT NULL 約束，開始修復...")
+
+                # 重建表結構（移除 NOT NULL 約束）
+                self._rebuild_position_records_table(cursor)
+                logger.info("✅ entry_price 約束修復完成")
+            else:
+                logger.info("✅ entry_price 約束已正確（允許 NULL）")
+
+        except Exception as e:
+            logger.error(f"❌ 修復 entry_price 約束失敗: {e}")
+
+    def _rebuild_position_records_table(self, cursor):
+        """重建 position_records 表以移除 entry_price 的 NOT NULL 約束"""
+        try:
+            # 1. 備份現有數據
+            cursor.execute('''
+                CREATE TEMPORARY TABLE position_records_backup AS
+                SELECT * FROM position_records
+            ''')
+
+            # 2. 刪除舊表
+            cursor.execute('DROP TABLE position_records')
+
+            # 3. 創建新表（正確的結構）
+            cursor.execute('''
+                CREATE TABLE position_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id INTEGER NOT NULL,
+                    lot_id INTEGER NOT NULL,
+                    direction TEXT NOT NULL,
+                    entry_price REAL,
+                    entry_time TEXT NOT NULL,
+                    exit_price REAL,
+                    exit_time TEXT,
+                    exit_reason TEXT,
+                    pnl REAL,
+                    pnl_amount REAL,
+                    rule_config TEXT,
+                    status TEXT DEFAULT 'ACTIVE',
+                    order_id TEXT,
+                    api_seq_no TEXT,
+                    order_status TEXT DEFAULT 'PENDING',
+                    retry_count INTEGER DEFAULT 0,
+                    original_price REAL,
+                    max_slippage_points INTEGER DEFAULT 5,
+                    last_retry_time TEXT,
+                    retry_reason TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+                    FOREIGN KEY (group_id) REFERENCES strategy_groups(id),
+                    CHECK(direction IN ('LONG', 'SHORT')),
+                    CHECK(status IN ('ACTIVE', 'EXITED', 'FAILED')),
+                    CHECK(order_status IN ('PENDING', 'FILLED', 'CANCELLED', 'REJECTED') OR order_status IS NULL),
+                    CHECK(lot_id BETWEEN 1 AND 3),
+                    CHECK(exit_reason IN ('移動停利', '保護性停損', '初始停損', '手動出場', 'FOK失敗', '下單失敗') OR exit_reason IS NULL),
+                    CHECK(retry_count >= 0 AND retry_count <= 5),
+                    CHECK(max_slippage_points > 0)
+                )
+            ''')
+
+            # 4. 恢復數據
+            cursor.execute('''
+                INSERT INTO position_records
+                SELECT * FROM position_records_backup
+            ''')
+
+            # 5. 清理臨時表
+            cursor.execute('DROP TABLE position_records_backup')
+
+            logger.info("🔄 position_records 表重建完成")
+
+        except Exception as e:
+            logger.error(f"❌ 重建 position_records 表失敗: {e}")
+            raise
+
     @contextmanager
     def get_connection(self):
         """取得資料庫連線的上下文管理器"""
@@ -169,23 +300,28 @@ class MultiGroupDatabaseManager:
             raise
     
     def create_position_record(self, group_id: int, lot_id: int, direction: str,
-                             entry_price: float, entry_time: str, rule_config: str) -> int:
-        """創建部位記錄"""
+                             entry_price: Optional[float] = None, entry_time: Optional[str] = None,
+                             rule_config: Optional[str] = None, order_id: Optional[str] = None,
+                             api_seq_no: Optional[str] = None, order_status: str = 'PENDING') -> int:
+        """創建部位記錄 - 支援訂單追蹤"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO position_records 
-                    (group_id, lot_id, direction, entry_price, entry_time, rule_config)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (group_id, lot_id, direction, entry_price, entry_time, rule_config))
-                
+                    INSERT INTO position_records
+                    (group_id, lot_id, direction, entry_price, entry_time, rule_config,
+                     order_id, api_seq_no, order_status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (group_id, lot_id, direction, entry_price, entry_time, rule_config,
+                      order_id, api_seq_no, order_status))
+
                 position_id = cursor.lastrowid
                 conn.commit()
-                
-                logger.info(f"創建部位記錄: ID={position_id}, 組={group_id}, 口={lot_id}, 價格={entry_price}")
+
+                logger.info(f"創建部位記錄: ID={position_id}, 組={group_id}, 口={lot_id}, "
+                           f"狀態={order_status}, 訂單ID={order_id}")
                 return position_id
-                
+
         except Exception as e:
             logger.error(f"創建部位記錄失敗: {e}")
             raise
@@ -460,3 +596,239 @@ class MultiGroupDatabaseManager:
         except Exception as e:
             logger.error(f"查詢今日策略組失敗: {e}")
             return []
+
+    # 🔧 新增：訂單追蹤相關方法
+
+    def update_position_order_info(self, position_id: int, order_id: str, api_seq_no: str) -> bool:
+        """更新部位記錄的訂單資訊"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE position_records
+                    SET order_id = ?, api_seq_no = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (order_id, api_seq_no, position_id))
+                conn.commit()
+                logger.info(f"更新部位{position_id}訂單資訊: order_id={order_id}, api_seq_no={api_seq_no}")
+                return True
+        except Exception as e:
+            logger.error(f"更新部位訂單資訊失敗: {e}")
+            return False
+
+    def confirm_position_filled(self, position_id: int, actual_fill_price: float,
+                              fill_time: str, order_status: str = 'FILLED') -> bool:
+        """確認部位成交"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE position_records
+                    SET entry_price = ?, entry_time = ?, status = 'ACTIVE',
+                        order_status = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (actual_fill_price, fill_time, order_status, position_id))
+                conn.commit()
+                logger.info(f"✅ 確認部位{position_id}成交: @{actual_fill_price}")
+                return True
+        except Exception as e:
+            logger.error(f"確認部位成交失敗: {e}")
+            return False
+
+    def mark_position_failed(self, position_id: int, failure_reason: str,
+                           order_status: str = 'CANCELLED') -> bool:
+        """標記部位失敗"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE position_records
+                    SET status = 'FAILED', order_status = ?,
+                        exit_reason = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (order_status, failure_reason, position_id))
+                conn.commit()
+                logger.info(f"❌ 標記部位{position_id}失敗: {failure_reason}")
+                return True
+        except Exception as e:
+            logger.error(f"標記部位失敗失敗: {e}")
+            return False
+
+    def get_position_by_order_id(self, order_id: str) -> Optional[Dict]:
+        """根據訂單ID查詢部位記錄"""
+        try:
+            with self.get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT * FROM position_records WHERE order_id = ?
+                ''', (order_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"根據訂單ID查詢部位失敗: {e}")
+            return None
+
+    def get_position_statistics(self, date_str: Optional[str] = None) -> Dict:
+        """取得部位統計資訊"""
+        try:
+            if date_str is None:
+                date_str = date.today().strftime('%Y-%m-%d')
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT
+                        COUNT(*) as total_positions,
+                        SUM(CASE WHEN pr.status = 'ACTIVE' THEN 1 ELSE 0 END) as active_positions,
+                        SUM(CASE WHEN pr.status = 'FAILED' THEN 1 ELSE 0 END) as failed_positions,
+                        SUM(CASE WHEN pr.status = 'EXITED' THEN 1 ELSE 0 END) as exited_positions,
+                        ROUND(SUM(CASE WHEN pr.status = 'ACTIVE' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as success_rate
+                    FROM position_records pr
+                    JOIN strategy_groups sg ON pr.group_id = sg.id
+                    WHERE sg.date = ?
+                ''', (date_str,))
+
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        'total_positions': row[0],
+                        'active_positions': row[1],
+                        'failed_positions': row[2],
+                        'exited_positions': row[3],
+                        'success_rate': row[4] or 0.0
+                    }
+                return {
+                    'total_positions': 0,
+                    'active_positions': 0,
+                    'failed_positions': 0,
+                    'exited_positions': 0,
+                    'success_rate': 0.0
+                }
+        except Exception as e:
+            logger.error(f"取得部位統計失敗: {e}")
+            return {
+                'total_positions': 0,
+                'active_positions': 0,
+                'failed_positions': 0,
+                'exited_positions': 0,
+                'success_rate': 0.0
+            }
+
+    # 🔧 新增：追價機制相關方法
+    def update_retry_info(self, position_id: int, retry_count: int,
+                         retry_price: float, retry_reason: str) -> bool:
+        """更新重試資訊"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE position_records
+                    SET retry_count = ?, last_retry_time = CURRENT_TIMESTAMP,
+                        retry_reason = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (retry_count, retry_reason, position_id))
+                conn.commit()
+                logger.info(f"✅ 更新部位{position_id}重試資訊: 第{retry_count}次, 原因:{retry_reason}")
+                return True
+        except Exception as e:
+            logger.error(f"更新重試資訊失敗: {e}")
+            return False
+
+    def get_failed_positions_for_retry(self, max_retry_count: int = 5,
+                                      time_window_seconds: int = 30) -> List[Dict]:
+        """取得可重試的失敗部位"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT pr.*, sg.direction as group_direction, sg.date
+                    FROM position_records pr
+                    JOIN strategy_groups sg ON pr.group_id = sg.id
+                    WHERE pr.status = 'FAILED'
+                    AND pr.order_status = 'CANCELLED'
+                    AND pr.retry_count < ?
+                    AND (pr.last_retry_time IS NULL OR
+                         (julianday('now') - julianday(pr.last_retry_time)) * 86400 < ?)
+                    AND sg.date = date('now', 'localtime')
+                    ORDER BY pr.created_at ASC
+                ''', (max_retry_count, time_window_seconds))
+
+                rows = cursor.fetchall()
+                columns = [description[0] for description in cursor.description]
+
+                result = []
+                for row in rows:
+                    position_dict = dict(zip(columns, row))
+                    result.append(position_dict)
+
+                logger.info(f"📋 查詢到{len(result)}個可重試的失敗部位")
+                return result
+
+        except Exception as e:
+            logger.error(f"查詢可重試失敗部位失敗: {e}")
+            return []
+
+    def increment_retry_count(self, position_id: int) -> bool:
+        """增加重試計數"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE position_records
+                    SET retry_count = retry_count + 1,
+                        last_retry_time = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (position_id,))
+                conn.commit()
+
+                # 取得更新後的重試次數
+                cursor.execute('SELECT retry_count FROM position_records WHERE id = ?', (position_id,))
+                row = cursor.fetchone()
+                retry_count = row[0] if row else 0
+
+                logger.info(f"📈 部位{position_id}重試計數增加至: {retry_count}")
+                return True
+        except Exception as e:
+            logger.error(f"增加重試計數失敗: {e}")
+            return False
+
+    def set_original_price(self, position_id: int, original_price: float) -> bool:
+        """設定原始價格（用於滑價計算）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE position_records
+                    SET original_price = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (original_price, position_id))
+                conn.commit()
+                logger.info(f"💰 設定部位{position_id}原始價格: {original_price}")
+                return True
+        except Exception as e:
+            logger.error(f"設定原始價格失敗: {e}")
+            return False
+
+    def get_position_by_id(self, position_id: int) -> Optional[Dict]:
+        """根據ID取得部位資訊"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT pr.*, sg.direction as group_direction, sg.date, sg.range_high, sg.range_low
+                    FROM position_records pr
+                    JOIN strategy_groups sg ON pr.group_id = sg.id
+                    WHERE pr.id = ?
+                ''', (position_id,))
+
+                row = cursor.fetchone()
+                if row:
+                    columns = [description[0] for description in cursor.description]
+                    return dict(zip(columns, row))
+                return None
+
+        except Exception as e:
+            logger.error(f"根據ID查詢部位失敗: {e}")
+            return None

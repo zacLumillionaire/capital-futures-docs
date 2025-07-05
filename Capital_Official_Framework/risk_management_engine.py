@@ -30,7 +30,15 @@ class RiskManagementEngine:
         self.eod_close_hour = 13
         self.eod_close_minute = 30
 
+        # 🔧 新增：統一出場管理器 (稍後設置)
+        self.unified_exit_manager = None
+
         self.logger.info("風險管理引擎初始化完成")
+
+    def set_unified_exit_manager(self, unified_exit_manager):
+        """設置統一出場管理器"""
+        self.unified_exit_manager = unified_exit_manager
+        self.logger.info("統一出場管理器已設置")
 
     def set_eod_close_settings(self, enable: bool, hour: int = 13, minute: int = 30):
         """設定收盤平倉參數"""
@@ -40,6 +48,41 @@ class RiskManagementEngine:
 
         status = "啟用" if enable else "停用"
         self.logger.info(f"收盤平倉設定: {status} ({hour:02d}:{minute:02d})")
+
+    def execute_exit_actions(self, exit_actions: List[Dict]) -> int:
+        """
+        執行出場動作 - 使用統一出場管理器
+
+        Args:
+            exit_actions: 出場動作列表
+
+        Returns:
+            int: 成功執行的出場數量
+        """
+        if not self.unified_exit_manager:
+            self.logger.error("統一出場管理器未設置，無法執行出場")
+            return 0
+
+        success_count = 0
+
+        for action in exit_actions:
+            try:
+                success = self.unified_exit_manager.trigger_exit(
+                    position_id=action['position_id'],
+                    exit_reason=action['exit_reason'],
+                    exit_price=action.get('exit_price')  # 可選，讓統一出場管理器自動選擇
+                )
+
+                if success:
+                    success_count += 1
+                    self.logger.info(f"✅ 部位{action['position_id']}出場成功: {action['exit_reason']}")
+                else:
+                    self.logger.error(f"❌ 部位{action['position_id']}出場失敗: {action['exit_reason']}")
+
+            except Exception as e:
+                self.logger.error(f"執行出場動作失敗: {e}")
+
+        return success_count
 
     def check_all_exit_conditions(self, current_price: float, current_time: str) -> List[Dict]:
         """檢查所有活躍部位的出場條件"""

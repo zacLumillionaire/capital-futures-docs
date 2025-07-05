@@ -898,11 +898,19 @@ class MultiGroupPositionManager:
 
                 if success:
                     # 6. 更新重試記錄
+                    position_direction = position_info.get('direction', 'UNKNOWN')
+                    if position_direction.upper() == "LONG":
+                        retry_reason = f"多單進場ASK1+{retry_count}點追價"
+                    elif position_direction.upper() == "SHORT":
+                        retry_reason = f"空單進場BID1-{retry_count}點追價"
+                    else:
+                        retry_reason = f"進場追價第{retry_count}次"
+
                     self.db_manager.update_retry_info(
                         position_id=position_id,
                         retry_count=retry_count,
                         retry_price=new_price,
-                        retry_reason=f"ASK1+{retry_count}點追價"
+                        retry_reason=retry_reason
                     )
                     self.logger.info(f"✅ 部位{position_id}第{retry_count}次追價成功: @{new_price}")
                 else:
@@ -915,42 +923,124 @@ class MultiGroupPositionManager:
             return False
 
     def calculate_retry_price(self, position_info: Dict, retry_count: int) -> Optional[float]:
-        """計算追價價格（當前ASK1 + retry_count點）"""
+        """計算進場追價價格 - 根據方向選擇正確價格"""
         try:
             # 取得當前商品（從策略配置或預設）
             product = "TM0000"  # 預設使用微型台指
+            position_direction = position_info.get('direction')
 
-            # 🔧 修復：直接從報價管理器取得ASK1價格
-            # 檢查是否有報價管理器可用
-            current_ask1 = None
+            if not position_direction:
+                self.logger.error("無法取得部位方向")
+                return None
 
-            # 方法1：嘗試從下單管理器取得
-            if self.order_manager and hasattr(self.order_manager, 'get_ask1_price'):
-                try:
-                    current_ask1 = self.order_manager.get_ask1_price(product)
-                except:
-                    pass
+            current_price = None
+            price_type = ""
 
-            # 方法2：如果方法1失敗，使用保守估算
-            if current_ask1 is None:
-                # 使用原始價格作為基準
+            if position_direction.upper() == "LONG":
+                # 多單進場：使用ASK1 + retry_count點 (向上追價)
+                if self.order_manager and hasattr(self.order_manager, 'get_ask1_price'):
+                    try:
+                        current_ask1 = self.order_manager.get_ask1_price(product)
+                        if current_ask1:
+                            current_price = current_ask1 + retry_count
+                            price_type = "ASK1"
+                            self.logger.info(f"多單進場追價: ASK1({current_ask1}) + {retry_count}點 = {current_price}")
+                    except:
+                        pass
+
+            elif position_direction.upper() == "SHORT":
+                # 空單進場：使用BID1 - retry_count點 (向下追價)
+                if self.order_manager and hasattr(self.order_manager, 'get_bid1_price'):
+                    try:
+                        current_bid1 = self.order_manager.get_bid1_price(product)
+                        if current_bid1:
+                            current_price = current_bid1 - retry_count
+                            price_type = "BID1"
+                            self.logger.info(f"空單進場追價: BID1({current_bid1}) - {retry_count}點 = {current_price}")
+                    except:
+                        pass
+
+            # 備用方案：使用原始價格估算
+            if current_price is None:
                 original_price = position_info.get('original_price') or position_info.get('entry_price')
                 if original_price:
-                    # 保守估算：原始價格 + 1點作為當前ASK1
-                    current_ask1 = original_price + 1
-                    self.logger.warning(f"⚠️ 無法取得即時ASK1，使用估算價格: {current_ask1}")
+                    if position_direction.upper() == "LONG":
+                        current_price = original_price + 1 + retry_count
+                        price_type = "估算ASK1"
+                    else:
+                        current_price = original_price - 1 - retry_count
+                        price_type = "估算BID1"
+                    self.logger.warning(f"⚠️ 無法取得即時{price_type}，使用估算價格: {current_price}")
                 else:
-                    self.logger.error("無法取得ASK1價格且無原始價格參考")
+                    self.logger.error("無法取得進場價格且無原始價格參考")
                     return None
 
-            # 計算追價：ASK1 + retry_count點
-            retry_price = current_ask1 + retry_count
-
-            self.logger.info(f"💰 計算追價: ASK1({current_ask1}) + {retry_count}點 = {retry_price}")
-            return retry_price
+            return current_price
 
         except Exception as e:
-            self.logger.error(f"計算追價價格失敗: {e}")
+            self.logger.error(f"計算進場追價失敗: {e}")
+            return None
+
+    def calculate_exit_retry_price(self, position_info: Dict, retry_count: int) -> Optional[float]:
+        """
+        計算出場追價價格
+
+        Args:
+            position_info: 部位資訊
+            retry_count: 重試次數
+
+        Returns:
+            float: 追價價格 或 None
+        """
+        try:
+            product = "TM0000"  # 預設使用微型台指
+            position_direction = position_info.get('direction')
+
+            if not position_direction:
+                self.logger.error("無法取得部位方向")
+                return None
+
+            current_price = None
+
+            if position_direction.upper() == "LONG":
+                # 多單出場：使用BID1 - retry_count點 (更積極賣出)
+                if self.order_manager and hasattr(self.order_manager, 'get_bid1_price'):
+                    try:
+                        current_bid1 = self.order_manager.get_bid1_price(product)
+                        if current_bid1:
+                            current_price = current_bid1 - retry_count
+                            self.logger.info(f"多單出場追價: BID1({current_bid1}) - {retry_count}點 = {current_price}")
+                    except:
+                        pass
+
+            elif position_direction.upper() == "SHORT":
+                # 空單出場：使用ASK1 + retry_count點 (更積極買回)
+                if self.order_manager and hasattr(self.order_manager, 'get_ask1_price'):
+                    try:
+                        current_ask1 = self.order_manager.get_ask1_price(product)
+                        if current_ask1:
+                            current_price = current_ask1 + retry_count
+                            self.logger.info(f"空單出場追價: ASK1({current_ask1}) + {retry_count}點 = {current_price}")
+                    except:
+                        pass
+
+            # 備用方案：使用原始價格估算
+            if current_price is None:
+                original_price = position_info.get('entry_price')
+                if original_price:
+                    if position_direction.upper() == "LONG":
+                        current_price = original_price - 1 - retry_count
+                    else:
+                        current_price = original_price + 1 + retry_count
+                    self.logger.warning(f"⚠️ 使用估算出場價格: {current_price}")
+                else:
+                    self.logger.error("無法取得出場價格且無原始價格參考")
+                    return None
+
+            return current_price
+
+        except Exception as e:
+            self.logger.error(f"計算出場追價失敗: {e}")
             return None
 
     def is_retry_allowed(self, position_info: Dict) -> bool:
@@ -1057,6 +1147,141 @@ class MultiGroupPositionManager:
 
         except Exception as e:
             self.logger.error(f"執行重試下單失敗: {e}")
+            return False
+
+    def execute_exit_retry(self, position_id: int) -> bool:
+        """
+        執行出場追價
+
+        Args:
+            position_id: 部位ID
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            # 1. 取得部位資訊
+            position_info = self.db_manager.get_position_by_id(position_id)
+            if not position_info:
+                self.logger.error(f"找不到部位 {position_id}")
+                return False
+
+            # 2. 檢查重試條件
+            retry_count = position_info.get('retry_count', 0) + 1
+            if retry_count > self.max_retry_count:
+                self.logger.warning(f"部位{position_id}出場重試次數已達上限")
+                return False
+
+            # 3. 計算追價價格
+            new_price = self.calculate_exit_retry_price(position_info, retry_count)
+            if not new_price:
+                self.logger.error(f"無法計算部位{position_id}的出場追價")
+                return False
+
+            # 4. 檢查滑價限制
+            original_price = position_info.get('entry_price')
+            if original_price:
+                max_slippage = 5  # 最大滑價5點
+                actual_slippage = abs(new_price - original_price)
+                if actual_slippage > max_slippage:
+                    self.logger.warning(f"部位{position_id}出場滑價超出限制: {actual_slippage}點")
+                    return False
+
+            # 5. 執行出場重試下單
+            success = self._execute_exit_retry_order(position_info, new_price, retry_count)
+
+            if success:
+                # 6. 更新重試記錄
+                self.db_manager.update_retry_info(
+                    position_id=position_id,
+                    retry_count=retry_count,
+                    retry_price=new_price,
+                    retry_reason=f"出場追價第{retry_count}次"
+                )
+                self.logger.info(f"✅ 部位{position_id}出場第{retry_count}次追價成功: @{new_price}")
+            else:
+                self.logger.error(f"❌ 部位{position_id}出場第{retry_count}次追價失敗")
+
+            return success
+
+        except Exception as e:
+            self.logger.error(f"執行出場追價失敗: {e}")
+            return False
+
+    def _execute_exit_retry_order(self, position_info: Dict, price: float, retry_count: int) -> bool:
+        """
+        執行出場重試下單 - 復用進場機制的 execute_strategy_order
+
+        Args:
+            position_info: 部位資訊
+            price: 追價價格
+            retry_count: 重試次數
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            if not self.order_manager:
+                self.logger.error("下單管理器未設置")
+                return False
+
+            # 🔧 關鍵修正：確定出場方向
+            original_direction = position_info['direction']
+            if original_direction.upper() == "LONG":
+                exit_direction = "SELL"  # 多單出場 → 賣出
+            elif original_direction.upper() == "SHORT":
+                exit_direction = "BUY"   # 空單出場 → 買回
+            else:
+                self.logger.error(f"無效的原始方向: {original_direction}")
+                return False
+
+            # 🔧 關鍵修正：使用與進場相同的下單方法
+            order_result = self.order_manager.execute_strategy_order(
+                direction=exit_direction,
+                signal_source=f"exit_retry_{retry_count}_{position_info['id']}",
+                product="TM0000",
+                price=price,
+                quantity=1
+            )
+
+            if order_result.success:
+                self.logger.info(f"出場重試下單成功: {order_result.order_id}")
+
+                # 註冊到訂單追蹤器 (與進場邏輯一致)
+                if hasattr(self, 'order_tracker') and self.order_tracker:
+                    try:
+                        # 取得API序號（如果是實單）
+                        api_seq_no = None
+                        if order_result.api_result and isinstance(order_result.api_result, tuple) and len(order_result.api_result) >= 1:
+                            api_seq_no = str(order_result.api_result[0])
+                            self.logger.info(f"🔍 出場重試API序號提取: {order_result.api_result} -> {api_seq_no}")
+
+                        self.order_tracker.register_order(
+                            order_id=order_result.order_id,
+                            direction=exit_direction,  # 使用轉換後的方向
+                            product="TM0000",
+                            quantity=1,
+                            price=price,
+                            api_seq_no=api_seq_no,
+                            signal_source=f"exit_retry_{retry_count}_{position_info['id']}",
+                            is_virtual=(order_result.mode == "virtual")
+                        )
+
+                        # 更新部位訂單映射
+                        self.position_order_mapping[position_info['id']] = order_result.order_id
+
+                        self.logger.info(f"📝 出場重試訂單已註冊到追蹤器: {order_result.order_id} (API序號: {api_seq_no})")
+
+                    except Exception as e:
+                        self.logger.error(f"註冊出場重試訂單到追蹤器失敗: {e}")
+
+                return True
+            else:
+                self.logger.error(f"出場重試下單失敗: {order_result.error}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"執行出場重試下單失敗: {e}")
             return False
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ try:
     from multi_group_database import MultiGroupDatabaseManager
     from multi_group_config import MultiGroupStrategyConfig, create_preset_configs
     from multi_group_position_manager import MultiGroupPositionManager
+    from unified_exit_manager import UnifiedExitManager
     from risk_management_engine import RiskManagementEngine
     from multi_group_ui_panel import MultiGroupConfigPanel
     from multi_group_console_logger import get_logger, LogCategory
@@ -63,6 +64,23 @@ except ImportError as e:
     VIRTUAL_REAL_ORDER_AVAILABLE = False
     print(f"⚠️ Stage2 虛實單整合系統模組載入失敗: {e}")
     print("💡 將使用原有的下單系統")
+
+# 🗄️ 建倉紀錄資料庫模組導入
+try:
+    import sys
+    import os
+    # 添加 Python File 目錄到路徑
+    python_file_path = os.path.join(os.path.dirname(__file__), '..', 'Python File')
+    if python_file_path not in sys.path:
+        sys.path.append(python_file_path)
+
+    from database.sqlite_manager import SQLiteManager
+    DATABASE_AVAILABLE = True
+    print("✅ 建倉紀錄資料庫模組載入成功")
+except ImportError as e:
+    DATABASE_AVAILABLE = False
+    print(f"⚠️ 建倉紀錄資料庫模組載入失敗: {e}")
+    print("💡 建倉紀錄將只保存在記憶體中")
 
 class SimpleIntegratedApp:
     """簡化版整合交易應用程式"""
@@ -252,6 +270,23 @@ class SimpleIntegratedApp:
                 # 設置下單組件
                 self.multi_group_position_manager.order_manager = self.virtual_real_order_manager
                 self.multi_group_position_manager.order_tracker = self.unified_order_tracker
+
+                # 🔧 新增：初始化統一出場管理器
+                if not self.unified_exit_manager:
+                    self.unified_exit_manager = UnifiedExitManager(
+                        order_manager=self.virtual_real_order_manager,
+                        position_manager=self.multi_group_position_manager,
+                        db_manager=self.multi_group_db_manager,
+                        console_enabled=True
+                    )
+                    # 將統一出場管理器設置到部位管理器
+                    self.multi_group_position_manager.unified_exit_manager = self.unified_exit_manager
+
+                    # 將統一出場管理器設置到風險管理引擎
+                    if hasattr(self, 'multi_group_risk_engine') and self.multi_group_risk_engine:
+                        self.multi_group_risk_engine.set_unified_exit_manager(self.unified_exit_manager)
+
+                    print("[MULTI_GROUP] ✅ 統一出場管理器初始化完成")
 
                 # 🔧 新增：確保總量追蹤管理器已初始化
                 if not hasattr(self.multi_group_position_manager, 'total_lot_manager') or \
@@ -611,6 +646,13 @@ class SimpleIntegratedApp:
                                 except Exception as tracker_error:
                                     print(f"❌ [REPLY] 簡化追蹤器處理失敗: {tracker_error}")
 
+                            # 🔚 新增：出場追價機制整合
+                            if order_type == 'C':  # 取消訂單
+                                try:
+                                    self.process_exit_order_reply(bstrData)
+                                except Exception as exit_error:
+                                    print(f"❌ [REPLY] 出場追價處理失敗: {exit_error}")
+
                     except Exception as e:
                         print(f"❌ [REPLY] OnNewData處理錯誤: {e}")
                         self.parent.add_log(f"❌ 回報處理錯誤: {e}")
@@ -910,7 +952,7 @@ class SimpleIntegratedApp:
                     self.parent = parent
 
                 def OnNotifyTicksLONG(self, sMarketNo, nStockidx, nPtr, lDate, lTimehms, lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-                    """簡化版報價事件 - Console輸出為主"""
+                    """簡化版報價事件 - Console輸出為主 + 停損監控整合"""
                     try:
                         # 解析價格資訊
                         corrected_price = nClose / 100.0
@@ -920,6 +962,73 @@ class SimpleIntegratedApp:
                         # 格式化時間
                         time_str = f"{lTimehms:06d}"
                         formatted_time = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
+
+                        # 🛡️ 停損監控整合 - 在價格更新時檢查停損觸發
+                        if hasattr(self.parent, 'stop_loss_monitor') and self.parent.stop_loss_monitor:
+                            try:
+                                triggered_stops = self.parent.stop_loss_monitor.monitor_stop_loss_breach(
+                                    corrected_price, formatted_time
+                                )
+                                # 觸發的停損會自動通過回調函數處理
+                            except Exception as e:
+                                # 靜默處理停損監控錯誤，不影響報價流程
+                                if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
+                                    print(f"[PRICE_UPDATE] ⚠️ 停損監控錯誤: {e}")
+
+                        # 🎯 平倉機制系統整合 - 使用統一管理器處理所有平倉邏輯
+                        if hasattr(self.parent, 'exit_mechanism_manager') and self.parent.exit_mechanism_manager:
+                            try:
+                                # 使用統一管理器處理價格更新
+                                results = self.parent.exit_mechanism_manager.process_price_update(
+                                    corrected_price, formatted_time
+                                )
+
+                                # 可選：記錄處理結果 (靜默模式，避免過多輸出)
+                                if results and 'error' not in results:
+                                    total_events = sum(results.values())
+                                    if total_events > 0 and hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
+                                        print(f"[PRICE_UPDATE] 📊 平倉事件: {total_events} 個")
+
+                            except Exception as e:
+                                # 靜默處理平倉機制錯誤，不影響報價流程
+                                if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
+                                    print(f"[PRICE_UPDATE] ⚠️ 平倉機制系統錯誤: {e}")
+
+                        # 🔄 回退模式 - 如果統一管理器不可用，使用分散組件
+                        elif hasattr(self.parent, 'trailing_stop_system_enabled') and self.parent.trailing_stop_system_enabled:
+                            try:
+                                # 檢查移動停利啟動
+                                if hasattr(self.parent, 'trailing_stop_activator') and self.parent.trailing_stop_activator:
+                                    self.parent.trailing_stop_activator.check_trailing_stop_activation(
+                                        corrected_price, formatted_time
+                                    )
+
+                                # 更新峰值價格
+                                if hasattr(self.parent, 'peak_price_tracker') and self.parent.peak_price_tracker:
+                                    self.parent.peak_price_tracker.update_peak_prices(
+                                        corrected_price, formatted_time
+                                    )
+
+                                # 監控回撤觸發
+                                if hasattr(self.parent, 'drawdown_monitor') and self.parent.drawdown_monitor:
+                                    self.parent.drawdown_monitor.monitor_drawdown_triggers(
+                                        corrected_price, formatted_time
+                                    )
+
+                            except Exception as e:
+                                # 靜默處理移動停利錯誤，不影響報價流程
+                                if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
+                                    print(f"[PRICE_UPDATE] ⚠️ 移動停利系統錯誤: {e}")
+
+                        # 🎯 多組策略價格更新整合
+                        if hasattr(self.parent, 'multi_group_position_manager') and self.parent.multi_group_position_manager:
+                            try:
+                                # 通知多組策略系統價格更新
+                                self.parent.multi_group_position_manager.update_current_price(corrected_price, formatted_time)
+                            except Exception as e:
+                                # 靜默處理多組策略錯誤
+                                if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
+                                    print(f"[PRICE_UPDATE] ⚠️ 多組策略價格更新錯誤: {e}")
 
                         # ✅ 可控制的Console輸出 - 增強版包含五檔信息
                         if getattr(self.parent, 'console_quote_enabled', True):
@@ -2131,6 +2240,12 @@ class SimpleIntegratedApp:
             self.strategy_enabled = True
             self.strategy_monitoring = True
 
+            # 🚀 自動啟用多組策略的單組模式 (啟用動態追價)
+            if self.multi_group_enabled and not self.multi_group_running:
+                print("[STRATEGY] 🎯 自動啟用多組策略單組模式 (含動態追價)")
+                self.multi_group_running = True
+                self.multi_group_monitoring_ready = True
+
             # 重置策略狀態
             self.range_calculated = False
             self.first_breakout_detected = False
@@ -2165,6 +2280,12 @@ class SimpleIntegratedApp:
         try:
             self.strategy_enabled = False
             self.strategy_monitoring = False
+
+            # 🚀 同時停止多組策略
+            if self.multi_group_running:
+                print("[STRATEGY] 🛑 同時停止多組策略")
+                self.multi_group_running = False
+                self.multi_group_monitoring_ready = False
 
             # 更新UI
             self.btn_start_strategy.config(state="normal")
@@ -2564,12 +2685,25 @@ class SimpleIntegratedApp:
             # 初始化資料庫管理器
             self.multi_group_db_manager = MultiGroupDatabaseManager("multi_group_strategy.db")
 
+            # 🚀 擴展資料庫以支援平倉機制
+            self._extend_database_for_exit_mechanism()
+
             # 初始化風險管理引擎
             self.multi_group_risk_engine = RiskManagementEngine(self.multi_group_db_manager)
 
-            # 設定預設配置
+            # 🎯 設定預設配置 - 改用1組3口模式 (對應回測程式)
             presets = create_preset_configs()
-            default_config = presets["平衡配置 (2口×2組)"]
+            default_config = presets["標準配置 (3口×1組)"]  # 🚀 改用1組3口配置，對應回測程式邏輯
+
+            print("[MULTI_GROUP] 📊 使用配置: 標準配置 (3口×1組)")
+            print("[MULTI_GROUP] 🎯 對應回測程式的3口策略邏輯")
+            print("[MULTI_GROUP] 📋 規則: 第1口15點啟動, 第2口40點啟動, 第3口65點啟動")
+
+            # 🔧 初始化平倉機制配置
+            self._init_exit_mechanism_config()
+
+            # 🛡️ 初始化完整平倉機制系統
+            self._init_complete_exit_mechanism()
 
             # 初始化部位管理器（暫時不設置下單組件，稍後設置）
             self.multi_group_position_manager = MultiGroupPositionManager(
@@ -2577,15 +2711,361 @@ class SimpleIntegratedApp:
                 default_config
             )
 
+            # 🔧 新增：初始化統一出場管理器
+            self.unified_exit_manager = None  # 稍後在設置下單組件時初始化
+
             self.multi_group_enabled = True
             self.multi_group_logger.system_info("多組策略系統初始化完成")
             print("✅ 多組策略系統初始化成功")
+            print("✅ 平倉機制配置完成")
 
         except Exception as e:
             self.multi_group_enabled = False
             print(f"❌ 多組策略系統初始化失敗: {e}")
             if hasattr(self, 'multi_group_logger') and self.multi_group_logger:
                 self.multi_group_logger.system_error(f"初始化失敗: {e}")
+
+    def _extend_database_for_exit_mechanism(self):
+        """擴展資料庫以支援平倉機制"""
+        try:
+            from exit_mechanism_database_extension import extend_database_for_exit_mechanism
+
+            print("[EXIT_DB] 🚀 開始擴展資料庫以支援平倉機制...")
+            success = extend_database_for_exit_mechanism(self.multi_group_db_manager)
+
+            if success:
+                print("[EXIT_DB] ✅ 資料庫擴展成功")
+            else:
+                print("[EXIT_DB] ❌ 資料庫擴展失敗")
+
+        except ImportError as e:
+            print(f"[EXIT_DB] ⚠️ 平倉機制資料庫擴展模組載入失敗: {e}")
+        except Exception as e:
+            print(f"[EXIT_DB] ❌ 資料庫擴展過程發生錯誤: {e}")
+
+    def _init_exit_mechanism_config(self):
+        """初始化平倉機制配置"""
+        try:
+            from exit_mechanism_config import get_default_exit_config_for_multi_group
+
+            # 取得預設平倉配置 (1組3口模式)
+            self.exit_config = get_default_exit_config_for_multi_group()
+
+            print("[EXIT_CONFIG] ⚙️ 平倉機制配置載入:")
+            print(f"[EXIT_CONFIG]   📋 配置ID: {self.exit_config.group_id}")
+            print(f"[EXIT_CONFIG]   📊 總口數: {self.exit_config.total_lots}")
+            print(f"[EXIT_CONFIG]   🛡️ 停損類型: {self.exit_config.stop_loss_type}")
+
+            for rule in self.exit_config.lot_rules:
+                protection_text = f", {rule.protective_stop_multiplier}倍保護" if rule.protective_stop_multiplier else ""
+                print(f"[EXIT_CONFIG]   🎯 第{rule.lot_number}口: {rule.trailing_activation_points}點啟動{protection_text}")
+
+        except ImportError as e:
+            print(f"[EXIT_CONFIG] ⚠️ 平倉機制配置模組載入失敗: {e}")
+            self.exit_config = None
+        except Exception as e:
+            print(f"[EXIT_CONFIG] ❌ 平倉機制配置初始化失敗: {e}")
+            self.exit_config = None
+
+    def _init_stop_loss_system(self):
+        """初始化停損系統"""
+        try:
+            from initial_stop_loss_manager import create_initial_stop_loss_manager
+            from stop_loss_monitor import create_stop_loss_monitor
+            from stop_loss_executor import create_stop_loss_executor
+
+            print("[STOP_LOSS] 🛡️ 初始化停損系統...")
+
+            # 創建停損管理器
+            self.initial_stop_loss_manager = create_initial_stop_loss_manager(
+                self.multi_group_db_manager, console_enabled=True
+            )
+
+            # 創建停損監控器
+            self.stop_loss_monitor = create_stop_loss_monitor(
+                self.multi_group_db_manager, console_enabled=True
+            )
+
+            # 創建停損執行器 (暫時不連接虛實單管理器)
+            self.stop_loss_executor = create_stop_loss_executor(
+                self.multi_group_db_manager,
+                virtual_real_order_manager=None,  # 稍後連接
+                console_enabled=True
+            )
+
+            # 設定停損觸發回調
+            def on_stop_loss_triggered(trigger_info):
+                """停損觸發回調函數"""
+                try:
+                    print(f"[STOP_LOSS] 🚨 停損觸發回調: 部位 {trigger_info.position_id}")
+                    # 執行停損平倉
+                    execution_result = self.stop_loss_executor.execute_stop_loss(trigger_info)
+
+                    if execution_result.success:
+                        print(f"[STOP_LOSS] ✅ 停損執行成功: {execution_result.order_id}")
+                    else:
+                        print(f"[STOP_LOSS] ❌ 停損執行失敗: {execution_result.error_message}")
+
+                except Exception as e:
+                    print(f"[STOP_LOSS] ❌ 停損回調處理失敗: {e}")
+
+            # 註冊回調函數
+            self.stop_loss_monitor.add_stop_loss_callback(on_stop_loss_triggered)
+
+            # 🎯 初始化移動停利系統
+            self._init_trailing_stop_system()
+
+            # 🛡️ 初始化累積獲利保護系統
+            self._init_protection_system()
+
+            print("[STOP_LOSS] ✅ 停損系統初始化完成")
+            print("[STOP_LOSS] 📋 組件: 管理器、監控器、執行器")
+            print("[STOP_LOSS] 🔗 回調函數已註冊")
+
+        except ImportError as e:
+            print(f"[STOP_LOSS] ⚠️ 停損系統模組載入失敗: {e}")
+            self.initial_stop_loss_manager = None
+            self.stop_loss_monitor = None
+            self.stop_loss_executor = None
+        except Exception as e:
+            print(f"[STOP_LOSS] ❌ 停損系統初始化失敗: {e}")
+            self.initial_stop_loss_manager = None
+            self.stop_loss_monitor = None
+            self.stop_loss_executor = None
+
+    def _init_trailing_stop_system(self):
+        """初始化移動停利系統"""
+        try:
+            from trailing_stop_activator import create_trailing_stop_activator
+            from peak_price_tracker import create_peak_price_tracker
+            from drawdown_monitor import create_drawdown_monitor
+
+            print("[TRAILING] 🎯 初始化移動停利系統...")
+
+            # 創建移動停利啟動器
+            self.trailing_stop_activator = create_trailing_stop_activator(
+                self.multi_group_db_manager, console_enabled=True
+            )
+
+            # 創建峰值價格追蹤器
+            self.peak_price_tracker = create_peak_price_tracker(
+                self.multi_group_db_manager, console_enabled=True
+            )
+
+            # 創建回撤監控器
+            self.drawdown_monitor = create_drawdown_monitor(
+                self.multi_group_db_manager, console_enabled=True
+            )
+
+            # 設定移動停利啟動回調
+            def on_trailing_stop_activated(activation_info):
+                """移動停利啟動回調函數"""
+                try:
+                    print(f"[TRAILING] 🎯 移動停利啟動回調: 部位 {activation_info.position_id}")
+                    print(f"[TRAILING] 📊 啟動條件: {activation_info.activation_points}點獲利")
+                    print(f"[TRAILING] 💰 當前獲利: {activation_info.profit_points:.1f}點")
+                except Exception as e:
+                    print(f"[TRAILING] ❌ 啟動回調處理失敗: {e}")
+
+            # 設定峰值更新回調
+            def on_peak_price_updated(update_info):
+                """峰值價格更新回調函數"""
+                try:
+                    print(f"[TRAILING] 📈 峰值更新回調: 部位 {update_info.position_id}")
+                    print(f"[TRAILING] 🔄 峰值變化: {update_info.old_peak} → {update_info.new_peak}")
+                    print(f"[TRAILING] 📊 改善幅度: {update_info.improvement:.1f}點")
+                except Exception as e:
+                    print(f"[TRAILING] ❌ 峰值更新回調處理失敗: {e}")
+
+            # 設定回撤觸發回調
+            def on_drawdown_triggered(trigger_info):
+                """回撤觸發回調函數"""
+                try:
+                    print(f"[TRAILING] 🚨 回撤觸發回調: 部位 {trigger_info.position_id}")
+                    print(f"[TRAILING] 📉 回撤比例: {trigger_info.drawdown_ratio:.1%}")
+                    print(f"[TRAILING] 💔 回撤點數: {trigger_info.drawdown_points:.1f}點")
+
+                    # 執行移動停利平倉
+                    if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
+                        # 創建類似停損觸發的結構來執行平倉
+                        from stop_loss_monitor import StopLossTrigger
+
+                        trailing_trigger = StopLossTrigger(
+                            position_id=trigger_info.position_id,
+                            group_id=trigger_info.group_id,
+                            direction=trigger_info.direction,
+                            current_price=trigger_info.current_price,
+                            stop_loss_price=trigger_info.current_price,  # 使用當前價格作為平倉價
+                            trigger_time=trigger_info.trigger_time,
+                            trigger_reason=f"移動停利: {trigger_info.trigger_reason}",
+                            breach_amount=trigger_info.drawdown_points
+                        )
+
+                        execution_result = self.stop_loss_executor.execute_stop_loss(trailing_trigger)
+
+                        if execution_result.success:
+                            print(f"[TRAILING] ✅ 移動停利平倉成功: {execution_result.order_id}")
+                        else:
+                            print(f"[TRAILING] ❌ 移動停利平倉失敗: {execution_result.error_message}")
+
+                except Exception as e:
+                    print(f"[TRAILING] ❌ 回撤觸發回調處理失敗: {e}")
+
+            # 註冊回調函數
+            self.trailing_stop_activator.add_activation_callback(on_trailing_stop_activated)
+            self.peak_price_tracker.add_update_callback(on_peak_price_updated)
+            self.drawdown_monitor.add_drawdown_callback(on_drawdown_triggered)
+
+            # 啟用移動停利系統
+            self.trailing_stop_system_enabled = True
+
+            print("[TRAILING] ✅ 移動停利系統初始化完成")
+            print("[TRAILING] 📋 組件: 啟動器、峰值追蹤器、回撤監控器")
+            print("[TRAILING] 🔗 所有回調函數已註冊")
+            print("[TRAILING] 🎯 分層啟動: 15/40/65點, 20%回撤")
+
+        except ImportError as e:
+            print(f"[TRAILING] ⚠️ 移動停利系統模組載入失敗: {e}")
+            self.trailing_stop_activator = None
+            self.peak_price_tracker = None
+            self.drawdown_monitor = None
+            self.trailing_stop_system_enabled = False
+        except Exception as e:
+            print(f"[TRAILING] ❌ 移動停利系統初始化失敗: {e}")
+            self.trailing_stop_activator = None
+            self.peak_price_tracker = None
+            self.drawdown_monitor = None
+            self.trailing_stop_system_enabled = False
+
+    def _init_protection_system(self):
+        """初始化累積獲利保護系統"""
+        try:
+            from cumulative_profit_protection_manager import create_cumulative_profit_protection_manager
+            from stop_loss_state_manager import create_stop_loss_state_manager
+
+            print("[PROTECTION] 🛡️ 初始化累積獲利保護系統...")
+
+            # 創建累積獲利保護管理器
+            self.protection_manager = create_cumulative_profit_protection_manager(
+                self.multi_group_db_manager, console_enabled=True
+            )
+
+            # 創建停損狀態管理器
+            self.stop_loss_state_manager = create_stop_loss_state_manager(
+                self.multi_group_db_manager, console_enabled=True
+            )
+
+            # 設定保護更新回調
+            def on_protection_updated(update_info):
+                """保護性停損更新回調函數"""
+                try:
+                    print(f"[PROTECTION] 🛡️ 保護更新回調: 部位 {update_info.position_id}")
+                    print(f"[PROTECTION] 📊 停損提升: {update_info.old_stop_loss} → {update_info.new_stop_loss}")
+                    print(f"[PROTECTION] 💰 累積獲利: {update_info.cumulative_profit:.1f}點")
+                    print(f"[PROTECTION] 🔢 保護倍數: {update_info.protection_multiplier}倍")
+
+                    # 更新停損狀態
+                    if hasattr(self, 'stop_loss_state_manager') and self.stop_loss_state_manager:
+                        self.stop_loss_state_manager.transition_to_protective_stop(
+                            update_info.position_id,
+                            update_info.new_stop_loss,
+                            update_info.update_reason
+                        )
+
+                except Exception as e:
+                    print(f"[PROTECTION] ❌ 保護更新回調處理失敗: {e}")
+
+            # 設定狀態轉換回調
+            def on_state_transition(transition_info):
+                """停損狀態轉換回調函數"""
+                try:
+                    print(f"[PROTECTION] 🔄 狀態轉換回調: 部位 {transition_info.position_id}")
+                    print(f"[PROTECTION] 📋 轉換類型: {transition_info.from_type.value} → {transition_info.to_type.value}")
+                    print(f"[PROTECTION] 🎯 轉換原因: {transition_info.transition_reason}")
+                except Exception as e:
+                    print(f"[PROTECTION] ❌ 狀態轉換回調處理失敗: {e}")
+
+            # 註冊回調函數
+            self.protection_manager.add_protection_callback(on_protection_updated)
+            self.stop_loss_state_manager.add_transition_callback(on_state_transition)
+
+            # 🔗 將保護管理器連接到停損執行器
+            if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
+                self.stop_loss_executor.set_protection_manager(self.protection_manager)
+                print("[PROTECTION] 🔗 保護管理器已連接到停損執行器")
+
+            print("[PROTECTION] ✅ 累積獲利保護系統初始化完成")
+            print("[PROTECTION] 📋 組件: 保護管理器、狀態管理器")
+            print("[PROTECTION] 🔗 所有回調函數已註冊")
+            print("[PROTECTION] 🛡️ 保護邏輯: 累積獲利 × 2.0倍保護")
+
+        except ImportError as e:
+            print(f"[PROTECTION] ⚠️ 累積獲利保護系統模組載入失敗: {e}")
+            self.protection_manager = None
+            self.stop_loss_state_manager = None
+        except Exception as e:
+            print(f"[PROTECTION] ❌ 累積獲利保護系統初始化失敗: {e}")
+            self.protection_manager = None
+            self.stop_loss_state_manager = None
+
+    def _init_complete_exit_mechanism(self):
+        """初始化完整平倉機制系統 (統一管理器版本)"""
+        try:
+            from exit_mechanism_manager import create_exit_mechanism_manager
+
+            print("[EXIT_SYSTEM] 🚀 初始化完整平倉機制系統...")
+
+            # 創建平倉機制統一管理器
+            self.exit_mechanism_manager = create_exit_mechanism_manager(
+                self.multi_group_db_manager, console_enabled=True
+            )
+
+            # 初始化所有平倉機制組件
+            success = self.exit_mechanism_manager.initialize_all_components()
+
+            if success:
+                # 設定便捷訪問屬性 (向後兼容)
+                self.initial_stop_loss_manager = self.exit_mechanism_manager.initial_stop_loss_manager
+                self.stop_loss_monitor = self.exit_mechanism_manager.stop_loss_monitor
+                self.stop_loss_executor = self.exit_mechanism_manager.stop_loss_executor
+                self.trailing_stop_activator = self.exit_mechanism_manager.trailing_stop_activator
+                self.peak_price_tracker = self.exit_mechanism_manager.peak_price_tracker
+                self.drawdown_monitor = self.exit_mechanism_manager.drawdown_monitor
+                self.protection_manager = self.exit_mechanism_manager.protection_manager
+                self.stop_loss_state_manager = self.exit_mechanism_manager.stop_loss_state_manager
+
+                # 啟用系統
+                self.trailing_stop_system_enabled = True
+
+                print("[EXIT_SYSTEM] ✅ 完整平倉機制系統初始化成功")
+                print("[EXIT_SYSTEM] 📋 包含所有組件: 停損、移動停利、保護機制")
+                print("[EXIT_SYSTEM] 🔗 統一管理器已啟用")
+                print("[EXIT_SYSTEM] 🎯 對應回測程式邏輯: 15/40/65點啟動, 2倍保護, 20%回撤")
+
+                # 列印系統狀態
+                self.exit_mechanism_manager.print_exit_mechanism_status()
+
+            else:
+                print("[EXIT_SYSTEM] ❌ 平倉機制系統初始化失敗")
+                self.exit_mechanism_manager = None
+                self.trailing_stop_system_enabled = False
+                # 回退到分散初始化
+                self._init_stop_loss_system()
+
+        except ImportError as e:
+            print(f"[EXIT_SYSTEM] ⚠️ 平倉機制系統模組載入失敗: {e}")
+            print("[EXIT_SYSTEM] 🔄 回退到分散初始化模式...")
+            self.exit_mechanism_manager = None
+            self.trailing_stop_system_enabled = False
+            # 回退到分散初始化
+            self._init_stop_loss_system()
+        except Exception as e:
+            print(f"[EXIT_SYSTEM] ❌ 平倉機制系統初始化失敗: {e}")
+            print("[EXIT_SYSTEM] 🔄 回退到分散初始化模式...")
+            self.exit_mechanism_manager = None
+            self.trailing_stop_system_enabled = False
+            # 回退到分散初始化
+            self._init_stop_loss_system()
 
     def toggle_auto_start(self):
         """切換自動啟動選項"""
@@ -2944,7 +3424,7 @@ class SimpleIntegratedApp:
             print(f"❌ [STRATEGY] 執行頻率設定失敗: {e}")
 
     def check_multi_group_exit_conditions(self, price, time_str):
-        """檢查多組策略出場條件"""
+        """檢查多組策略出場條件 - 使用統一出場管理器"""
         try:
             if not self.multi_group_risk_engine:
                 return
@@ -2952,15 +3432,26 @@ class SimpleIntegratedApp:
             # 檢查所有活躍部位的出場條件
             exit_actions = self.multi_group_risk_engine.check_all_exit_conditions(price, time_str)
 
-            # 執行出場動作
-            for action in exit_actions:
-                success = self.multi_group_position_manager.update_position_exit(
-                    position_id=action['position_id'],
-                    exit_price=action['exit_price'],
-                    exit_time=action['exit_time'],
-                    exit_reason=action['exit_reason'],
-                    pnl=action['pnl']
-                )
+            # 🔧 修正：使用統一出場管理器執行出場動作
+            if exit_actions and hasattr(self.multi_group_risk_engine, 'execute_exit_actions'):
+                success_count = self.multi_group_risk_engine.execute_exit_actions(exit_actions)
+
+                if success_count > 0:
+                    print(f"[MULTI_EXIT] ✅ 成功執行 {success_count}/{len(exit_actions)} 個出場動作")
+                elif len(exit_actions) > 0:
+                    print(f"[MULTI_EXIT] ❌ 出場動作執行失敗: {len(exit_actions)} 個動作")
+
+            # 🔧 保留：舊版本相容性處理 (如果統一出場管理器不可用)
+            elif exit_actions:
+                print(f"[MULTI_EXIT] ⚠️ 統一出場管理器不可用，使用舊版出場邏輯")
+                for action in exit_actions:
+                    success = self.multi_group_position_manager.update_position_exit(
+                        position_id=action['position_id'],
+                        exit_price=action['exit_price'],
+                        exit_time=action['exit_time'],
+                        exit_reason=action['exit_reason'],
+                        pnl=action['pnl']
+                    )
 
                 if success and self.multi_group_logger:
                     self.multi_group_logger.position_exit(
@@ -3126,6 +3617,85 @@ class SimpleIntegratedApp:
             self.add_log("✅ Queue基礎設施可用，可使用Queue模式避免GIL錯誤")
         else:
             self.add_log("⚠️ Queue基礎設施不可用，將使用傳統模式")
+
+    def process_exit_order_reply(self, reply_data: str):
+        """
+        處理出場訂單回報 - 新增方法
+
+        Args:
+            reply_data: 回報數據
+        """
+        try:
+            cutData = reply_data.split(',')
+
+            if len(cutData) > 33:
+                order_type = cutData[2]  # 委託種類
+                seq_no = cutData[0]      # 委託序號
+
+                # 檢查是否為出場訂單取消
+                if order_type == 'C':  # 取消
+                    # 查找對應的出場部位
+                    position_id = self._find_position_by_seq_no(seq_no)
+
+                    if position_id:
+                        # 檢查是否為出場訂單
+                        if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
+                            position_info = self.multi_group_position_manager.db_manager.get_position_by_id(position_id)
+                            if position_info and position_info.get('status') == 'EXITING':
+
+                                # 延遲2秒後執行出場追價
+                                self._schedule_exit_retry(position_id)
+
+                                print(f"[EXIT_RETRY] 📋 出場FOK取消，已排程追價: 部位{position_id}")
+
+        except Exception as e:
+            print(f"❌ [EXIT_RETRY] 處理出場回報失敗: {e}")
+
+    def _find_position_by_seq_no(self, seq_no: str) -> Optional[int]:
+        """
+        根據委託序號查找部位ID
+
+        Args:
+            seq_no: 委託序號
+
+        Returns:
+            int: 部位ID 或 None
+        """
+        try:
+            if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
+                # 從部位訂單映射中查找
+                for position_id, order_id in self.multi_group_position_manager.position_order_mapping.items():
+                    if order_id == seq_no:
+                        return position_id
+            return None
+        except Exception as e:
+            print(f"❌ [EXIT_RETRY] 查找部位失敗: {e}")
+            return None
+
+    def _schedule_exit_retry(self, position_id: int):
+        """
+        排程出場追價
+
+        Args:
+            position_id: 部位ID
+        """
+        try:
+            import threading
+            import time
+
+            def delayed_exit_retry():
+                time.sleep(2)  # 延遲2秒
+                if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
+                    self.multi_group_position_manager.execute_exit_retry(position_id)
+
+            retry_thread = threading.Thread(target=delayed_exit_retry)
+            retry_thread.daemon = True
+            retry_thread.start()
+
+            print(f"[EXIT_RETRY] ⏰ 已排程部位{position_id}的延遲出場追價（2秒後執行）")
+
+        except Exception as e:
+            print(f"❌ [EXIT_RETRY] 排程出場追價失敗: {e}")
 
         self.root.mainloop()
 

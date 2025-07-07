@@ -13,7 +13,7 @@ def cleanup_test_positions():
     print("🧹 清理測試部位")
     print("=" * 50)
     
-    db_path = "Capital_Official_Framework/multi_group_strategy.db"
+    db_path = "multi_group_strategy.db"
     
     if not os.path.exists(db_path):
         print("❌ 資料庫檔案不存在")

@@ -7,6 +7,7 @@
 
 import json
 import logging
+import time
 from datetime import datetime
 from decimal import Decimal
 from typing import List, Dict, Optional, Tuple
@@ -87,23 +88,70 @@ class RiskManagementEngine:
     def check_all_exit_conditions(self, current_price: float, current_time: str) -> List[Dict]:
         """檢查所有活躍部位的出場條件"""
         exit_actions = []
-        
+
         try:
+            # 🔍 DEBUG: 價格更新追蹤 (控制頻率避免過多輸出)
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                if not hasattr(self, '_last_price_log_time'):
+                    self._last_price_log_time = 0
+                    self._price_check_count = 0
+
+                self._price_check_count += 1
+                current_timestamp = time.time()
+
+                # 每5秒或每100次檢查輸出一次價格追蹤
+                if (current_timestamp - self._last_price_log_time > 5.0 or
+                    self._price_check_count % 100 == 0):
+                    print(f"[RISK_ENGINE] 🔍 價格檢查: {current_price:.0f} @{current_time} (第{self._price_check_count}次)")
+                    self._last_price_log_time = current_timestamp
+
             active_positions = self.db_manager.get_all_active_positions()
 
             # 🔧 過濾掉無效部位（PENDING狀態或entry_price為None的部位）
             valid_positions = []
+            invalid_count = 0
             for position in active_positions:
                 if (position.get('entry_price') is not None and
                     position.get('order_status') == 'FILLED'):
                     valid_positions.append(position)
                 else:
+                    invalid_count += 1
                     self.logger.debug(f"跳過無效部位: ID={position.get('id')}, "
                                     f"entry_price={position.get('entry_price')}, "
                                     f"order_status={position.get('order_status')}")
 
+            # 🔍 DEBUG: 部位狀態追蹤 (每10秒輸出一次詳細狀態)
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                if len(valid_positions) > 0:
+                    if not hasattr(self, '_last_position_log_time'):
+                        self._last_position_log_time = 0
+
+                    # 每10秒輸出一次部位狀態
+                    if time.time() - self._last_position_log_time > 10.0:
+                        print(f"[RISK_ENGINE] 📊 部位狀態: {len(valid_positions)}個有效部位 ({invalid_count}個無效)")
+                        for pos in valid_positions:
+                            direction = pos['direction']
+                            entry_price = pos['entry_price']
+                            peak_price = pos.get('peak_price', entry_price)
+                            trailing_activated = pos.get('trailing_activated', False)
+                            protection_activated = pos.get('protection_activated', False)
+                            current_stop = pos.get('current_stop_loss', 'N/A')
+
+                            pnl = (current_price - entry_price) if direction == 'LONG' else (entry_price - current_price)
+
+                            status_flags = []
+                            if trailing_activated:
+                                status_flags.append("移動停利")
+                            if protection_activated:
+                                status_flags.append("保護停損")
+                            status_str = f"[{','.join(status_flags)}]" if status_flags else "[初始停損]"
+
+                            print(f"[RISK_ENGINE]   部位{pos['id']}: {direction} @{entry_price:.0f} "
+                                  f"峰值:{peak_price:.0f} 損益:{pnl:+.0f} 停損:{current_stop} {status_str}")
+                        self._last_position_log_time = time.time()
+
             self.logger.debug(f"檢查 {len(valid_positions)}/{len(active_positions)} 個有效部位的出場條件")
-            
+
             # 按組分組處理
             groups = {}
             for position in valid_positions:
@@ -111,16 +159,36 @@ class RiskManagementEngine:
                 if group_id not in groups:
                     groups[group_id] = []
                 groups[group_id].append(position)
-            
+
+            # 🔍 DEBUG: 組別處理追蹤
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True) and len(groups) > 0:
+                if not hasattr(self, '_last_group_log_time'):
+                    self._last_group_log_time = 0
+
+                # 每15秒輸出一次組別狀態
+                if time.time() - self._last_group_log_time > 15.0:
+                    print(f"[RISK_ENGINE] 🏢 組別狀態: {len(groups)}個活躍組別")
+                    for group_id, positions in groups.items():
+                        print(f"[RISK_ENGINE]   組{group_id}: {len(positions)}個部位")
+                    self._last_group_log_time = time.time()
+
             # 逐組檢查
             for group_id, positions in groups.items():
                 group_exits = self._check_group_exit_conditions(positions, current_price, current_time)
                 exit_actions.extend(group_exits)
-            
+
+            # 🔍 DEBUG: 出場動作追蹤 (立即輸出，這是重要事件)
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True) and len(exit_actions) > 0:
+                print(f"[RISK_ENGINE] 🚨 觸發出場動作: {len(exit_actions)}個")
+                for action in exit_actions:
+                    print(f"[RISK_ENGINE]   部位{action['position_id']}: {action['exit_reason']} @{action['exit_price']:.0f}")
+
             return exit_actions
-            
+
         except Exception as e:
             self.logger.error(f"檢查出場條件失敗: {e}")
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE] ❌ 檢查出場條件失敗: {e}")
             return []
     
     def _check_group_exit_conditions(self, positions: List[Dict],
@@ -227,22 +295,57 @@ class RiskManagementEngine:
         try:
             if not positions:
                 return False
-            
+
             # 取得區間邊界停損價格
             first_position = positions[0]
             direction = first_position['direction']
             range_high = first_position['range_high']
             range_low = first_position['range_low']
-            
+            group_id = first_position.get('group_id')
+
+            # 🔍 DEBUG: 初始停損檢查追蹤 (控制頻率避免過多輸出)
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                if not hasattr(self, f'_last_initial_stop_log_{group_id}'):
+                    setattr(self, f'_last_initial_stop_log_{group_id}', 0)
+
+                current_time_stamp = time.time()
+                # 每10秒輸出一次初始停損檢查狀態
+                if current_time_stamp - getattr(self, f'_last_initial_stop_log_{group_id}') > 10.0:
+                    if direction == 'LONG':
+                        distance_to_stop = current_price - range_low
+                        stop_condition = f"當前:{current_price:.0f} <= 區間低:{range_low:.0f}"
+                    else:  # SHORT
+                        distance_to_stop = range_high - current_price
+                        stop_condition = f"當前:{current_price:.0f} >= 區間高:{range_high:.0f}"
+
+                    print(f"[RISK_ENGINE] 🚨 初始停損檢查 - 組{group_id}({direction}):")
+                    print(f"[RISK_ENGINE]   區間: {range_low:.0f} - {range_high:.0f}")
+                    print(f"[RISK_ENGINE]   條件: {stop_condition}")
+                    print(f"[RISK_ENGINE]   距離: {distance_to_stop:+.0f}點")
+                    setattr(self, f'_last_initial_stop_log_{group_id}', current_time_stamp)
+
+            # 檢查初始停損條件
+            stop_triggered = False
             if direction == 'LONG':
                 # 做多：價格跌破區間低點
-                return current_price <= range_low
+                stop_triggered = current_price <= range_low
             else:  # SHORT
                 # 做空：價格漲破區間高點
-                return current_price >= range_high
-                
+                stop_triggered = current_price >= range_high
+
+            # 🔍 DEBUG: 初始停損觸發事件 (重要事件，立即輸出)
+            if stop_triggered and hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE] 💥 初始停損觸發! 組{group_id}({direction})")
+                print(f"[RISK_ENGINE]   觸發價格: {current_price:.0f}")
+                print(f"[RISK_ENGINE]   停損邊界: {range_low:.0f if direction == 'LONG' else range_high:.0f}")
+                print(f"[RISK_ENGINE]   影響部位: {len(positions)}個")
+
+            return stop_triggered
+
         except Exception as e:
             self.logger.error(f"檢查初始停損失敗: {e}")
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE] ❌ 初始停損檢查失敗: {e}")
             return False
     
     def _check_protective_stop_loss(self, position: Dict, current_price: float) -> bool:
@@ -280,16 +383,53 @@ class RiskManagementEngine:
             peak_price = position['peak_price'] or entry_price
             trailing_activated = position['trailing_activated']
             
+            # 🔍 DEBUG: 移動停利檢查詳細追蹤
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                position_id = position['id']
+                lot_id = rule_config.get('lot_id', 'N/A')
+                activation_points = float(rule.trailing_activation)
+
+                # 計算距離啟動條件的差距
+                if direction == 'LONG':
+                    activation_target = entry_price + activation_points
+                    distance_to_activation = current_price - activation_target
+                else:  # SHORT
+                    activation_target = entry_price - activation_points
+                    distance_to_activation = activation_target - current_price
+
+                # 控制輸出頻率：未啟動時每5秒輸出一次，已啟動時每次都輸出
+                if not hasattr(self, f'_last_trailing_log_{position_id}'):
+                    setattr(self, f'_last_trailing_log_{position_id}', 0)
+
+                current_time_stamp = time.time()
+                should_log = (not trailing_activated and
+                             current_time_stamp - getattr(self, f'_last_trailing_log_{position_id}') > 5.0) or trailing_activated
+
+                if should_log:
+                    if not trailing_activated:
+                        print(f"[RISK_ENGINE] 🎯 移動停利檢查 - 部位{position_id}(第{lot_id}口):")
+                        print(f"[RISK_ENGINE]   方向:{direction} 進場:{entry_price:.0f} 當前:{current_price:.0f}")
+                        print(f"[RISK_ENGINE]   啟動條件:{activation_target:.0f} 距離:{distance_to_activation:+.0f}點")
+                        print(f"[RISK_ENGINE]   狀態:⏳等待啟動 (需要{activation_points:.0f}點獲利)")
+                        setattr(self, f'_last_trailing_log_{position_id}', current_time_stamp)
+
             # 檢查移動停利啟動條件
             if not trailing_activated:
                 activation_triggered = False
-                
+
                 if direction == 'LONG':
                     activation_triggered = current_price >= entry_price + float(rule.trailing_activation)
                 else:  # SHORT
                     activation_triggered = current_price <= entry_price - float(rule.trailing_activation)
-                
+
                 if activation_triggered:
+                    # 🔍 DEBUG: 移動停利啟動事件 (重要事件，立即輸出)
+                    if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                        print(f"[RISK_ENGINE] 🚀 移動停利啟動! 部位{position['id']}(第{rule_config['lot_id']}口)")
+                        print(f"[RISK_ENGINE]   觸發價格: {current_price:.0f} (需要:{entry_price + float(rule.trailing_activation):.0f})")
+                        print(f"[RISK_ENGINE]   獲利幅度: {float(rule.trailing_activation):.0f}點")
+                        print(f"[RISK_ENGINE]   回撤比例: {float(rule.trailing_pullback)*100:.0f}%")
+
                     # 啟動移動停利
                     self.db_manager.update_risk_management_state(
                         position_id=position['id'],
@@ -297,18 +437,54 @@ class RiskManagementEngine:
                         update_time=current_time,
                         update_reason="移動停利啟動"
                     )
-                    
+
                     self.logger.info(f"部位 {position['id']} 第{rule_config['lot_id']}口移動停利啟動")
                     return None
             
             # 檢查移動停利出場條件
             if trailing_activated:
                 pullback_ratio = float(rule.trailing_pullback)
-                
+
+                # 🔍 DEBUG: 移動停利觸發檢查 (已啟動時的詳細追蹤)
+                if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                    position_id = position['id']
+                    lot_id = rule_config.get('lot_id', 'N/A')
+
+                    # 計算停利價格和距離
+                    if direction == 'LONG':
+                        stop_price = peak_price - (peak_price - entry_price) * pullback_ratio
+                        distance_to_stop = current_price - stop_price
+                        profit_range = peak_price - entry_price
+                        current_profit = current_price - entry_price
+                    else:  # SHORT
+                        stop_price = peak_price + (entry_price - peak_price) * pullback_ratio
+                        distance_to_stop = stop_price - current_price
+                        profit_range = entry_price - peak_price
+                        current_profit = entry_price - current_price
+
+                    # 控制輸出頻率：每3秒輸出一次移動停利狀態
+                    if not hasattr(self, f'_last_trailing_active_log_{position_id}'):
+                        setattr(self, f'_last_trailing_active_log_{position_id}', 0)
+
+                    current_time_stamp = time.time()
+                    if current_time_stamp - getattr(self, f'_last_trailing_active_log_{position_id}') > 3.0:
+                        print(f"[RISK_ENGINE] 📈 移動停利追蹤 - 部位{position_id}(第{lot_id}口):")
+                        print(f"[RISK_ENGINE]   當前價格:{current_price:.0f} 峰值:{peak_price:.0f} 停利點:{stop_price:.0f}")
+                        print(f"[RISK_ENGINE]   獲利範圍:{profit_range:.0f}點 當前獲利:{current_profit:.0f}點")
+                        print(f"[RISK_ENGINE]   距離觸發:{distance_to_stop:+.0f}點 回撤比例:{pullback_ratio*100:.0f}%")
+                        setattr(self, f'_last_trailing_active_log_{position_id}', current_time_stamp)
+
                 if direction == 'LONG':
                     stop_price = peak_price - (peak_price - entry_price) * pullback_ratio
                     if current_price <= stop_price:
                         pnl = stop_price - entry_price
+
+                        # 🔍 DEBUG: 移動停利觸發事件 (重要事件，立即輸出)
+                        if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                            print(f"[RISK_ENGINE] 💥 移動停利觸發! 部位{position['id']}(第{rule_config['lot_id']}口)")
+                            print(f"[RISK_ENGINE]   觸發價格:{current_price:.0f} <= 停利點:{stop_price:.0f}")
+                            print(f"[RISK_ENGINE]   峰值價格:{peak_price:.0f} 獲利:{pnl:.0f}點")
+
                         return {
                             'position_id': position['id'],
                             'exit_price': stop_price,
@@ -320,6 +496,13 @@ class RiskManagementEngine:
                     stop_price = peak_price + (entry_price - peak_price) * pullback_ratio
                     if current_price >= stop_price:
                         pnl = entry_price - stop_price
+
+                        # 🔍 DEBUG: 移動停利觸發事件 (重要事件，立即輸出)
+                        if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                            print(f"[RISK_ENGINE] 💥 移動停利觸發! 部位{position['id']}(第{rule_config['lot_id']}口)")
+                            print(f"[RISK_ENGINE]   觸發價格:{current_price:.0f} >= 停利點:{stop_price:.0f}")
+                            print(f"[RISK_ENGINE]   峰值價格:{peak_price:.0f} 獲利:{pnl:.0f}點")
+
                         return {
                             'position_id': position['id'],
                             'exit_price': stop_price,
@@ -344,7 +527,36 @@ class RiskManagementEngine:
 
             direction = position['direction']
             current_peak = position['peak_price'] or position['entry_price']
-            
+            position_id = position['id']
+
+            # 🔍 DEBUG: 峰值價格更新追蹤 (這是快速變化的關鍵指標)
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                # 控制輸出頻率：只在峰值更新時輸出，避免過多日誌
+                old_peak = current_peak
+
+                # 檢查是否會更新峰值
+                will_update_peak = False
+                new_peak = current_peak
+
+                if direction == 'LONG':
+                    if current_price > current_peak:
+                        will_update_peak = True
+                        new_peak = current_price
+                else:  # SHORT
+                    if current_price < current_peak:
+                        will_update_peak = True
+                        new_peak = current_price
+
+                # 只在峰值更新時輸出日誌
+                if will_update_peak:
+                    improvement = abs(new_peak - old_peak)
+                    total_profit = abs(new_peak - position['entry_price'])
+
+                    print(f"[RISK_ENGINE] 📈 峰值價格更新! 部位{position_id}:")
+                    print(f"[RISK_ENGINE]   方向:{direction} 舊峰值:{old_peak:.0f} → 新峰值:{new_peak:.0f}")
+                    print(f"[RISK_ENGINE]   改善幅度:{improvement:.0f}點 總獲利:{total_profit:.0f}點")
+                    print(f"[RISK_ENGINE]   移動停利狀態:{'✅已啟動' if position.get('trailing_activated') else '⏳未啟動'}")
+
             # 更新峰值價格
             peak_updated = False
             if direction == 'LONG':
@@ -355,9 +567,13 @@ class RiskManagementEngine:
                 if current_price < current_peak:
                     current_peak = current_price
                     peak_updated = True
-            
+
             # 如果峰值有更新，更新資料庫
             if peak_updated:
+                # 🔍 DEBUG: 資料庫更新追蹤 (重要的狀態變更)
+                if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                    print(f"[RISK_ENGINE] 💾 更新資料庫峰值: 部位{position_id} → {current_peak:.0f}")
+
                 self.db_manager.update_risk_management_state(
                     position_id=position['id'],
                     peak_price=current_peak,
@@ -386,66 +602,116 @@ class RiskManagementEngine:
     def update_protective_stop_loss(self, exited_position_id: int, group_id: int) -> bool:
         """更新保護性停損 - 移植OrderTester.py邏輯"""
         try:
+            # 🔍 DEBUG: 保護性停損更新開始 (重要事件，立即輸出)
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE] 🛡️ 開始保護性停損更新:")
+                print(f"[RISK_ENGINE]   觸發部位: {exited_position_id} 組別: {group_id}")
+
             # 獲取該組的所有部位
             group_positions = self.db_manager.get_active_positions_by_group(group_id)
-            
+
+            # 🔍 DEBUG: 組別部位分析
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE]   組{group_id}活躍部位: {len(group_positions)}個")
+                for pos in group_positions:
+                    pos_lot_id = json.loads(pos['rule_config'])['lot_id']
+                    print(f"[RISK_ENGINE]     部位{pos['id']}: 第{pos_lot_id}口")
+
             # 找到下一口需要更新保護的部位
             exited_position = None
             next_position = None
-            
+
             # 先找到已出場的部位資訊
             all_positions = self.db_manager.get_all_active_positions()
             for pos in all_positions:
                 if pos['id'] == exited_position_id:
                     exited_position = pos
                     break
-            
+
             if not exited_position:
+                if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                    print(f"[RISK_ENGINE] ❌ 找不到已出場部位: {exited_position_id}")
                 return False
-            
+
             # 解析已出場部位的規則
             exited_rule = LotRule.from_json(exited_position['rule_config'])
-            
+            exited_lot_id = exited_rule.lot_id
+
+            # 🔍 DEBUG: 已出場部位資訊
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE]   已出場部位: 第{exited_lot_id}口")
+
             # 找到下一口部位
             for pos in group_positions:
                 pos_rule = LotRule.from_json(pos['rule_config'])
                 if pos_rule.lot_id == exited_rule.lot_id + 1:
                     next_position = pos
                     break
-            
+
             if not next_position or not next_position.get('rule_config'):
+                if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                    print(f"[RISK_ENGINE] ℹ️ 找不到第{exited_lot_id + 1}口部位，無需更新保護性停損")
                 return False
-            
+
             next_rule = LotRule.from_json(next_position['rule_config'])
+            next_lot_id = next_rule.lot_id
+
+            # 🔍 DEBUG: 目標部位資訊
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE]   目標部位: {next_position['id']} 第{next_lot_id}口")
+                print(f"[RISK_ENGINE]   保護性停損倍數: {next_rule.protective_stop_multiplier}")
+
             if not next_rule.protective_stop_multiplier:
+                if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                    print(f"[RISK_ENGINE] ⚠️ 第{next_lot_id}口沒有設定保護性停損倍數")
                 return False
-            
+
             # 檢查前面所有口單是否都獲利
             all_previous_profitable = self._check_all_previous_lots_profitable(
                 group_id, next_rule.lot_id
             )
-            
+
+            # 🔍 DEBUG: 前置條件檢查
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE]   前面口單獲利檢查: {'✅通過' if all_previous_profitable else '❌失敗'}")
+
             if not all_previous_profitable:
                 self.logger.info(f"前面有口單虧損，第{next_rule.lot_id}口維持原始停損")
+                if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                    print(f"[RISK_ENGINE] ⚠️ 前面有口單虧損，第{next_lot_id}口維持原始停損")
                 return False
             
             # 計算累積獲利並設定保護性停損
             total_profit = self._calculate_cumulative_profit(group_id, next_rule.lot_id)
-            
+
+            # 🔍 DEBUG: 獲利計算追蹤
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE]   累積獲利計算: {total_profit:.0f}點")
+
             if total_profit <= 0:
                 self.logger.info(f"累積獲利不足({total_profit:.1f}點)，第{next_rule.lot_id}口維持原始停損")
+                if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                    print(f"[RISK_ENGINE] ⚠️ 累積獲利不足({total_profit:.1f}點)，維持原始停損")
                 return False
-            
+
             # 設定保護性停損
             direction = next_position['direction']
             entry_price = next_position['entry_price']
             stop_loss_amount = total_profit * float(next_rule.protective_stop_multiplier)
-            
+
             if direction == 'LONG':
                 new_stop_loss = entry_price - stop_loss_amount
             else:  # SHORT
                 new_stop_loss = entry_price + stop_loss_amount
-            
+
+            # 🔍 DEBUG: 保護性停損計算詳情
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE] 🧮 保護性停損計算:")
+                print(f"[RISK_ENGINE]   方向:{direction} 進場價:{entry_price:.0f}")
+                print(f"[RISK_ENGINE]   累積獲利:{total_profit:.0f}點 × 倍數:{next_rule.protective_stop_multiplier}")
+                print(f"[RISK_ENGINE]   停損金額:{stop_loss_amount:.0f}點")
+                print(f"[RISK_ENGINE]   新停損價:{new_stop_loss:.0f}")
+
             # 更新風險管理狀態
             current_time = datetime.now().strftime("%H:%M:%S")
             self.db_manager.update_risk_management_state(
@@ -455,12 +721,19 @@ class RiskManagementEngine:
                 update_time=current_time,
                 update_reason="保護性停損更新"
             )
-            
+
+            # 🔍 DEBUG: 更新完成確認
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE] ✅ 保護性停損更新完成!")
+                print(f"[RISK_ENGINE]   部位{next_position['id']} 第{next_lot_id}口 → {new_stop_loss:.0f}")
+
             self.logger.info(f"第{next_rule.lot_id}口保護性停損更新: {new_stop_loss:.0f} (基於累積獲利 {total_profit:.0f})")
             return True
-            
+
         except Exception as e:
             self.logger.error(f"更新保護性停損失敗: {e}")
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE] ❌ 保護性停損更新失敗: {e}")
             return False
     
     def _check_all_previous_lots_profitable(self, group_id: int, target_lot_id: int) -> bool:

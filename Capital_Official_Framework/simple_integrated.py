@@ -10,6 +10,7 @@ import sys
 import time
 import tkinter as tk
 from tkinter import ttk
+from typing import Optional
 
 # 加入order_service路徑
 order_service_path = os.path.join(os.path.dirname(__file__), 'order_service')
@@ -271,6 +272,11 @@ class SimpleIntegratedApp:
                 self.multi_group_position_manager.order_manager = self.virtual_real_order_manager
                 self.multi_group_position_manager.order_tracker = self.unified_order_tracker
 
+                # 🔧 新增：連接平倉機制管理器到部位管理器
+                if hasattr(self, 'exit_mechanism_manager') and self.exit_mechanism_manager:
+                    self.multi_group_position_manager.exit_mechanism_manager = self.exit_mechanism_manager
+                    print("[MULTI_GROUP] 🔗 平倉機制管理器已連接到部位管理器")
+
                 # 🔧 新增：初始化統一出場管理器
                 if not self.unified_exit_manager:
                     self.unified_exit_manager = UnifiedExitManager(
@@ -301,6 +307,56 @@ class SimpleIntegratedApp:
                     from simplified_order_tracker import SimplifiedOrderTracker
                     self.multi_group_position_manager.simplified_tracker = SimplifiedOrderTracker()
                     print("[MULTI_GROUP] ✅ 簡化追蹤器初始化完成")
+
+                # 🔍 DEBUG: 設定簡化追蹤器的console開關
+                if hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
+                   self.multi_group_position_manager.simplified_tracker:
+                    if hasattr(self.multi_group_position_manager.simplified_tracker, 'console_enabled'):
+                        # 確保console_enabled屬性存在
+                        if not hasattr(self, 'console_enabled'):
+                            self.console_enabled = True  # 預設啟用console模式
+
+                        self.multi_group_position_manager.simplified_tracker.console_enabled = self.console_enabled
+                        if self.console_enabled:
+                            print("[MULTI_GROUP] 🔍 簡化追蹤器DEBUG模式已啟用")
+
+                    # 🔧 註冊平倉追價回調
+                    if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
+                        def on_exit_retry(exit_order: dict):
+                            """平倉追價回調函數"""
+                            try:
+                                position_id = exit_order.get('position_id')
+                                retry_count = getattr(exit_order, 'retry_count', 1)
+
+                                if self.console_enabled:
+                                    print(f"[MAIN] 🔄 收到平倉追價回調: 部位{position_id}")
+
+                                # 執行平倉追價
+                                success = self.stop_loss_executor.execute_exit_retry(
+                                    position_id, exit_order, retry_count
+                                )
+
+                                if self.console_enabled:
+                                    if success:
+                                        print(f"[MAIN] ✅ 平倉追價執行成功")
+                                    else:
+                                        print(f"[MAIN] ❌ 平倉追價執行失敗")
+
+                            except Exception as e:
+                                if self.console_enabled:
+                                    print(f"[MAIN] ❌ 平倉追價回調異常: {e}")
+
+                        # 註冊回調到簡化追蹤器
+                        self.multi_group_position_manager.simplified_tracker.exit_retry_callbacks.append(on_exit_retry)
+
+                        if self.console_enabled:
+                            print("[MULTI_GROUP] 🔧 平倉追價回調已註冊")
+
+                        # 🔧 設定停損執行器的簡化追蹤器引用
+                        if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
+                            self.stop_loss_executor.simplified_tracker = self.multi_group_position_manager.simplified_tracker
+                            if self.console_enabled:
+                                print("[MULTI_GROUP] 🔗 停損執行器已連接簡化追蹤器")
 
                 # 重新設置回調機制
                 if hasattr(self.multi_group_position_manager, '_setup_order_callbacks'):
@@ -534,6 +590,11 @@ class SimpleIntegratedApp:
                     try:
                         cutData = bstrData.split(',')
 
+                        # 🔧 強力過濾歷史回報：檢查是否為啟動後的新回報
+                        if not self.parent._is_new_order_reply(bstrData):
+                            # 靜默跳過，避免大量日誌
+                            return
+
                         # 🚨 原始數據轉移到Console
                         print(f"📋 [REPLY] OnNewData: {cutData}")
 
@@ -618,40 +679,41 @@ class SimpleIntegratedApp:
                             else:
                                 self.parent.add_log(f"📋 回報: {order_type} - {type_desc}")
 
-                            # 🚀 Stage2 統一回報追蹤整合
-                            if hasattr(self.parent, 'unified_order_tracker') and self.parent.unified_order_tracker:
-                                try:
-                                    # 將完整的回報數據傳遞給統一追蹤器
-                                    self.parent.unified_order_tracker.process_real_order_reply(bstrData)
-                                except Exception as tracker_error:
-                                    print(f"❌ [REPLY] 統一追蹤器處理失敗: {tracker_error}")
+                            # 🔧 統一回報處理：避免重複處理，按優先級處理
+                            processed = False
 
-                            # 🔧 新增：總量追蹤管理器整合
+                            # 優先級1: 簡化追蹤器（最新的FIFO邏輯）
                             if hasattr(self.parent, 'multi_group_position_manager') and self.parent.multi_group_position_manager:
                                 try:
-                                    # 檢查是否有總量追蹤管理器
-                                    if hasattr(self.parent.multi_group_position_manager, 'total_lot_manager') and \
-                                       self.parent.multi_group_position_manager.total_lot_manager:
-                                        # 將完整的回報數據傳遞給總量追蹤管理器
-                                        self.parent.multi_group_position_manager.total_lot_manager.process_order_reply(bstrData)
-                                except Exception as tracker_error:
-                                    print(f"❌ [REPLY] 總量追蹤管理器處理失敗: {tracker_error}")
-
-                                try:
-                                    # 🔧 保留：簡化追蹤器整合 (向後相容)
                                     if hasattr(self.parent.multi_group_position_manager, 'simplified_tracker') and \
                                        self.parent.multi_group_position_manager.simplified_tracker:
-                                        # 將完整的回報數據傳遞給簡化追蹤器
-                                        self.parent.multi_group_position_manager.simplified_tracker.process_order_reply(bstrData)
+                                        processed = self.parent.multi_group_position_manager.simplified_tracker.process_order_reply(bstrData)
+                                        if processed:
+                                            print(f"✅ [REPLY] 簡化追蹤器處理成功")
                                 except Exception as tracker_error:
                                     print(f"❌ [REPLY] 簡化追蹤器處理失敗: {tracker_error}")
 
-                            # 🔚 新增：出場追價機制整合
-                            if order_type == 'C':  # 取消訂單
+                            # 優先級2: 總量追蹤管理器（如果簡化追蹤器沒有處理）
+                            if not processed and hasattr(self.parent, 'multi_group_position_manager') and self.parent.multi_group_position_manager:
                                 try:
-                                    self.process_exit_order_reply(bstrData)
-                                except Exception as exit_error:
-                                    print(f"❌ [REPLY] 出場追價處理失敗: {exit_error}")
+                                    if hasattr(self.parent.multi_group_position_manager, 'total_lot_manager') and \
+                                       self.parent.multi_group_position_manager.total_lot_manager:
+                                        processed = self.parent.multi_group_position_manager.total_lot_manager.process_order_reply(bstrData)
+                                        if processed:
+                                            print(f"✅ [REPLY] 總量追蹤管理器處理成功")
+                                except Exception as tracker_error:
+                                    print(f"❌ [REPLY] 總量追蹤管理器處理失敗: {tracker_error}")
+
+                            # 優先級3: 統一追蹤器（向後相容）
+                            if not processed and hasattr(self.parent, 'unified_order_tracker') and self.parent.unified_order_tracker:
+                                try:
+                                    self.parent.unified_order_tracker.process_real_order_reply(bstrData)
+                                    print(f"✅ [REPLY] 統一追蹤器處理成功")
+                                except Exception as tracker_error:
+                                    print(f"❌ [REPLY] 統一追蹤器處理失敗: {tracker_error}")
+
+                            # 🔧 移除：出場追價機制整合（已整合到簡化追蹤器）
+                            # 所有回報處理現在統一由簡化追蹤器處理，包括進場和出場
 
                     except Exception as e:
                         print(f"❌ [REPLY] OnNewData處理錯誤: {e}")
@@ -1699,9 +1761,14 @@ class SimpleIntegratedApp:
             if self.range_calculated:
                 self.update_minute_candle_safe(price, hour, minute, second)
 
-            # 突破檢測（區間計算完成後，使用1分K收盤價）
+            # 🔧 修正：空單即時檢測 + 多單1分K檢測
             if self.range_calculated and not self.first_breakout_detected:
-                self.check_minute_candle_breakout_safe()
+                # 🚀 新增：即時空單進場檢測（不等1分K收盤）
+                self.check_immediate_short_entry_safe(price, time_str)
+
+                # 原有：1分K多單檢測（只檢測多單）
+                if not self.first_breakout_detected:  # 確保空單沒有先觸發
+                    self.check_minute_candle_breakout_safe()
 
             # 執行進場（檢測到突破信號後的下一個報價）
             if self.range_calculated and self.waiting_for_entry:
@@ -1714,6 +1781,17 @@ class SimpleIntegratedApp:
             # 🎯 多組策略風險管理檢查
             if self.multi_group_enabled and self.multi_group_risk_engine:
                 self.check_multi_group_exit_conditions(price, time_str)
+            elif self.console_enabled:
+                # 🔍 DEBUG: 風險管理引擎狀態檢查 (每100次輸出一次)
+                if not hasattr(self, '_risk_engine_debug_count'):
+                    self._risk_engine_debug_count = 0
+                self._risk_engine_debug_count += 1
+
+                if self._risk_engine_debug_count % 100 == 0:
+                    print(f"[RISK_DEBUG] 風險管理引擎狀態檢查:")
+                    print(f"[RISK_DEBUG]   multi_group_enabled: {getattr(self, 'multi_group_enabled', 'None')}")
+                    print(f"[RISK_DEBUG]   multi_group_risk_engine: {getattr(self, 'multi_group_risk_engine', 'None')}")
+                    print(f"[RISK_DEBUG]   檢查次數: {self._risk_engine_debug_count}")
 
         except Exception as e:
             # 靜默處理錯誤，避免影響報價處理
@@ -1804,8 +1882,41 @@ class SimpleIntegratedApp:
         except Exception as e:
             pass
 
+    def check_immediate_short_entry_safe(self, price, time_str):
+        """
+        即時空單進場檢測 - 不等1分K收盤
+        空單在下跌過程中只要碰到區間就立即進場
+        """
+        try:
+            if not self.range_high or not self.range_low:
+                return
+
+            # 如果已經檢測到第一次突破，就不再檢測
+            if self.first_breakout_detected:
+                return
+
+            # 🚀 空單即時檢測：任何報價跌破區間下緣就立即觸發
+            if price < self.range_low:
+                # 記錄第一次突破
+                self.first_breakout_detected = True
+                self.breakout_direction = 'SHORT'
+                self.waiting_for_entry = True
+
+                # 重要事件：記錄到策略日誌
+                self.add_strategy_log(f"🔥 即時空單觸發！報價:{price:.0f} < 下緣:{self.range_low:.0f}")
+                self.add_strategy_log(f"⚡ 立即進場做空（不等1分K收盤）...")
+
+                # Console輸出
+                print(f"🔥 [STRATEGY] SHORT突破信號已觸發（即時）")
+
+        except Exception as e:
+            pass
+
     def check_minute_candle_breakout_safe(self):
-        """檢查分鐘K線收盤價是否突破區間 - 參考OrderTester.py邏輯"""
+        """
+        檢查分鐘K線收盤價是否突破區間 - 修正版本
+        🔧 現在只檢測多單（空單已改為即時檢測）
+        """
         try:
             if not self.current_minute_candle or not self.range_high or not self.range_low:
                 return
@@ -1817,7 +1928,7 @@ class SimpleIntegratedApp:
             close_price = self.current_minute_candle['close']
             minute = self.current_minute_candle['minute']
 
-            # 檢查第一次突破
+            # 🔧 修正：只檢查多單突破（空單已改為即時檢測）
             if close_price > self.range_high:
                 # 記錄第一次突破
                 self.first_breakout_detected = True
@@ -1828,21 +1939,11 @@ class SimpleIntegratedApp:
                 self.add_strategy_log(f"🔥 {minute:02d}分K線收盤突破上緣！收盤:{close_price:.0f} > 上緣:{self.range_high:.0f}")
                 self.add_strategy_log(f"⏳ 等待下一個報價進場做多...")
 
-                # 移除UI更新，避免GIL問題
+                # Console輸出
                 print(f"🔥 [STRATEGY] LONG突破信號已觸發")
 
-            elif close_price < self.range_low:
-                # 記錄第一次突破
-                self.first_breakout_detected = True
-                self.breakout_direction = 'SHORT'
-                self.waiting_for_entry = True
-
-                # 重要事件：記錄到策略日誌
-                self.add_strategy_log(f"🔥 {minute:02d}分K線收盤突破下緣！收盤:{close_price:.0f} < 下緣:{self.range_low:.0f}")
-                self.add_strategy_log(f"⏳ 等待下一個報價進場做空...")
-
-                # 移除UI更新，避免GIL問題
-                print(f"🔥 [STRATEGY] SHORT突破信號已觸發")
+            # 🚀 移除空單檢測邏輯（已改為即時檢測）
+            # elif close_price < self.range_low: 已移除
 
         except Exception as e:
             pass
@@ -1900,6 +2001,10 @@ class SimpleIntegratedApp:
                     if success:
                         success_count += 1
                         print(f"✅ [MULTI_GROUP] 組別 {group_config.group_id} 進場成功")
+
+                        # 🔧 新增：下單成功後立即啟用回報處理
+                        if hasattr(self, 'enable_order_reply_processing'):
+                            self.enable_order_reply_processing()
 
                         # 🔧 修復：execute_group_entry() 已經執行了下單，不需要重複執行
                         # self._execute_multi_group_orders(group_config, direction, price)  # ← 移除重複下單
@@ -2089,6 +2194,10 @@ class SimpleIntegratedApp:
                     # 更新策略日誌
                     if success_count > 0:
                         self.add_strategy_log(f"🚀 {direction} 下單完成: {success_count}/{total_lots} 口成功")
+
+                        # 🔧 新增：下單成功後立即啟用回報處理
+                        if hasattr(self, 'enable_order_reply_processing'):
+                            self.enable_order_reply_processing()
                     else:
                         self.add_strategy_log(f"❌ {direction} 下單失敗: 所有口數都失敗")
 
@@ -2682,6 +2791,9 @@ class SimpleIntegratedApp:
             self.multi_group_logger = get_logger()
             self.multi_group_logger.system_info("多組策略系統初始化開始")
 
+            # 🔧 初始化回報過濾機制
+            self._init_reply_filter()
+
             # 初始化資料庫管理器
             self.multi_group_db_manager = MultiGroupDatabaseManager("multi_group_strategy.db")
 
@@ -2690,6 +2802,30 @@ class SimpleIntegratedApp:
 
             # 初始化風險管理引擎
             self.multi_group_risk_engine = RiskManagementEngine(self.multi_group_db_manager)
+
+            # 🔍 DEBUG: 設定console開關給風險管理引擎
+            if hasattr(self.multi_group_risk_engine, 'console_enabled'):
+                # 確保console_enabled屬性存在
+                if not hasattr(self, 'console_enabled'):
+                    self.console_enabled = True  # 預設啟用console模式
+
+                self.multi_group_risk_engine.console_enabled = self.console_enabled
+                if self.console_enabled:
+                    print("[MULTI_GROUP] 🔍 風險管理引擎DEBUG模式已啟用")
+
+                    # 🔍 立即測試風險管理引擎
+                    try:
+                        test_price = 22300.0
+                        test_time = "16:00:00"
+                        print(f"[MULTI_GROUP] 🧪 測試風險管理引擎: {test_price} @{test_time}")
+
+                        exit_actions = self.multi_group_risk_engine.check_all_exit_conditions(test_price, test_time)
+                        print(f"[MULTI_GROUP] ✅ 風險管理引擎測試成功: {len(exit_actions)}個出場動作")
+
+                    except Exception as test_error:
+                        print(f"[MULTI_GROUP] ❌ 風險管理引擎測試失敗: {test_error}")
+                        import traceback
+                        traceback.print_exc()
 
             # 🎯 設定預設配置 - 改用1組3口模式 (對應回測程式)
             presets = create_preset_configs()
@@ -2710,6 +2846,10 @@ class SimpleIntegratedApp:
                 self.multi_group_db_manager,
                 default_config
             )
+
+            # 🔧 新增：設置父引用，讓部位管理器能訪問報價數據
+            import weakref
+            self.multi_group_position_manager._parent_ref = weakref.ref(self)
 
             # 🔧 新增：初始化統一出場管理器
             self.unified_exit_manager = None  # 稍後在設置下單組件時初始化
@@ -2790,8 +2930,24 @@ class SimpleIntegratedApp:
             self.stop_loss_executor = create_stop_loss_executor(
                 self.multi_group_db_manager,
                 virtual_real_order_manager=None,  # 稍後連接
-                console_enabled=True
+                console_enabled=self.console_enabled  # 🔍 使用統一的console開關
             )
+
+            # 🔍 DEBUG: 確保停損執行器的console設定
+            if hasattr(self.stop_loss_executor, 'console_enabled'):
+                self.stop_loss_executor.console_enabled = self.console_enabled
+                if self.console_enabled:
+                    print("[STOP_LOSS] 🔍 停損執行器DEBUG模式已啟用")
+
+            # 🔧 設定停損執行器的簡化追蹤器引用 (稍後連接)
+            # 這將在多組部位管理器初始化後設定
+
+            # 🔧 新增：設定停損執行器的FIFO追蹤器
+            if hasattr(self, 'multi_group_position_manager'):
+                self.stop_loss_executor.set_trackers(
+                    order_tracker=getattr(self.multi_group_position_manager, 'order_tracker', None),
+                    simplified_tracker=getattr(self.multi_group_position_manager, 'simplified_tracker', None)
+                )
 
             # 設定停損觸發回調
             def on_stop_loss_triggered(trigger_info):
@@ -3019,6 +3175,13 @@ class SimpleIntegratedApp:
             self.exit_mechanism_manager = create_exit_mechanism_manager(
                 self.multi_group_db_manager, console_enabled=True
             )
+
+            # 🔧 新增：設定平倉機制管理器的FIFO追蹤器
+            if hasattr(self, 'multi_group_position_manager'):
+                self.exit_mechanism_manager.set_trackers(
+                    order_tracker=getattr(self.multi_group_position_manager, 'order_tracker', None),
+                    simplified_tracker=getattr(self.multi_group_position_manager, 'simplified_tracker', None)
+                )
 
             # 初始化所有平倉機制組件
             success = self.exit_mechanism_manager.initialize_all_components()
@@ -3423,11 +3586,123 @@ class SimpleIntegratedApp:
             self.add_log(f"❌ 執行頻率設定失敗: {e}")
             print(f"❌ [STRATEGY] 執行頻率設定失敗: {e}")
 
+    def _init_reply_filter(self):
+        """初始化回報過濾機制"""
+        import time
+        self._order_system_start_time = time.time()
+        self._known_order_ids = set()  # 記錄我們下的訂單ID
+
+        # 初始化手動啟動標記
+        self._manual_order_started = False
+
+        # 確保console_enabled屬性存在
+        console_enabled = getattr(self, 'console_enabled', True)
+        if console_enabled:
+            print(f"[REPLY_FILTER] 🔧 回報過濾機制已初始化")
+            print(f"[REPLY_FILTER] ⏰ 系統啟動時間: {time.strftime('%H:%M:%S', time.localtime(self._order_system_start_time))}")
+            print(f"[REPLY_FILTER] 🛡️ 手動啟動模式: 需要手動啟用回報處理")
+
+    def _is_new_order_reply(self, reply_data: str) -> bool:
+        """
+        判斷是否為新的訂單回報（非歷史回報）
+
+        Args:
+            reply_data: 回報數據字符串
+
+        Returns:
+            bool: True=新回報, False=歷史回報
+        """
+        try:
+            import time
+            from datetime import datetime
+
+            cutData = reply_data.split(',')
+            if len(cutData) < 25:
+                return False  # 數據不完整，拒絕
+
+            # 🔧 多重過濾策略
+            current_time = time.time()
+            startup_elapsed = current_time - self._order_system_start_time
+
+            # 策略1: 啟動後60秒內，拒絕所有回報（延長過濾時間）
+            if startup_elapsed < 60:
+                return False
+
+            # 策略2: 檢查是否有手動啟動標記
+            if hasattr(self, '_manual_order_started') and not self._manual_order_started:
+                return False
+
+            # 策略3: 檢查回報時間是否太舊
+            reply_time_str = cutData[24] if len(cutData) > 24 else ""
+            if reply_time_str:
+                try:
+                    now = datetime.now()
+                    reply_hour, reply_min, reply_sec = map(int, reply_time_str.split(':'))
+                    current_seconds = now.hour * 3600 + now.minute * 60 + now.second
+                    reply_seconds = reply_hour * 3600 + reply_min * 60 + reply_sec
+
+                    # 如果回報時間與當前時間差距超過120秒，視為歷史回報
+                    time_diff = abs(current_seconds - reply_seconds)
+                    if time_diff > 120:
+                        return False
+                except:
+                    pass
+
+            # 通過所有過濾條件，接受回報
+            return True
+
+        except Exception as e:
+            # 出錯時拒絕，更安全
+            return False
+
+    def register_order_id(self, order_id: str):
+        """註冊我們下的訂單ID"""
+        if hasattr(self, '_known_order_ids'):
+            self._known_order_ids.add(order_id)
+            console_enabled = getattr(self, 'console_enabled', True)
+            if console_enabled:
+                print(f"[REPLY_FILTER] 📝 註冊訂單ID: {order_id}")
+
+    def enable_order_reply_processing(self):
+        """手動啟用訂單回報處理"""
+        self._manual_order_started = True
+        console_enabled = getattr(self, 'console_enabled', True)
+        if console_enabled:
+            print(f"[REPLY_FILTER] ✅ 手動啟用回報處理 - 開始接受新的訂單回報")
+
+    def disable_order_reply_processing(self):
+        """手動停用訂單回報處理"""
+        self._manual_order_started = False
+        console_enabled = getattr(self, 'console_enabled', True)
+        if console_enabled:
+            print(f"[REPLY_FILTER] 🛑 手動停用回報處理 - 拒絕所有訂單回報")
+
     def check_multi_group_exit_conditions(self, price, time_str):
         """檢查多組策略出場條件 - 使用統一出場管理器"""
         try:
             if not self.multi_group_risk_engine:
+                if self.console_enabled:
+                    print(f"[RISK_DEBUG] ❌ 風險管理引擎未初始化")
                 return
+
+            # 🔍 DEBUG: 風險管理引擎調用追蹤 (每50次輸出一次)
+            if not hasattr(self, '_risk_call_count'):
+                self._risk_call_count = 0
+            self._risk_call_count += 1
+
+            if self.console_enabled and self._risk_call_count % 50 == 0:
+                print(f"[RISK_DEBUG] 🔍 風險管理引擎調用: 第{self._risk_call_count}次 @{price:.0f}")
+
+                # 🔍 DEBUG: 檢查活躍部位數量
+                try:
+                    active_positions = self.multi_group_db_manager.get_all_active_positions()
+                    print(f"[RISK_DEBUG] 📊 活躍部位數量: {len(active_positions)}")
+
+                    for pos in active_positions[:3]:  # 只顯示前3個
+                        print(f"[RISK_DEBUG]   部位{pos.get('id')}: {pos.get('direction')} "
+                              f"@{pos.get('entry_price', 'N/A')} 狀態:{pos.get('order_status', 'N/A')}")
+                except Exception as debug_error:
+                    print(f"[RISK_DEBUG] ❌ 檢查活躍部位失敗: {debug_error}")
 
             # 檢查所有活躍部位的出場條件
             exit_actions = self.multi_group_risk_engine.check_all_exit_conditions(price, time_str)
@@ -3618,86 +3893,15 @@ class SimpleIntegratedApp:
         else:
             self.add_log("⚠️ Queue基礎設施不可用，將使用傳統模式")
 
-    def process_exit_order_reply(self, reply_data: str):
-        """
-        處理出場訂單回報 - 新增方法
-
-        Args:
-            reply_data: 回報數據
-        """
-        try:
-            cutData = reply_data.split(',')
-
-            if len(cutData) > 33:
-                order_type = cutData[2]  # 委託種類
-                seq_no = cutData[0]      # 委託序號
-
-                # 檢查是否為出場訂單取消
-                if order_type == 'C':  # 取消
-                    # 查找對應的出場部位
-                    position_id = self._find_position_by_seq_no(seq_no)
-
-                    if position_id:
-                        # 檢查是否為出場訂單
-                        if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
-                            position_info = self.multi_group_position_manager.db_manager.get_position_by_id(position_id)
-                            if position_info and position_info.get('status') == 'EXITING':
-
-                                # 延遲2秒後執行出場追價
-                                self._schedule_exit_retry(position_id)
-
-                                print(f"[EXIT_RETRY] 📋 出場FOK取消，已排程追價: 部位{position_id}")
-
-        except Exception as e:
-            print(f"❌ [EXIT_RETRY] 處理出場回報失敗: {e}")
-
-    def _find_position_by_seq_no(self, seq_no: str) -> Optional[int]:
-        """
-        根據委託序號查找部位ID
-
-        Args:
-            seq_no: 委託序號
-
-        Returns:
-            int: 部位ID 或 None
-        """
-        try:
-            if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
-                # 從部位訂單映射中查找
-                for position_id, order_id in self.multi_group_position_manager.position_order_mapping.items():
-                    if order_id == seq_no:
-                        return position_id
-            return None
-        except Exception as e:
-            print(f"❌ [EXIT_RETRY] 查找部位失敗: {e}")
-            return None
-
-    def _schedule_exit_retry(self, position_id: int):
-        """
-        排程出場追價
-
-        Args:
-            position_id: 部位ID
-        """
-        try:
-            import threading
-            import time
-
-            def delayed_exit_retry():
-                time.sleep(2)  # 延遲2秒
-                if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
-                    self.multi_group_position_manager.execute_exit_retry(position_id)
-
-            retry_thread = threading.Thread(target=delayed_exit_retry)
-            retry_thread.daemon = True
-            retry_thread.start()
-
-            print(f"[EXIT_RETRY] ⏰ 已排程部位{position_id}的延遲出場追價（2秒後執行）")
-
-        except Exception as e:
-            print(f"❌ [EXIT_RETRY] 排程出場追價失敗: {e}")
-
+        # 啟動主事件循環
         self.root.mainloop()
+
+    # 🔧 移除：process_exit_order_reply 方法
+    # 出場回報處理已整合到簡化追蹤器的FIFO邏輯中
+
+    # 🔧 移除：_find_position_by_seq_no 方法
+    # 🔧 移除：_schedule_exit_retry 方法
+    # 出場追價已整合到簡化追蹤器的FIFO邏輯中，不再依賴序號查找
 
 if __name__ == "__main__":
     app = SimpleIntegratedApp()

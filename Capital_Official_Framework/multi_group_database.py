@@ -104,7 +104,7 @@ class MultiGroupDatabaseManager:
                         previous_stop_loss REAL,
                         
                         FOREIGN KEY (position_id) REFERENCES position_records(id),
-                        CHECK(update_reason IN ('價格更新', '移動停利啟動', '保護性停損更新', '初始化', '成交初始化') OR update_reason IS NULL)
+                        CHECK(update_reason IN ('價格更新', '移動停利啟動', '保護性停損更新', '初始化', '成交初始化', '簡化追蹤成交確認') OR update_reason IS NULL)
                     )
                 ''')
                 
@@ -129,6 +129,9 @@ class MultiGroupDatabaseManager:
                 
                 # 檢查並升級現有資料庫結構
                 self._upgrade_database_schema(cursor)
+
+                # 🔧 強制檢查並添加缺失欄位
+                self._ensure_required_columns(cursor)
 
                 # 創建性能優化索引
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_strategy_groups_date_status ON strategy_groups(date, status)')
@@ -174,6 +177,34 @@ class MultiGroupDatabaseManager:
         except Exception as e:
             logger.error(f"❌ 資料庫升級失敗: {e}")
             # 不拋出異常，讓系統繼續運行
+
+    def _ensure_required_columns(self, cursor):
+        """確保所有必要欄位都存在"""
+        try:
+            # 檢查position_records表的欄位
+            cursor.execute("PRAGMA table_info(position_records)")
+            columns = [column[1] for column in cursor.fetchall()]
+
+            required_columns = {
+                'retry_count': 'INTEGER DEFAULT 0',
+                'original_price': 'REAL',
+                'max_slippage_points': 'INTEGER DEFAULT 5',
+                'last_retry_time': 'TEXT',
+                'retry_reason': 'TEXT'
+            }
+
+            for column_name, column_def in required_columns.items():
+                if column_name not in columns:
+                    try:
+                        cursor.execute(f'ALTER TABLE position_records ADD COLUMN {column_name} {column_def}')
+                        logger.info(f"✅ 添加缺失欄位: {column_name}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ 添加欄位 {column_name} 失敗: {e}")
+
+            logger.info("✅ 必要欄位檢查完成")
+
+        except Exception as e:
+            logger.error(f"❌ 檢查必要欄位失敗: {e}")
 
     def _fix_entry_price_constraint(self, cursor):
         """修復 entry_price 的 NOT NULL 約束問題"""

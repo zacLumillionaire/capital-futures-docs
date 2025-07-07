@@ -432,7 +432,10 @@ class VirtualRealOrderManager:
                     'result': result
                 })
 
-                # 9. Console通知
+                # 9. 註冊訂單ID到回報過濾器 (暫時跳過，使用時間過濾)
+                # TODO: 實現訂單ID註冊機制
+
+                # 10. Console通知
                 if self.console_enabled:
                     status = "成功" if result.success else "失敗"
                     mode_desc = "實單" if result.mode == "real" else "虛擬"

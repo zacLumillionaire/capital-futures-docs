@@ -391,17 +391,54 @@ class MultiGroupPositionManager:
         """重置每日狀態"""
         try:
             self.active_groups.clear()
-            
+
             # 重置組配置狀態
             for group in self.strategy_config.groups:
                 group.status = GroupStatus.WAITING
                 group.entry_price = None
                 group.entry_time = None
-            
+
             self.logger.info("每日狀態已重置")
 
         except Exception as e:
             self.logger.error(f"重置每日狀態失敗: {e}")
+
+    # 🔧 新增：價格更新方法
+    def update_current_price(self, current_price: float, current_time: str):
+        """
+        更新當前價格並觸發平倉機制檢查
+
+        Args:
+            current_price: 當前價格
+            current_time: 當前時間
+        """
+        try:
+            # 靜默處理，避免過多日誌輸出影響性能
+            # 只在有活躍部位時才進行處理
+            active_positions = self.get_all_active_positions()
+            if not active_positions:
+                return
+
+            # 更新平倉機制系統（如果已整合）
+            if hasattr(self, 'exit_mechanism_manager') and self.exit_mechanism_manager:
+                try:
+                    # 使用統一平倉管理器處理價格更新
+                    self.exit_mechanism_manager.process_price_update(current_price, current_time)
+                except Exception as e:
+                    # 靜默處理平倉機制錯誤，不影響主流程
+                    pass
+
+            # 更新風險管理引擎（如果存在）
+            if hasattr(self, 'risk_engine') and self.risk_engine:
+                try:
+                    self.risk_engine.update_current_price(current_price, current_time)
+                except Exception as e:
+                    # 靜默處理風險管理錯誤
+                    pass
+
+        except Exception as e:
+            # 完全靜默處理，確保不影響報價流程
+            pass
 
     # 🔧 新增：下單相關方法
 
@@ -593,34 +630,42 @@ class MultiGroupPositionManager:
             self.logger.info(f"📊 [簡化追蹤] 組{group_id}成交統計更新: "
                            f"{qty}口 @{price}, 總進度: {filled_lots}/{total_lots}")
 
-            # 🔧 新增：實際更新資料庫部位狀態
+            # 🔧 修復：實際更新資料庫部位狀態
             # 查找該組的PENDING部位並按FIFO順序確認成交
             try:
-                # 獲取今日等待組，找到對應的資料庫組ID
-                waiting_groups = self.db_manager.get_today_waiting_groups()
+                # 🔧 修復：查詢今日所有組（包括ACTIVE狀態），找到對應的資料庫組ID
+                all_groups = self.db_manager.get_today_strategy_groups()
                 group_db_id = None
 
-                for group in waiting_groups:
+                for group in all_groups:
                     if group['group_id'] == group_id:
                         group_db_id = group['id']
                         break
 
                 if group_db_id:
-                    # 獲取該組的所有部位（包括PENDING狀態）
+                    # 🔧 修復：獲取該組的PENDING部位，按lot_id順序處理
                     with self.db_manager.get_connection() as conn:
                         cursor = conn.cursor()
+                        # 🔧 修復：查詢order_status='PENDING'而不是status='PENDING'
                         cursor.execute('''
                             SELECT id, lot_id, status, order_status
                             FROM position_records
-                            WHERE group_id = ? AND status = 'PENDING'
+                            WHERE group_id = ? AND order_status = 'PENDING'
                             ORDER BY lot_id
                             LIMIT ?
                         ''', (group_db_id, qty))
 
                         pending_positions = cursor.fetchall()
 
-                        # 確認成交
+                        # 總是輸出重要的調試信息
+                        self.logger.info(f"🔍 [簡化追蹤] 組{group_id}(DB_ID:{group_db_id}) 找到 {len(pending_positions)} 個PENDING部位")
+
+                        # 🔧 修復：確認成交，每次處理qty個部位
+                        confirmed_count = 0
                         for position in pending_positions:
+                            if confirmed_count >= qty:
+                                break  # 只處理本次成交的數量
+
                             success = self.db_manager.confirm_position_filled(
                                 position_id=position[0],  # id
                                 actual_fill_price=price,
@@ -637,7 +682,17 @@ class MultiGroupPositionManager:
                                     update_reason="簡化追蹤成交確認"
                                 )
 
+                                confirmed_count += 1
                                 self.logger.info(f"✅ [簡化追蹤] 部位{position[0]}成交確認: @{price}")
+                            else:
+                                self.logger.error(f"❌ [簡化追蹤] 部位{position[0]}成交確認失敗")
+
+                        if confirmed_count > 0:
+                            self.logger.info(f"🎉 [簡化追蹤] 組{group_id} 成功確認 {confirmed_count} 個部位成交")
+                        else:
+                            self.logger.warning(f"⚠️ [簡化追蹤] 組{group_id} 沒有成功確認任何部位成交")
+                else:
+                    self.logger.warning(f"⚠️ [簡化追蹤] 找不到組{group_id}的資料庫記錄")
 
             except Exception as db_error:
                 self.logger.error(f"資料庫部位更新失敗: {db_error}")
@@ -662,12 +717,140 @@ class MultiGroupPositionManager:
             self.logger.info(f"🔄 [簡化追蹤] 組{group_id}觸發追價重試: "
                            f"{qty}口 @{price}, 第{retry_count}次")
 
-            # 簡化實現：記錄追價事件
-            # 實際的追價下單邏輯可以在後續階段實現
-            # 這裡主要確保追價事件能被正確識別和記錄
+            # 🔧 實際追價下單邏輯
+            # 1. 獲取組的基本信息
+            group_info = self._get_group_info_by_id(group_id)
+            if not group_info:
+                self.logger.error(f"找不到組{group_id}的信息")
+                return
+
+            direction = group_info.get('direction')
+            # 🔧 修復：商品代碼從配置或預設值獲取
+            product = getattr(self, 'current_product', 'TM0000')
+
+            # 2. 計算追價價格
+            retry_price = self._calculate_retry_price_for_group(direction, retry_count)
+            if retry_price is None:
+                self.logger.error(f"無法計算組{group_id}的追價價格")
+                return
+
+            self.logger.info(f"🔄 [簡化追蹤] 組{group_id}追價參數: "
+                           f"{direction} {qty}口 @{retry_price} (第{retry_count}次)")
+
+            # 3. 🔧 修復：執行追價下單 - 直接使用已初始化的下單管理器
+            for i in range(qty):
+                try:
+                    # 🔧 修復：使用已設置的order_manager (實單階段)
+                    if hasattr(self, 'order_manager') and self.order_manager:
+                        # 🔧 修復：移除不支援的order_type參數
+                        order_result = self.order_manager.execute_strategy_order(
+                            direction=direction,
+                            quantity=1,
+                            signal_source=f"group_{group_id}_retry_{retry_count}",
+                            price=retry_price
+                        )
+
+                        if order_result.success:
+                            self.logger.info(f"✅ 組{group_id}追價下單成功: 第{i+1}口 @{retry_price}")
+
+                            # 🔧 新增：註冊追價訂單到追蹤器
+                            if hasattr(self, 'order_tracker') and self.order_tracker:
+                                try:
+                                    self.order_tracker.register_order(
+                                        order_id=order_result.order_id,
+                                        product=product,
+                                        direction=direction,
+                                        quantity=1,
+                                        price=retry_price,
+                                        is_virtual=(order_result.mode == "virtual"),
+                                        signal_source=f"group_{group_id}_retry_{retry_count}",
+                                        api_seq_no=order_result.api_result if order_result.api_result else None
+                                    )
+                                    self.logger.info(f"📝 組{group_id}追價訂單已註冊: {order_result.order_id}")
+                                except Exception as track_error:
+                                    self.logger.warning(f"⚠️ 組{group_id}追價訂單註冊失敗: {track_error}")
+                        else:
+                            self.logger.error(f"❌ 組{group_id}追價下單失敗: 第{i+1}口 - {order_result.error_message}")
+                    else:
+                        self.logger.warning(f"⚠️ 下單管理器未初始化，無法執行追價下單")
+
+                except Exception as order_error:
+                    self.logger.error(f"組{group_id}第{i+1}口追價下單異常: {order_error}")
 
         except Exception as e:
             self.logger.error(f"執行組追價重試失敗: {e}")
+
+    def _get_group_info_by_id(self, group_id: int) -> dict:
+        """根據組ID獲取組信息"""
+        try:
+            # 🔧 修復：使用正確的資料庫方法
+            group_info = self.db_manager.get_strategy_group_info(group_id)
+            if group_info:
+                self.logger.info(f"🔍 [追價] 獲取組{group_id}信息: {group_info.get('direction')} @{group_info.get('range_low')}-{group_info.get('range_high')}")
+                return group_info
+            else:
+                self.logger.warning(f"⚠️ [追價] 組{group_id}信息不存在")
+                return None
+        except Exception as e:
+            self.logger.error(f"獲取組{group_id}信息失敗: {e}")
+            return None
+
+    def _calculate_retry_price_for_group(self, direction: str, retry_count: int) -> float:
+        """計算組追價價格"""
+        try:
+            # 🔧 修復：從正確的地方獲取當前市價
+            current_ask1 = 0
+            current_bid1 = 0
+
+            # 方法1: 從虛實單管理器獲取
+            if hasattr(self, 'virtual_real_order_manager') and self.virtual_real_order_manager:
+                try:
+                    current_product = getattr(self.virtual_real_order_manager, 'current_product', 'TM0000')
+                    if hasattr(self.virtual_real_order_manager, 'get_ask1_price'):
+                        ask1_price = self.virtual_real_order_manager.get_ask1_price(current_product)
+                        if ask1_price and ask1_price > 0:
+                            current_ask1 = ask1_price
+
+                    if hasattr(self.virtual_real_order_manager, 'get_bid1_price'):
+                        bid1_price = self.virtual_real_order_manager.get_bid1_price(current_product)
+                        if bid1_price and bid1_price > 0:
+                            current_bid1 = bid1_price
+                except Exception as e:
+                    self.logger.debug(f"從虛實單管理器獲取市價失敗: {e}")
+
+            # 方法2: 從主程式的best5_data獲取 (備用方案)
+            if (current_ask1 == 0 or current_bid1 == 0) and hasattr(self, '_parent_ref'):
+                try:
+                    parent = self._parent_ref()
+                    if parent and hasattr(parent, 'best5_data') and parent.best5_data:
+                        if current_ask1 == 0:
+                            current_ask1 = parent.best5_data.get('ask1', 0)
+                        if current_bid1 == 0:
+                            current_bid1 = parent.best5_data.get('bid1', 0)
+                except Exception as e:
+                    self.logger.debug(f"從best5_data獲取市價失敗: {e}")
+
+            # 檢查是否成功獲取市價
+            if current_ask1 > 0 and current_bid1 > 0:
+                if direction == "LONG":
+                    # 🔧 修復：多單使用ASK1+追價點數 (向上追價)
+                    retry_price = current_ask1 + retry_count
+                    self.logger.info(f"🔄 [追價] LONG追價計算: ASK1({current_ask1}) + {retry_count} = {retry_price}")
+                    return retry_price
+                elif direction == "SHORT":
+                    # 🔧 修復：空單使用BID1-追價點數 (向下追價，更容易成交)
+                    retry_price = current_bid1 - retry_count
+                    self.logger.info(f"🔄 [追價] SHORT追價計算: BID1({current_bid1}) - {retry_count} = {retry_price}")
+                    return retry_price
+            else:
+                self.logger.warning(f"無法獲取有效市價: ASK1={current_ask1}, BID1={current_bid1}")
+
+            self.logger.warning("無法獲取當前市價，使用預設追價邏輯")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"計算追價價格失敗: {e}")
+            return None
 
     def _on_total_lot_fill(self, strategy_id: str, price: float, qty: int,
                          filled_lots: int, total_lots: int):

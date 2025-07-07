@@ -61,7 +61,21 @@ class ExitMechanismManager:
         
         if self.console_enabled:
             print("[EXIT_MANAGER] ⚙️ 平倉機制統一管理器初始化完成")
-    
+
+    def set_trackers(self, order_tracker=None, simplified_tracker=None):
+        """
+        設定FIFO追蹤器到停損執行器
+
+        Args:
+            order_tracker: 統一追蹤器
+            simplified_tracker: 簡化追蹤器
+        """
+        if self.stop_loss_executor:
+            self.stop_loss_executor.set_trackers(order_tracker, simplified_tracker)
+
+            if self.console_enabled:
+                print("[EXIT_MANAGER] 🔗 已設定停損執行器的FIFO追蹤器")
+
     def initialize_all_components(self):
         """初始化所有平倉機制組件"""
         try:
@@ -111,7 +125,10 @@ class ExitMechanismManager:
             self.stop_loss_executor = create_stop_loss_executor(
                 self.db_manager, console_enabled=self.console_enabled
             )
-            
+
+            # 🔧 新增：設定停損執行器的FIFO追蹤器（稍後由外部設定）
+            # 這裡暫時不設定，等待外部調用 set_trackers 方法
+
             if self.console_enabled:
                 print("[EXIT_MANAGER] 🛡️ 停損組件初始化完成")
                 

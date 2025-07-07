@@ -113,11 +113,11 @@ class TotalLotManager:
     
     def process_order_reply(self, reply_data: str) -> bool:
         """
-        處理訂單回報
-        
+        處理訂單回報 - 純FIFO版本
+
         Args:
             reply_data: OnNewData回報數據 (逗號分隔)
-            
+
         Returns:
             bool: 處理是否成功
         """
@@ -125,82 +125,107 @@ class TotalLotManager:
             fields = reply_data.split(',')
             if len(fields) < 25:
                 return False
-                
+
             order_type = fields[2] if len(fields) > 2 else ""  # N/C/D
             price = float(fields[11]) if fields[11] else 0     # 價格
             qty = int(fields[20]) if fields[20] else 0         # 數量
             product = fields[8] if len(fields) > 8 else ""     # 商品代號
-            
-            # 判斷方向
-            direction = self._detect_direction(fields)
-            
+
+            # 🔧 FIFO版本：不再依賴方向檢測
+            if self.console_enabled:
+                print(f"[TOTAL_MANAGER] 🔍 FIFO處理回報: Type={order_type}, Product={product}, Price={price}, Qty={qty}")
+
             if order_type == "D":  # 成交
-                return self._handle_fill_report(price, qty, direction, product)
+                return self._handle_fill_report(price, qty, product)
             elif order_type == "C":  # 取消
-                return self._handle_cancel_report(price, qty, direction, product)
-                
+                return self._handle_cancel_report(price, qty, product)
+
             return True
-            
+
         except Exception as e:
             if self.console_enabled:
                 print(f"[TOTAL_MANAGER] ❌ 處理回報失敗: {e}")
             return False
     
     def _detect_direction(self, fields: List[str]) -> str:
-        """檢測交易方向"""
-        try:
-            if len(fields) > 40:
-                bs_flag = fields[40] if len(fields) > 40 else ""
-                if bs_flag == "B":
-                    return "LONG"
-                elif bs_flag == "S":
-                    return "SHORT"
-            return "LONG"  # 預設
-        except:
-            return "LONG"
-    
-    def _find_matching_tracker(self, price: float, direction: str, 
-                             product: str) -> Optional[TotalLotTracker]:
         """
-        找到匹配的追蹤器
-        基於方向、商品、時間窗口匹配
+        檢測交易方向 - 最終修正版本
+
+        🔧 重要發現：群益API的OnNewData回報中沒有買賣別欄位！
+        因此我們不再嘗試從回報中判斷方向，完全依賴FIFO匹配
+
+        Args:
+            fields: OnNewData回報欄位（保留參數以維持接口一致性）
+        """
+        # 🚀 不再嘗試從回報中判斷方向，返回UNKNOWN讓FIFO匹配處理
+        return "UNKNOWN"
+
+    def _convert_api_to_strategy_direction(self, api_direction: str) -> str:
+        """將API方向轉換為策略方向"""
+        if api_direction == "BUY":
+            return "LONG"
+        elif api_direction == "SELL":
+            return "SHORT"
+        else:
+            return "UNKNOWN"
+
+    def _normalize_product_code(self, product: str) -> str:
+        """標準化商品代碼，處理TM0000與TM2507的映射"""
+        # TM2507 -> TM0000 (將具體合約映射為通用代碼)
+        if product.startswith("TM") and len(product) == 6:
+            return "TM0000"
+        # MTX07 -> MTX00 (同樣邏輯)
+        elif product.startswith("MTX") and len(product) == 5:
+            return "MTX00"
+        else:
+            return product
+
+    def _find_matching_tracker(self, price: float, qty: int, product: str) -> Optional[TotalLotTracker]:
+        """
+        找到匹配的追蹤器 - 純FIFO版本
+        不依賴方向，純粹基於時間順序的FIFO匹配
         """
         try:
             current_time = time.time()
+            normalized_product = self._normalize_product_code(product)
             candidates = []
-            
+
+            # 🔧 FIFO版本：不檢查方向，只檢查商品和完成狀態
             for tracker in self.active_trackers.values():
-                # 基本條件檢查
-                if (tracker.direction == direction and 
-                    tracker.product == product and
-                    not tracker.is_complete()):
-                    
-                    # 時間窗口檢查 (5分鐘)
-                    if current_time - tracker.start_time <= 300:
-                        candidates.append(tracker)
-            
+                # 檢查商品匹配
+                if self._normalize_product_code(tracker.product) != normalized_product:
+                    continue
+
+                # 檢查完成狀態
+                if tracker.is_complete():
+                    continue
+
+                # 檢查時間窗口 (30秒內)
+                if current_time - tracker.start_time <= 30:
+                    candidates.append((tracker, tracker.start_time))
+
             if not candidates:
                 return None
-            
-            # 如果有多個候選，選擇最新創建的
-            return max(candidates, key=lambda t: t.start_time)
-            
+
+            # FIFO原則：返回最早創建的追蹤器
+            return min(candidates, key=lambda x: x[1])[0]
+
         except Exception as e:
             if self.console_enabled:
-                print(f"[TOTAL_MANAGER] ❌ 匹配追蹤器失敗: {e}")
+                print(f"[TOTAL_MANAGER] ❌ FIFO匹配追蹤器失敗: {e}")
             return None
     
-    def _handle_fill_report(self, price: float, qty: int, direction: str, 
-                          product: str) -> bool:
-        """處理成交回報"""
+    def _handle_fill_report(self, price: float, qty: int, product: str) -> bool:
+        """處理成交回報 - 純FIFO版本"""
         try:
-            tracker = self._find_matching_tracker(price, direction, product)
+            tracker = self._find_matching_tracker(price, qty, product)
             if not tracker:
                 if self.console_enabled:
-                    print(f"[TOTAL_MANAGER] ⚠️ 找不到匹配的追蹤器: "
-                          f"{direction} {product} {qty}口 @{price}")
+                    normalized_product = self._normalize_product_code(product)
+                    print(f"[TOTAL_MANAGER] ⚠️ FIFO找不到匹配的追蹤器: "
+                          f"{normalized_product} {qty}口 @{price:.0f}")
                 return False
-            
+
             return tracker.process_fill_report(price, qty)
             
         except Exception as e:
@@ -208,23 +233,45 @@ class TotalLotManager:
                 print(f"[TOTAL_MANAGER] ❌ 處理成交回報失敗: {e}")
             return False
     
-    def _handle_cancel_report(self, price: float, qty: int, direction: str, 
-                            product: str) -> bool:
-        """處理取消回報"""
+    def _handle_cancel_report(self, price: float, qty: int, product: str) -> bool:
+        """處理取消回報 - 純FIFO版本"""
         try:
-            tracker = self._find_matching_tracker(price, direction, product)
+            # 🔧 取消回報特殊處理：找到最早的未完成追蹤器
+            tracker = self._find_earliest_pending_tracker(product)
             if not tracker:
                 if self.console_enabled:
-                    print(f"[TOTAL_MANAGER] ⚠️ 找不到匹配的追蹤器(取消): "
-                          f"{direction} {product} {qty}口 @{price}")
+                    normalized_product = self._normalize_product_code(product)
+                    print(f"[TOTAL_MANAGER] ⚠️ 找不到待處理的追蹤器(取消): {normalized_product}")
                 return False
-            
-            return tracker.process_cancel_report(price, qty)
-            
+
+            # 假設每次取消1口
+            cancel_qty = 1
+            return tracker.process_cancel_report(price, cancel_qty)
+
         except Exception as e:
             if self.console_enabled:
                 print(f"[TOTAL_MANAGER] ❌ 處理取消回報失敗: {e}")
             return False
+
+    def _find_earliest_pending_tracker(self, product: str):
+        """找到最早的未完成追蹤器"""
+        try:
+            normalized_product = self._normalize_product_code(product)
+            candidates = []
+
+            for tracker in self.active_trackers.values():
+                if (self._normalize_product_code(tracker.product) == normalized_product and
+                    not tracker.is_complete()):
+                    candidates.append((tracker, tracker.start_time))
+
+            if candidates:
+                return min(candidates, key=lambda x: x[1])[0]
+            return None
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[TOTAL_MANAGER] ❌ 查找最早追蹤器失敗: {e}")
+            return None
     
     def _on_strategy_fill(self, strategy_id: str, price: float, qty: int, 
                         filled_lots: int, total_lots: int):
@@ -337,3 +384,13 @@ class TotalLotManager:
     def add_global_complete_callback(self, callback):
         """添加全局完成回調"""
         self.global_complete_callbacks.append(callback)
+
+    def get_statistics(self) -> dict:
+        """獲取統計信息"""
+        with self.data_lock:
+            return {
+                'total_strategies': self.total_strategies,
+                'completed_strategies': self.completed_strategies,
+                'failed_strategies': self.failed_strategies,
+                'active_strategies': len(self.active_trackers)
+            }

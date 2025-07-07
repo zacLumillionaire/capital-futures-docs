@@ -21,6 +21,17 @@ from typing import Dict, Any, Optional, List, Callable
 from dataclasses import dataclass
 from enum import Enum
 
+# 導入FIFO匹配器
+try:
+    from fifo_order_matcher import FIFOOrderMatcher, OrderInfo as FIFOOrderInfo
+except ImportError:
+    # 如果直接導入失敗，嘗試相對路徑
+    import sys
+    import os
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    sys.path.append(current_dir)
+    from fifo_order_matcher import FIFOOrderMatcher, OrderInfo as FIFOOrderInfo
+
 
 class OrderStatus(Enum):
     """訂單狀態"""
@@ -72,12 +83,15 @@ class UnifiedOrderTracker:
         self.strategy_manager = strategy_manager
         self.console_enabled = console_enabled
         
-        # 訂單追蹤
-        self.tracked_orders = {}  # {order_id: OrderInfo}
-        self.api_seq_mapping = {} # {api_seq_no: order_id} API序號對應
+        # 🔧 FIFO匹配器 - 替代序號匹配
+        self.fifo_matcher = FIFOOrderMatcher(console_enabled=console_enabled)
 
-        # 🔧 新增：時間窗口映射 (用於群益API序號不匹配的情況)
-        self.pending_orders = {}   # {order_id: {'time': timestamp, 'price': price, 'direction': direction, 'product': product}}
+        # 保留原有追蹤（用於回調和狀態管理）
+        self.tracked_orders = {}  # {order_id: OrderInfo}
+
+        # 🗑️ 移除序號匹配相關（不再使用）
+        # self.api_seq_mapping = {} # 已廢棄
+        # self.pending_orders = {}   # 已廢棄，改用FIFO匹配器
         
         # 回調函數
         self.order_update_callbacks = []  # 訂單更新回調
@@ -99,7 +113,7 @@ class UnifiedOrderTracker:
     
     def register_order(self, order_id: str, product: str, direction: str,
                       quantity: int, price: float, is_virtual: bool = False,
-                      signal_source: str = "strategy", api_seq_no: str = None) -> bool:
+                      signal_source: str = "strategy", api_seq_no: Optional[str] = None) -> bool:
         """
         註冊待追蹤訂單
         
@@ -134,21 +148,18 @@ class UnifiedOrderTracker:
                 
                 # 註冊追蹤
                 self.tracked_orders[order_id] = order_info
-                
-                # 建立API序號對應 (實際訂單)
-                if api_seq_no:
-                    self.api_seq_mapping[api_seq_no] = order_id
 
-                # 🔧 新增：建立時間窗口映射 (用於群益API序號不匹配的情況)
+                # 🔧 FIFO匹配器註冊 (實際訂單)
                 if not is_virtual:
-                    import time
-                    self.pending_orders[order_id] = {
-                        'time': time.time(),
-                        'price': price,
-                        'direction': direction,
-                        'product': product,
-                        'quantity': quantity
-                    }
+                    fifo_order = FIFOOrderInfo(
+                        order_id=order_id,
+                        product=product,
+                        direction=direction,
+                        quantity=quantity,
+                        price=price,
+                        submit_time=time.time()
+                    )
+                    self.fifo_matcher.add_pending_order(fifo_order)
 
                 # 更新統計
                 self.total_tracked += 1
@@ -198,36 +209,31 @@ class UnifiedOrderTracker:
             stock_no = fields[8] if len(fields) > 8 else ""        # 商品代號
             price = float(fields[11]) if fields[11] else 0         # 價格
             qty = int(fields[20]) if fields[20] else 0             # 數量
-            key_no = fields[0] if len(fields) > 0 else ""           # 委託序號（KeyNo）
-            seq_no = fields[47] if len(fields) > 47 else ""         # 序號（SeqNo）
+            # 🗑️ 不再需要序號相關變量（已改用FIFO匹配）
+            # key_no = fields[0] if len(fields) > 0 else ""
+            # seq_no = fields[47] if len(fields) > 47 else ""
 
-            # 🔧 修復：使用KeyNo作為主要識別，SeqNo作為備用
-            primary_id = key_no if key_no else seq_no
-
-            # 根據委託序號找到對應訂單
+            # 🔧 FIFO匹配邏輯 - 替代序號匹配
             with self.data_lock:
                 if self.console_enabled:
-                    print(f"[ORDER_TRACKER] 🔍 處理回報: Type={order_type}, KeyNo={key_no}, SeqNo={seq_no}")
-                    print(f"[ORDER_TRACKER] 🔍 已追蹤序號: {list(self.api_seq_mapping.keys())}")
+                    print(f"[ORDER_TRACKER] 🔍 FIFO處理回報: Type={order_type}, Product={stock_no}, Price={price}, Qty={qty}")
 
-                # 🔧 修復：先嘗試KeyNo，再嘗試SeqNo，最後嘗試API序號
-                order_id = None
-                if key_no and key_no in self.api_seq_mapping:
-                    order_id = self.api_seq_mapping[key_no]
-                elif seq_no and seq_no in self.api_seq_mapping:
-                    order_id = self.api_seq_mapping[seq_no]
-                elif primary_id and primary_id in self.api_seq_mapping:
-                    order_id = self.api_seq_mapping[primary_id]
+                # 使用FIFO匹配器找到對應訂單
+                matched_order = self.fifo_matcher.find_match(price=price, qty=qty, product=stock_no, order_type=order_type)
 
-                if not order_id:
-                    # 不是我們追蹤的訂單，忽略
+                if not matched_order:
+                    # 沒有找到匹配的訂單
                     if self.console_enabled:
-                        print(f"[ORDER_TRACKER] ⚠️ 序號KeyNo={key_no}, SeqNo={seq_no}都不在追蹤列表中")
+                        print(f"[ORDER_TRACKER] ⚠️ FIFO找不到匹配: {stock_no} {qty}口 @{price}")
                     return False
-                if order_id not in self.tracked_orders:
+
+                # 從追蹤列表中獲取完整訂單資訊
+                if matched_order.order_id not in self.tracked_orders:
+                    if self.console_enabled:
+                        print(f"[ORDER_TRACKER] ⚠️ 訂單{matched_order.order_id}不在追蹤列表中")
                     return False
-                
-                order_info = self.tracked_orders[order_id]
+
+                order_info = self.tracked_orders[matched_order.order_id]
                 
                 # 處理不同類型的回報
                 if order_type == "D":  # 成交
@@ -410,10 +416,10 @@ class UnifiedOrderTracker:
 def test_unified_order_tracker():
     """測試統一回報追蹤器"""
     print("🧪 測試統一回報追蹤器...")
-    
+
     # 創建追蹤器
     tracker = UnifiedOrderTracker(console_enabled=True)
-    
+
     # 測試虛擬訂單註冊
     print("\n📝 測試虛擬訂單註冊...")
     success = tracker.register_order(
@@ -426,16 +432,17 @@ def test_unified_order_tracker():
         signal_source="test_strategy"
     )
     print(f"虛擬訂單註冊: {'成功' if success else '失敗'}")
-    
+
     # 等待虛擬成交
     time.sleep(0.5)
-    
+
     # 測試統計
     print("\n📊 測試統計...")
     tracker.print_status()
-    
+
     print("✅ 統一回報追蹤器測試完成")
 
 
-if __name__ == "__main__":
-    test_unified_order_tracker()
+# 🗑️ 移除自動執行，避免導入時執行測試
+# if __name__ == "__main__":
+#     test_unified_order_tracker()

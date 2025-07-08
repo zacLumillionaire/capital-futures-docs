@@ -204,10 +204,10 @@ class ExitMechanismDatabaseExtension:
         
         for rule_data in default_rules:
             cursor.execute('''
-                INSERT OR IGNORE INTO lot_exit_rules 
-                (rule_name, lot_number, trailing_activation_points, trailing_pullback_ratio, 
+                INSERT OR IGNORE INTO lot_exit_rules
+                (rule_name, lot_number, trailing_activation_points, trailing_pullback_ratio,
                  protective_stop_multiplier, description, is_default)
-                VALUES (?, ?, ?, ?, ?, ?, TRUE)
+                VALUES (?, ?, ?, ?, ?, ?, 1)
             ''', rule_data)
         
         if self.console_enabled:
@@ -264,7 +264,7 @@ class ExitMechanismDatabaseExtension:
                         return False
                 
                 # 檢查預設規則是否插入
-                cursor.execute("SELECT COUNT(*) FROM lot_exit_rules WHERE is_default = TRUE")
+                cursor.execute("SELECT COUNT(*) FROM lot_exit_rules WHERE is_default = 1")
                 default_rules_count = cursor.fetchone()[0]
                 if default_rules_count != 3:
                     if self.console_enabled:

@@ -382,24 +382,25 @@ class MultiGroupDatabaseManager:
             logger.error(f"更新部位出場失敗: {e}")
             raise
     
-    def create_risk_management_state(self, position_id: int, peak_price: float, 
+    def create_risk_management_state(self, position_id: int, peak_price: float,
                                    current_time: str, update_reason: str = "初始化"):
         """創建風險管理狀態記錄"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO risk_management_states 
+                    INSERT INTO risk_management_states
                     (position_id, peak_price, last_update_time, update_reason)
                     VALUES (?, ?, ?, ?)
                 ''', (position_id, peak_price, current_time, update_reason))
-                
+
                 conn.commit()
                 logger.info(f"創建風險管理狀態: 部位={position_id}, 峰值={peak_price}")
-                
+                return True
+
         except Exception as e:
             logger.error(f"創建風險管理狀態失敗: {e}")
-            raise
+            return False
     
     def update_risk_management_state(self, position_id: int, peak_price: float = None,
                                    current_stop_loss: float = None, trailing_activated: bool = None,
@@ -683,6 +684,66 @@ class MultiGroupDatabaseManager:
                 return True
         except Exception as e:
             logger.error(f"標記部位失敗失敗: {e}")
+            return False
+
+    def update_position_status(self, position_id: int, status: str,
+                             exit_reason: str = None, exit_price: float = None,
+                             order_status: str = None) -> bool:
+        """
+        更新部位狀態 - 統一出場管理器專用
+
+        Args:
+            position_id: 部位ID
+            status: 新狀態 (EXITING, EXITED, FAILED等)
+            exit_reason: 出場原因 (可選)
+            exit_price: 出場價格 (可選)
+            order_status: 訂單狀態 (可選)
+
+        Returns:
+            bool: 更新是否成功
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 構建動態更新語句
+                update_fields = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
+                params = [status]
+
+                if exit_reason is not None:
+                    update_fields.append("exit_reason = ?")
+                    params.append(exit_reason)
+
+                if exit_price is not None:
+                    update_fields.append("exit_price = ?")
+                    params.append(exit_price)
+
+                if order_status is not None:
+                    update_fields.append("order_status = ?")
+                    params.append(order_status)
+
+                # 添加WHERE條件的position_id
+                params.append(position_id)
+
+                sql = f'''
+                    UPDATE position_records
+                    SET {", ".join(update_fields)}
+                    WHERE id = ?
+                '''
+
+                cursor.execute(sql, params)
+                conn.commit()
+
+                logger.info(f"✅ 更新部位{position_id}狀態: {status}")
+                if exit_reason:
+                    logger.info(f"   出場原因: {exit_reason}")
+                if exit_price:
+                    logger.info(f"   出場價格: {exit_price}")
+
+                return True
+
+        except Exception as e:
+            logger.error(f"更新部位狀態失敗: {e}")
             return False
 
     def get_position_by_order_id(self, order_id: str) -> Optional[Dict]:

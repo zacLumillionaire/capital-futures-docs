@@ -34,6 +34,9 @@ class RiskManagementEngine:
         # 🔧 新增：統一出場管理器 (稍後設置)
         self.unified_exit_manager = None
 
+        # 🔧 新增：移動停利啟動快取，避免重複觸發
+        self._trailing_activated_cache = set()  # 存儲已啟動移動停利的部位ID
+
         self.logger.info("風險管理引擎初始化完成")
 
     def set_unified_exit_manager(self, unified_exit_manager):
@@ -107,6 +110,10 @@ class RiskManagementEngine:
 
             active_positions = self.db_manager.get_all_active_positions()
 
+            # 🔧 清理快取：移除已不存在的部位ID
+            active_position_ids = {pos.get('id') for pos in active_positions if pos.get('id')}
+            self._trailing_activated_cache &= active_position_ids  # 保留交集
+
             # 🔧 過濾掉無效部位（PENDING狀態或entry_price為None的部位）
             valid_positions = []
             invalid_count = 0
@@ -167,9 +174,26 @@ class RiskManagementEngine:
 
                 # 每15秒輸出一次組別狀態
                 if time.time() - self._last_group_log_time > 15.0:
-                    print(f"[RISK_ENGINE] 🏢 組別狀態: {len(groups)}個活躍組別")
+                    print(f"[RISK_ENGINE] 🏢 組別狀態總覽: {len(groups)}個活躍組別")
                     for group_id, positions in groups.items():
-                        print(f"[RISK_ENGINE]   組{group_id}: {len(positions)}個部位")
+                        # 計算組別統計
+                        total_positions = len(positions)
+                        long_count = sum(1 for p in positions if p['direction'] == 'LONG')
+                        short_count = total_positions - long_count
+                        trailing_active_count = sum(1 for p in positions if p.get('trailing_activated'))
+                        protection_active_count = sum(1 for p in positions if p.get('protection_activated'))
+
+                        print(f"[RISK_ENGINE]   組{group_id}: {total_positions}個部位 (多:{long_count} 空:{short_count})")
+                        print(f"[RISK_ENGINE]     移動停利:{trailing_active_count}個 保護停損:{protection_active_count}個")
+
+                        # 顯示區間資訊
+                        if positions:
+                            first_pos = positions[0]
+                            range_high = first_pos.get('range_high')
+                            range_low = first_pos.get('range_low')
+                            if range_high and range_low:
+                                print(f"[RISK_ENGINE]     區間: {range_low:.0f} - {range_high:.0f}")
+
                     self._last_group_log_time = time.time()
 
             # 逐組檢查
@@ -354,17 +378,46 @@ class RiskManagementEngine:
             # 只有非初始停損的部位才檢查保護性停損
             if not position.get('current_stop_loss') or not position.get('protection_activated'):
                 return False
-            
+
             direction = position['direction']
             stop_loss_price = position['current_stop_loss']
-            
+            position_id = position['id']
+
+            # 🔍 DEBUG: 保護性停損檢查追蹤 (控制頻率)
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                if not hasattr(self, f'_last_protection_log_{position_id}'):
+                    setattr(self, f'_last_protection_log_{position_id}', 0)
+
+                current_time_stamp = time.time()
+                # 每8秒輸出一次保護性停損狀態
+                if current_time_stamp - getattr(self, f'_last_protection_log_{position_id}') > 8.0:
+                    distance = abs(current_price - stop_loss_price)
+                    condition = f"當前:{current_price:.0f} {'<=' if direction == 'LONG' else '>='} 停損:{stop_loss_price:.0f}"
+
+                    print(f"[RISK_ENGINE] 🛡️ 保護性停損檢查 - 部位{position_id}({direction}):")
+                    print(f"[RISK_ENGINE]   條件: {condition}")
+                    print(f"[RISK_ENGINE]   距離: {distance:.0f}點")
+                    setattr(self, f'_last_protection_log_{position_id}', current_time_stamp)
+
+            # 檢查觸發條件
+            triggered = False
             if direction == 'LONG':
-                return current_price <= stop_loss_price
+                triggered = current_price <= stop_loss_price
             else:  # SHORT
-                return current_price >= stop_loss_price
-                
+                triggered = current_price >= stop_loss_price
+
+            # 🔍 DEBUG: 保護性停損觸發事件 (重要事件，立即輸出)
+            if triggered and hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE] 💥 保護性停損觸發! 部位{position_id}({direction})")
+                print(f"[RISK_ENGINE]   觸發價格: {current_price:.0f}")
+                print(f"[RISK_ENGINE]   停損價格: {stop_loss_price:.0f}")
+
+            return triggered
+
         except Exception as e:
             self.logger.error(f"檢查保護性停損失敗: {e}")
+            if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                print(f"[RISK_ENGINE] ❌ 保護性停損檢查失敗: {e}")
             return False
     
     def _check_trailing_stop_conditions(self, position: Dict, 
@@ -414,7 +467,8 @@ class RiskManagementEngine:
                         setattr(self, f'_last_trailing_log_{position_id}', current_time_stamp)
 
             # 檢查移動停利啟動條件
-            if not trailing_activated:
+            position_id = position['id']
+            if not trailing_activated and position_id not in self._trailing_activated_cache:
                 activation_triggered = False
 
                 if direction == 'LONG':
@@ -423,22 +477,26 @@ class RiskManagementEngine:
                     activation_triggered = current_price <= entry_price - float(rule.trailing_activation)
 
                 if activation_triggered:
+                    # 🔧 立即加入快取，避免重複觸發
+                    self._trailing_activated_cache.add(position_id)
+
                     # 🔍 DEBUG: 移動停利啟動事件 (重要事件，立即輸出)
                     if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
-                        print(f"[RISK_ENGINE] 🚀 移動停利啟動! 部位{position['id']}(第{rule_config['lot_id']}口)")
+                        print(f"[RISK_ENGINE] 🚀 移動停利啟動! 部位{position_id}(第{rule_config['lot_id']}口)")
                         print(f"[RISK_ENGINE]   觸發價格: {current_price:.0f} (需要:{entry_price + float(rule.trailing_activation):.0f})")
                         print(f"[RISK_ENGINE]   獲利幅度: {float(rule.trailing_activation):.0f}點")
                         print(f"[RISK_ENGINE]   回撤比例: {float(rule.trailing_pullback)*100:.0f}%")
 
                     # 啟動移動停利
                     self.db_manager.update_risk_management_state(
-                        position_id=position['id'],
+                        position_id=position_id,
                         trailing_activated=True,
                         update_time=current_time,
                         update_reason="移動停利啟動"
                     )
 
-                    self.logger.info(f"部位 {position['id']} 第{rule_config['lot_id']}口移動停利啟動")
+                    # 🔧 修復：只記錄一次移動停利啟動LOG
+                    self.logger.info(f"部位 {position_id} 第{rule_config['lot_id']}口移動停利啟動")
                     return None
             
             # 檢查移動停利出場條件

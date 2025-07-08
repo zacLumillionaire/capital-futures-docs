@@ -163,21 +163,23 @@ class UnifiedExitManager:
                 self.logger.error(f"無效的原始方向: {original_direction}")
                 return False
             
-            # 2. 使用與進場相同的下單方法 (關鍵！)
+            # 2. 使用與進場相同的下單方法，但設定為平倉 (關鍵！)
             order_result = self.order_manager.execute_strategy_order(
                 direction=exit_direction,
                 signal_source=f"exit_{exit_reason}_{position_info['id']}",
                 product="TM0000",
                 price=exit_price,
-                quantity=1
+                quantity=1,
+                new_close=1  # 🔧 修復：設定為平倉 (1=平倉)
             )
             
             # 3. 處理下單結果 (與進場邏輯一致)
             if order_result.success:
-                # 更新部位狀態為 EXITING
+                # 🔧 修復：不更新為EXITING狀態，因為資料庫約束不允許
+                # 改為記錄出場原因和價格，但保持ACTIVE狀態直到成交確認
                 self.db_manager.update_position_status(
                     position_id=position_info['id'],
-                    status='EXITING',
+                    status='ACTIVE',  # 保持ACTIVE狀態
                     exit_reason=exit_reason,
                     exit_price=exit_price
                 )

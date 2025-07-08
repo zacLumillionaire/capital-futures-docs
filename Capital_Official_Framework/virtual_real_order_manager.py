@@ -339,7 +339,7 @@ class VirtualRealOrderManager:
 
     def execute_strategy_order(self, direction: str, signal_source: str = "strategy_breakout",
                              product: Optional[str] = None, price: Optional[float] = None,
-                             quantity: Optional[int] = None) -> OrderResult:
+                             quantity: Optional[int] = None, new_close: int = 0) -> OrderResult:
         """
         執行策略下單 - 統一入口
 
@@ -349,6 +349,7 @@ class VirtualRealOrderManager:
             product: 商品代碼 (可選，自動取得)
             price: 價格 (可選，自動取得ASK1)
             quantity: 數量 (可選，自動取得策略配置)
+            new_close: 新平倉 (0=新倉, 1=平倉, 2=自動)
 
         Returns:
             OrderResult: 下單結果
@@ -402,7 +403,7 @@ class VirtualRealOrderManager:
                     quantity=quantity,
                     price=price,
                     order_type="FOK",
-                    new_close=0,  # 新倉
+                    new_close=new_close,  # 使用傳入的new_close參數
                     day_trade="N",  # 非當沖
                     signal_source=signal_source
                 )

@@ -336,14 +336,14 @@ class SimplifiedOrderTracker:
                     print(f"[SIMPLIFIED_TRACKER] ✅ 策略組{group.group_id}成交: "
                           f"{qty}口 @{price:.0f}, 總計: {group.filled_lots}/{group.total_lots}")
 
+                # 🔧 修復：每次成交都觸發回調，不只是完成時
+                self._trigger_fill_callbacks(group, price, qty)
+
                 # 檢查是否完成
                 if group.is_complete():
                     self.completed_groups += 1
                     if self.console_enabled:
                         print(f"[SIMPLIFIED_TRACKER] 🎉 策略組{group.group_id}建倉完成!")
-
-                    # 觸發完成回調
-                    self._trigger_fill_callbacks(group, price, qty)
 
                 return True
 
@@ -648,14 +648,14 @@ class SimplifiedOrderTracker:
                     print(f"[SIMPLIFIED_TRACKER] ✅ 策略組{group.group_id}成交: "
                           f"{qty}口 @{price:.0f}, 總計: {group.filled_lots}/{group.total_lots}")
 
+                # 🔧 修復：每次成交都觸發回調，不只是完成時
+                self._trigger_fill_callbacks(group, price, qty)
+
                 # 檢查是否完成
                 if group.is_complete():
                     self.completed_groups += 1
                     if self.console_enabled:
                         print(f"[SIMPLIFIED_TRACKER] 🎉 策略組{group.group_id}建倉完成!")
-
-                    # 觸發完成回調
-                    self._trigger_fill_callbacks(group, price, qty)
 
                 return True
 

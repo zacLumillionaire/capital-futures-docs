@@ -11,6 +11,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 from typing import Optional
+from datetime import datetime
 
 # 加入order_service路徑
 order_service_path = os.path.join(os.path.dirname(__file__), 'order_service')
@@ -351,6 +352,115 @@ class SimpleIntegratedApp:
 
                         if self.console_enabled:
                             print("[MULTI_GROUP] 🔧 平倉追價回調已註冊")
+
+                    # 🔧 新增：註冊平倉成交回調
+                    def on_exit_fill(exit_order: dict, price: float, qty: int):
+                        """平倉成交回調函數 - 更新部位狀態為EXITED"""
+                        try:
+                            position_id = exit_order.get('position_id')
+                            exit_reason = exit_order.get('exit_reason', '平倉')
+
+                            if self.console_enabled:
+                                print(f"[MAIN] 🎯 收到平倉成交回調: 部位{position_id} @{price:.0f}")
+
+                            # 更新部位狀態為EXITED
+                            if hasattr(self, 'multi_group_db_manager') and self.multi_group_db_manager:
+                                success = self.multi_group_db_manager.update_position_exit(
+                                    position_id=position_id,
+                                    exit_price=price,
+                                    exit_time=datetime.now().strftime('%H:%M:%S'),
+                                    exit_reason=exit_reason,
+                                    pnl=0.0  # 暫時設為0，後續可以計算實際損益
+                                )
+
+                                if success:
+                                    if self.console_enabled:
+                                        print(f"[MAIN] ✅ 部位{position_id}狀態已更新為EXITED")
+                                else:
+                                    if self.console_enabled:
+                                        print(f"[MAIN] ❌ 部位{position_id}狀態更新失敗")
+
+                        except Exception as e:
+                            if self.console_enabled:
+                                print(f"[MAIN] ❌ 平倉成交回調異常: {e}")
+
+                    # 註冊平倉成交回調到簡化追蹤器
+                    if hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
+                       self.multi_group_position_manager.simplified_tracker:
+                        self.multi_group_position_manager.simplified_tracker.exit_fill_callbacks.append(on_exit_fill)
+
+                        if self.console_enabled:
+                            print("[MULTI_GROUP] 🎯 平倉成交回調已註冊")
+
+                    # 🔧 新增：註冊平倉追價回調
+                    def on_exit_retry(exit_order: dict, retry_count: int):
+                        """平倉追價回調函數 - 執行平倉FOK追價"""
+                        try:
+                            position_id = exit_order.get('position_id')
+                            original_direction = exit_order.get('original_direction')  # 原始部位方向
+                            exit_reason = exit_order.get('exit_reason', '平倉追價')
+
+                            if self.console_enabled:
+                                print(f"[MAIN] 🔄 收到平倉追價回調: 部位{position_id} 第{retry_count}次")
+
+                            # 檢查追價限制
+                            max_retries = 5
+                            if retry_count > max_retries:
+                                if self.console_enabled:
+                                    print(f"[MAIN] ❌ 部位{position_id}追價次數超限({retry_count}>{max_retries})")
+                                return
+
+                            # 計算平倉追價價格
+                            retry_price = self._calculate_exit_retry_price(original_direction, retry_count)
+                            if not retry_price:
+                                if self.console_enabled:
+                                    print(f"[MAIN] ❌ 部位{position_id}無法計算追價價格")
+                                return
+
+                            # 檢查滑價限制
+                            original_price = exit_order.get('original_price', 0)
+                            max_slippage = 5
+                            if original_price and abs(retry_price - original_price) > max_slippage:
+                                if self.console_enabled:
+                                    print(f"[MAIN] ❌ 部位{position_id}追價滑價超限: {abs(retry_price - original_price):.0f}點")
+                                return
+
+                            # 執行平倉追價下單
+                            exit_direction = "SELL" if original_direction == "LONG" else "BUY"
+
+                            if self.console_enabled:
+                                print(f"[MAIN] 🔄 執行平倉追價: 部位{position_id} {exit_direction} @{retry_price:.0f} (第{retry_count}次)")
+
+                            # 使用虛實單管理器執行追價下單
+                            if hasattr(self, 'virtual_real_order_manager') and self.virtual_real_order_manager:
+                                order_result = self.virtual_real_order_manager.execute_strategy_order(
+                                    direction=exit_direction,
+                                    signal_source=f"exit_retry_{position_id}_{retry_count}",
+                                    product="TM0000",
+                                    price=retry_price,
+                                    quantity=1,
+                                    new_close=1  # 平倉
+                                )
+                                success = order_result.success if order_result else False
+
+                                if success:
+                                    if self.console_enabled:
+                                        print(f"[MAIN] ✅ 部位{position_id}第{retry_count}次追價下單成功")
+                                else:
+                                    if self.console_enabled:
+                                        print(f"[MAIN] ❌ 部位{position_id}第{retry_count}次追價下單失敗")
+
+                        except Exception as e:
+                            if self.console_enabled:
+                                print(f"[MAIN] ❌ 平倉追價回調異常: {e}")
+
+                    # 註冊平倉追價回調到簡化追蹤器
+                    if hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
+                       self.multi_group_position_manager.simplified_tracker:
+                        self.multi_group_position_manager.simplified_tracker.exit_retry_callbacks.append(on_exit_retry)
+
+                        if self.console_enabled:
+                            print("[MULTI_GROUP] 🔄 平倉追價回調已註冊")
 
                         # 🔧 設定停損執行器的簡化追蹤器引用
                         if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
@@ -3902,6 +4012,81 @@ class SimpleIntegratedApp:
     # 🔧 移除：_find_position_by_seq_no 方法
     # 🔧 移除：_schedule_exit_retry 方法
     # 出場追價已整合到簡化追蹤器的FIFO邏輯中，不再依賴序號查找
+
+    def _calculate_exit_retry_price(self, original_direction: str, retry_count: int) -> Optional[float]:
+        """
+        計算平倉追價價格
+
+        Args:
+            original_direction: 原始部位方向 (LONG/SHORT)
+            retry_count: 重試次數
+
+        Returns:
+            float: 追價價格，失敗返回None
+
+        平倉追價邏輯：
+        - 多單平倉(SELL): 使用BID1 - retry_count點 (向下追價，更容易成交)
+        - 空單平倉(BUY): 使用ASK1 + retry_count點 (向上追價，更容易成交)
+        """
+        try:
+            product = "TM0000"  # 預設使用微型台指
+
+            if not original_direction:
+                if self.console_enabled:
+                    print(f"[MAIN] ❌ 無法取得原始部位方向")
+                return None
+
+            # 取得當前報價
+            current_ask1 = None
+            current_bid1 = None
+
+            # 方法1: 從下單管理器取得報價
+            if hasattr(self, 'virtual_real_order_manager') and self.virtual_real_order_manager:
+                try:
+                    if hasattr(self.virtual_real_order_manager, 'get_ask1_price'):
+                        current_ask1 = self.virtual_real_order_manager.get_ask1_price(product)
+                    if hasattr(self.virtual_real_order_manager, 'get_bid1_price'):
+                        current_bid1 = self.virtual_real_order_manager.get_bid1_price(product)
+                except:
+                    pass
+
+            # 方法2: 從報價管理器取得報價
+            if (not current_ask1 or not current_bid1) and hasattr(self, 'quote_manager') and self.quote_manager:
+                try:
+                    quote_data = self.quote_manager.get_current_quote(product)
+                    if quote_data:
+                        current_ask1 = quote_data.get('ask1', 0)
+                        current_bid1 = quote_data.get('bid1', 0)
+                except:
+                    pass
+
+            # 檢查是否成功獲取市價
+            if current_ask1 > 0 and current_bid1 > 0:
+                if original_direction.upper() == "LONG":
+                    # 🔧 多單平倉：使用BID1 - retry_count點 (向下追價)
+                    retry_price = current_bid1 - retry_count
+                    if self.console_enabled:
+                        print(f"[MAIN] 🔄 多單平倉追價計算: BID1({current_bid1}) - {retry_count} = {retry_price}")
+                    return retry_price
+                elif original_direction.upper() == "SHORT":
+                    # 🔧 空單平倉：使用ASK1 + retry_count點 (向上追價)
+                    retry_price = current_ask1 + retry_count
+                    if self.console_enabled:
+                        print(f"[MAIN] 🔄 空單平倉追價計算: ASK1({current_ask1}) + {retry_count} = {retry_price}")
+                    return retry_price
+            else:
+                if self.console_enabled:
+                    print(f"[MAIN] ❌ 無法獲取有效市價: ASK1={current_ask1}, BID1={current_bid1}")
+
+            if self.console_enabled:
+                print(f"[MAIN] ❌ 無法計算平倉追價，使用預設邏輯")
+            return None
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[MAIN] ❌ 計算平倉追價失敗: {e}")
+            return None
+
 
 if __name__ == "__main__":
     app = SimpleIntegratedApp()

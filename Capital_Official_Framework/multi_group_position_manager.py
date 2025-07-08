@@ -679,7 +679,7 @@ class MultiGroupPositionManager:
                                     position_id=position[0],
                                     peak_price=price,
                                     current_time=datetime.now().strftime('%H:%M:%S'),
-                                    update_reason="簡化追蹤成交確認"
+                                    update_reason="初始化"
                                 )
 
                                 confirmed_count += 1

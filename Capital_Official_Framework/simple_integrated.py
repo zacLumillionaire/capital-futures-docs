@@ -719,6 +719,7 @@ class SimpleIntegratedApp:
                             # 帳號信息
                             branch_code = cutData[4]      # 分公司代碼
                             account = cutData[5]          # 期貨帳號
+                            buy_sell = cutData[6] if len(cutData) > 6 else ""  # 🔧 新增：買賣別/新平倉標識
 
                             # 商品信息
                             product = cutData[8]          # 商品代碼
@@ -760,6 +761,8 @@ class SimpleIntegratedApp:
                             print(f"   💰 價格: {price}")
                             print(f"   📦 數量: {quantity}")
                             print(f"   ⏰ 時間: {date} {time}")
+                            if buy_sell:
+                                print(f"   🔄 買賣別: {buy_sell}")
                             if contract_month:
                                 print(f"   📅 合約月份: {contract_month}")
                             if match_no:
@@ -1839,12 +1842,40 @@ class SimpleIntegratedApp:
     def process_strategy_logic_safe(self, price, time_str):
         """安全的策略邏輯處理 - 避免頻繁UI更新"""
         try:
-            # 🔍 可控制的策略Console輸出
+            # 🔍 可控制的策略Console輸出 - 增強版包含時間對比
             if getattr(self, 'console_strategy_enabled', True):
                 if price == 0:
                     print(f"⚠️ 策略收到0價格數據，時間: {time_str}")
                 elif self.price_count % 50 == 0:  # 每50筆報價顯示一次
-                    print(f"🔍 策略收到: price={price}, time={time_str}, count={self.price_count}")
+                    # 🕐 添加系統時間對比
+                    import datetime
+                    current_time = datetime.datetime.now().strftime("%H:%M:%S")
+
+                    # 計算時間差異（簡化版）
+                    try:
+                        api_hour, api_min, api_sec = map(int, time_str.split(':'))
+                        sys_hour, sys_min, sys_sec = map(int, current_time.split(':'))
+
+                        api_total_sec = api_hour * 3600 + api_min * 60 + api_sec
+                        sys_total_sec = sys_hour * 3600 + sys_min * 60 + sys_sec
+                        time_diff = sys_total_sec - api_total_sec
+
+                        # 處理跨日情況（簡化處理）
+                        if time_diff > 43200:  # 12小時以上，可能是跨日
+                            time_diff -= 86400
+                        elif time_diff < -43200:
+                            time_diff += 86400
+
+                        print(f"🔍 策略收到: price={price}, api_time={time_str}, sys_time={current_time}, diff={time_diff}s, count={self.price_count}")
+
+                        # 🚨 延遲警告
+                        if abs(time_diff) > 30:  # 超過30秒
+                            print(f"⚠️ 時間差異警告: {time_diff}秒 (API時間 vs 系統時間)")
+
+                    except Exception as e:
+                        # 時間計算錯誤時回退到原始格式
+                        print(f"🔍 策略收到: price={price}, api_time={time_str}, sys_time={current_time}, count={self.price_count}")
+                        print(f"⚠️ 時間差異計算錯誤: {e}")
 
             # 🔧 簡化統計更新，避免複雜時間操作 (僅在監控啟用時)
             if getattr(self, 'monitoring_enabled', True):

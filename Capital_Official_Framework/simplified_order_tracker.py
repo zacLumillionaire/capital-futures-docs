@@ -263,26 +263,44 @@ class SimplifiedOrderTracker:
             price = float(fields[11]) if fields[11] else 0     # 價格
             qty = int(fields[20]) if fields[20] else 0         # 數量
             product = fields[8] if len(fields) > 8 else ""     # 商品代號
+            buy_sell = fields[6] if len(fields) > 6 else ""    # 🔧 新增：買賣別/新平倉標識
 
             if self.console_enabled:
-                print(f"[SIMPLIFIED_TRACKER] 🔍 FIFO處理回報: Type={order_type}, Product={product}, Price={price}, Qty={qty}")
+                print(f"[SIMPLIFIED_TRACKER] 🔍 FIFO處理回報: Type={order_type}, Product={product}, Price={price}, Qty={qty}, BuySell={buy_sell}")
 
             processed = False
 
             if order_type == "D":  # 成交
-                # 🔧 修復: 先嘗試進場成交處理 (更常見的情況)
-                processed = self._handle_fill_report_fifo(price, qty, product)
-                if processed:
-                    if self.console_enabled:
-                        print(f"[SIMPLIFIED_TRACKER] ✅ 進場成交處理完成")
-                    return True
+                # 🔧 修復：根據BuySell欄位正確識別平倉成交
+                is_close_position = self._is_close_position_order(buy_sell)
 
-                # 再嘗試平倉成交處理
-                processed = self._handle_exit_fill_report(price, qty, product)
-                if processed:
+                if is_close_position:
+                    # 平倉成交：直接處理平倉成交
                     if self.console_enabled:
-                        print(f"[SIMPLIFIED_TRACKER] ✅ 平倉成交處理完成")
-                    return True
+                        print(f"[SIMPLIFIED_TRACKER] 🎯 識別為平倉成交，BuySell={buy_sell}")
+                    processed = self._handle_exit_fill_report(price, qty, product)
+                    if processed:
+                        if self.console_enabled:
+                            print(f"[SIMPLIFIED_TRACKER] ✅ 平倉成交處理完成")
+                        return True
+                else:
+                    # 新倉成交：處理進場成交
+                    if self.console_enabled:
+                        print(f"[SIMPLIFIED_TRACKER] 🏗️ 識別為新倉成交，BuySell={buy_sell}")
+                    processed = self._handle_fill_report_fifo(price, qty, product)
+                    if processed:
+                        if self.console_enabled:
+                            print(f"[SIMPLIFIED_TRACKER] ✅ 進場成交處理完成")
+                        return True
+
+                    # 如果新倉成交處理失敗，再嘗試平倉成交（容錯機制）
+                    if self.console_enabled:
+                        print(f"[SIMPLIFIED_TRACKER] ⚠️ 新倉成交處理失敗，嘗試平倉成交處理")
+                    processed = self._handle_exit_fill_report(price, qty, product)
+                    if processed:
+                        if self.console_enabled:
+                            print(f"[SIMPLIFIED_TRACKER] ✅ 平倉成交處理完成（容錯）")
+                        return True
 
             elif order_type == "C":  # 取消
                 # 🔧 修復: 先嘗試進場取消處理 (更常見的情況)
@@ -304,6 +322,54 @@ class SimplifiedOrderTracker:
         except Exception as e:
             if self.console_enabled:
                 print(f"[SIMPLIFIED_TRACKER] ❌ 處理回報失敗: {e}")
+            return False
+
+    def _is_close_position_order(self, buy_sell: str) -> bool:
+        """
+        判斷是否為平倉單
+
+        Args:
+            buy_sell: BuySell欄位內容 (如 "SOF20")
+
+        Returns:
+            bool: True表示平倉單，False表示新倉單
+
+        根據群益API文檔：
+        BuySell欄位第2個子碼：
+        - N: 新倉
+        - O: 平倉  ← 我們要識別的
+        - Y: 當沖
+        - 7: 代沖銷
+        """
+        try:
+            if not buy_sell:
+                return False
+
+            # 🔍 DEBUG: 顯示BuySell欄位分析
+            if self.console_enabled:
+                print(f"[SIMPLIFIED_TRACKER] 🔍 分析BuySell欄位: '{buy_sell}'")
+
+            # 檢查是否包含平倉標識 "O"
+            # 根據文檔，第2個子碼為 "O" 表示平倉
+            if len(buy_sell) >= 2:
+                second_char = buy_sell[1]  # 第2個子碼
+                is_close = (second_char == 'O')
+
+                if self.console_enabled:
+                    print(f"[SIMPLIFIED_TRACKER]   第2個子碼: '{second_char}' -> {'平倉' if is_close else '非平倉'}")
+
+                return is_close
+
+            # 容錯：如果格式不符預期，檢查是否包含 "O"
+            contains_o = 'O' in buy_sell
+            if self.console_enabled:
+                print(f"[SIMPLIFIED_TRACKER]   容錯檢查: 包含'O' -> {contains_o}")
+
+            return contains_o
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[SIMPLIFIED_TRACKER] ❌ 分析BuySell欄位失敗: {e}")
             return False
     
     def _handle_fill_report_fifo(self, price: float, qty: int, product: str) -> bool:

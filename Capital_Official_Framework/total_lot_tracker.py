@@ -209,27 +209,44 @@ class TotalLotTracker:
                 if self.console_enabled:
                     print(f"[TOTAL_TRACKER] ❌ {self.strategy_id}取消: {qty}口 @{price}")
                 
-                # 檢查是否需要追價
+                # 🔧 修復：檢查是否需要追價（避免與SimplifiedTracker重複）
+                # 只有在SimplifiedTracker沒有處理時才觸發
                 if self.needs_retry() and not self.is_retrying:
                     current_time = time.time()
-                    
+
                     # 避免頻繁重試 (至少間隔1秒)
                     if current_time - self.last_retry_time >= 1.0:
                         remaining = self.remaining_lots
                         retry_lots = min(qty, remaining)
-                        
+
                         if retry_lots > 0:
-                            self.retry_count += 1
-                            self.last_retry_time = current_time
-                            self.is_retrying = True
-                            self.pending_retry_lots = retry_lots
-                            
-                            if self.console_enabled:
-                                print(f"[TOTAL_TRACKER] 🔄 {self.strategy_id}觸發追價: "
-                                      f"第{self.retry_count}次, {retry_lots}口")
-                            
-                            # 觸發追價回調
-                            self._trigger_retry_callbacks(retry_lots, price)
+                            # 🔧 檢查全局追價狀態（如果SimplifiedTracker已處理則跳過）
+                            group_key = f"total_{self.strategy_id}_{self.product}"
+
+                            # 簡化的全局檢查：如果最近2秒內有追價，則跳過
+                            should_retry = True
+                            if hasattr(self, '_last_global_retry_check'):
+                                if current_time - self._last_global_retry_check < 2.0:
+                                    should_retry = False
+                                    if self.console_enabled:
+                                        print(f"[TOTAL_TRACKER] 🔒 {self.strategy_id}跳過追價 (可能已被其他追蹤器處理)")
+
+                            if should_retry:
+                                self._last_global_retry_check = current_time
+                                self.retry_count += 1
+                                self.last_retry_time = current_time
+                                self.is_retrying = True
+                                self.pending_retry_lots = retry_lots
+
+                                if self.console_enabled:
+                                    print(f"[TOTAL_TRACKER] 🔄 {self.strategy_id}觸發追價: "
+                                          f"第{self.retry_count}次, {retry_lots}口 (備用機制)")
+
+                                # 觸發追價回調
+                                self._trigger_retry_callbacks(retry_lots, price)
+                else:
+                    if self.console_enabled and self.is_retrying:
+                        print(f"[TOTAL_TRACKER] ⚠️ {self.strategy_id}已在追價中，跳過重複觸發")
                 
                 return True
                 

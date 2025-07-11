@@ -195,20 +195,31 @@ class ExitMechanismDatabaseExtension:
             )
         ''')
         
-        # 插入預設規則 (對應回測程式)
-        default_rules = [
-            ('回測標準規則', 1, 15, 0.20, None, '第1口: 15點啟動移動停利'),
-            ('回測標準規則', 2, 40, 0.20, 2.0, '第2口: 40點啟動移動停利, 2倍保護'),
-            ('回測標準規則', 3, 65, 0.20, 2.0, '第3口: 65點啟動移動停利, 2倍保護')
-        ]
-        
-        for rule_data in default_rules:
-            cursor.execute('''
-                INSERT OR IGNORE INTO lot_exit_rules
-                (rule_name, lot_number, trailing_activation_points, trailing_pullback_ratio,
-                 protective_stop_multiplier, description, is_default)
-                VALUES (?, ?, ?, ?, ?, ?, 1)
-            ''', rule_data)
+        # 🔧 修復：先檢查是否已有預設規則，避免重複插入
+        cursor.execute("SELECT COUNT(*) FROM lot_exit_rules WHERE is_default = 1")
+        existing_default_count = cursor.fetchone()[0]
+
+        if existing_default_count == 0:
+            # 只有在沒有預設規則時才插入 - 🔧 用戶自定義配置
+            default_rules = [
+                ('回測標準規則', 1, 15, 0.10, None, '第1口: 15點啟動移動停利, 10%回撤'),
+                ('回測標準規則', 2, 40, 0.10, 2.0, '第2口: 40點啟動移動停利, 10%回撤, 2倍保護'),
+                ('回測標準規則', 3, 41, 0.20, 2.0, '第3口: 41點啟動移動停利, 20%回撤, 2倍保護')
+            ]
+
+            for rule_data in default_rules:
+                cursor.execute('''
+                    INSERT INTO lot_exit_rules
+                    (rule_name, lot_number, trailing_activation_points, trailing_pullback_ratio,
+                     protective_stop_multiplier, description, is_default)
+                    VALUES (?, ?, ?, ?, ?, ?, 1)
+                ''', rule_data)
+
+            if self.console_enabled:
+                print("[EXIT_DB] 📊 插入預設規則: 15/40/41點啟動, 10%/10%/20%回撤, 2倍保護")
+        else:
+            if self.console_enabled:
+                print(f"[EXIT_DB] ℹ️ 預設規則已存在 ({existing_default_count}個)，跳過插入")
         
         if self.console_enabled:
             print("[EXIT_DB] ⚙️ 創建 lot_exit_rules 表格 - 口數平倉規則配置")
@@ -263,12 +274,35 @@ class ExitMechanismDatabaseExtension:
                             print(f"[EXIT_DB] ❌ 欄位 position_records.{column} 不存在")
                         return False
                 
-                # 檢查預設規則是否插入
+                # 🔧 修復：檢查預設規則並自動修復重複問題
                 cursor.execute("SELECT COUNT(*) FROM lot_exit_rules WHERE is_default = 1")
                 default_rules_count = cursor.fetchone()[0]
+
+                if default_rules_count > 3:
+                    if self.console_enabled:
+                        print(f"[EXIT_DB] ⚠️ 發現重複預設規則: {default_rules_count}/3，自動清理...")
+
+                    # 自動清理重複規則，保留每個口數的第一個
+                    cursor.execute('''
+                        DELETE FROM lot_exit_rules
+                        WHERE is_default = 1 AND id NOT IN (
+                            SELECT MIN(id)
+                            FROM lot_exit_rules
+                            WHERE is_default = 1
+                            GROUP BY lot_number
+                        )
+                    ''')
+
+                    # 重新檢查
+                    cursor.execute("SELECT COUNT(*) FROM lot_exit_rules WHERE is_default = 1")
+                    default_rules_count = cursor.fetchone()[0]
+
+                    if self.console_enabled:
+                        print(f"[EXIT_DB] 🧹 清理完成，當前規則數: {default_rules_count}")
+
                 if default_rules_count != 3:
                     if self.console_enabled:
-                        print(f"[EXIT_DB] ❌ 預設規則數量不正確: {default_rules_count}/3")
+                        print(f"[EXIT_DB] ❌ 預設規則數量仍不正確: {default_rules_count}/3")
                     return False
                 
                 if self.console_enabled:

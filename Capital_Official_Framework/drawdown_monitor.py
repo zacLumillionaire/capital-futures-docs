@@ -111,25 +111,30 @@ class DrawdownMonitor:
             return []
     
     def _get_trailing_positions(self) -> List[Dict]:
-        """取得所有已啟動移動停利的部位"""
+        """取得所有已啟動移動停利的部位 - 🔧 修復：正確關聯策略組"""
         try:
+            from datetime import date
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT pr.*, sg.range_high, sg.range_low
                     FROM position_records pr
-                    JOIN strategy_groups sg ON pr.group_id = sg.id
-                    WHERE pr.status = 'ACTIVE' 
+                    JOIN (
+                        SELECT * FROM strategy_groups
+                        WHERE date = ?
+                        ORDER BY id DESC
+                    ) sg ON pr.group_id = sg.group_id
+                    WHERE pr.status = 'ACTIVE'
                       AND pr.trailing_activated = TRUE
                       AND pr.peak_price IS NOT NULL
                       AND pr.trailing_pullback_ratio IS NOT NULL
                     ORDER BY pr.group_id, pr.lot_id
-                ''')
-                
+                ''', (date.today().isoformat(),))
+
                 rows = cursor.fetchall()
                 columns = [description[0] for description in cursor.description]
                 return [dict(zip(columns, row)) for row in rows]
-                
+
         except Exception as e:
             logger.error(f"查詢移動停利部位失敗: {e}")
             return []

@@ -8,6 +8,7 @@
 import os
 import sys
 import time
+import sqlite3
 import tkinter as tk
 from tkinter import ttk
 from typing import Optional
@@ -37,6 +38,7 @@ try:
     from risk_management_engine import RiskManagementEngine
     from multi_group_ui_panel import MultiGroupConfigPanel
     from multi_group_console_logger import get_logger, LogCategory
+    from system_maintenance_manager import init_maintenance_manager, get_maintenance_manager
 
     MULTI_GROUP_AVAILABLE = True
     print("✅ 多組策略系統模組載入成功")
@@ -44,6 +46,54 @@ except ImportError as e:
     MULTI_GROUP_AVAILABLE = False
     print(f"⚠️ 多組策略系統模組載入失敗: {e}")
     print("💡 將使用原有的單組策略系統")
+
+# 🚀 零風險報價頻率控制器
+class SimpleQuoteThrottler:
+    """簡單的報價頻率控制器 - 零風險設計"""
+    def __init__(self, interval_ms=500):
+        self.interval = interval_ms / 1000.0  # 轉換為秒
+        self.last_process_time = 0
+        self.total_received = 0  # 統計：總接收數
+        self.total_processed = 0  # 統計：總處理數
+        self.start_time = time.time()
+
+    def should_process(self):
+        """檢查是否應該處理此次報價"""
+        self.total_received += 1
+
+        current_time = time.time()
+        if current_time - self.last_process_time >= self.interval:
+            self.last_process_time = current_time
+            self.total_processed += 1
+            return True
+        return False
+
+    def get_stats(self):
+        """獲取統計信息（非GUI安全）"""
+        if self.total_received == 0:
+            return "無數據"
+
+        skip_rate = (1 - self.total_processed / self.total_received) * 100
+        runtime = time.time() - self.start_time
+        avg_rate = self.total_received / runtime if runtime > 0 else 0
+
+        return {
+            'total_received': self.total_received,
+            'total_processed': self.total_processed,
+            'skip_rate': skip_rate,
+            'avg_rate': avg_rate,
+            'runtime': runtime
+        }
+
+# 🚀 優化風險管理器導入
+try:
+    from optimized_risk_manager import create_optimized_risk_manager
+    OPTIMIZED_RISK_AVAILABLE = True
+    print("✅ 優化風險管理器模組載入成功")
+except ImportError as e:
+    OPTIMIZED_RISK_AVAILABLE = False
+    print(f"⚠️ 優化風險管理器模組載入失敗: {e}")
+    print("💡 將使用原有的風險管理系統")
 
 # 🚀 實際下單功能模組導入
 try:
@@ -130,6 +180,22 @@ class SimpleIntegratedApp:
         # LOG控制變數
         self.strategy_log_count = 0
 
+        # 🚀 零風險報價頻率控制（預設啟用，大幅改善性能）
+        self.enable_quote_throttle = True  # 預設啟用
+        self.quote_throttle_interval = 500  # 預設500ms
+        self.quote_throttler = None  # 延遲初始化
+
+        # 🚀 零風險異步峰值更新控制（預設啟用，大幅改善性能）
+        self.enable_async_peak_update = True  # 預設啟用，大幅改善性能
+        self.async_peak_update_connected = False  # 連接狀態（將自動連接）
+
+        # 🚀 全面異步功能控制（預設全部啟用）
+        self.enable_async_position_fill = True      # 建倉成交確認異步
+        self.enable_async_exit_processing = True    # 平倉處理異步
+        self.enable_async_stop_loss = True          # 停損執行異步
+        self.enable_async_trailing_stop = True     # 移動停利異步
+        self.enable_async_protection_update = True # 保護性停損異步
+
         # 🎯 狀態監聽器相關變數
         self.monitoring_stats = {
             'last_quote_count': 0,
@@ -159,6 +225,12 @@ class SimpleIntegratedApp:
 
         if MULTI_GROUP_AVAILABLE:
             self.init_multi_group_system()
+
+        # 🚀 優化風險管理器初始化
+        self.optimized_risk_manager = None
+        self.optimized_risk_enabled = False
+        if OPTIMIZED_RISK_AVAILABLE:
+            self.init_optimized_risk_manager()
 
         # 🚀 實際下單系統初始化
         self.real_order_enabled = False
@@ -202,6 +274,51 @@ class SimpleIntegratedApp:
 
         # 註冊回報事件 (接收下單狀態)
         self.register_order_reply_events()
+
+    def init_optimized_risk_manager(self):
+        """初始化優化風險管理器"""
+        try:
+            if not OPTIMIZED_RISK_AVAILABLE:
+                print("[OPTIMIZED_RISK] ⚠️ 優化風險管理器模組不可用，跳過初始化")
+                return
+
+            # 🛡️ 安全檢查：確保有資料庫管理器
+            if not hasattr(self, 'multi_group_db_manager') or not self.multi_group_db_manager:
+                print("[OPTIMIZED_RISK] ⚠️ 需要多組策略資料庫管理器，跳過初始化")
+                return
+
+            # 🔄 收集原始管理器作為回退選項
+            original_managers = {}
+            if hasattr(self, 'exit_mechanism_manager') and self.exit_mechanism_manager:
+                original_managers['exit_mechanism_manager'] = self.exit_mechanism_manager
+            if hasattr(self, 'stop_loss_monitor') and self.stop_loss_monitor:
+                original_managers['stop_loss_monitor'] = self.stop_loss_monitor
+            if hasattr(self, 'trailing_stop_activator') and self.trailing_stop_activator:
+                original_managers['trailing_stop_activator'] = self.trailing_stop_activator
+
+            # 🚀 創建優化風險管理器
+            self.optimized_risk_manager = create_optimized_risk_manager(
+                db_manager=self.multi_group_db_manager,
+                original_managers=original_managers,
+                console_enabled=getattr(self, 'console_enabled', True)
+            )
+
+            # 🔧 設置停損執行器到優化風險管理器
+            if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
+                self.optimized_risk_manager.set_stop_loss_executor(self.stop_loss_executor)
+                print("[OPTIMIZED_RISK] 🔗 停損執行器已設置到優化風險管理器")
+
+            # ✅ 設定啟用狀態
+            self.optimized_risk_enabled = True
+
+            print("[OPTIMIZED_RISK] ✅ 優化風險管理器初始化完成")
+            print("[OPTIMIZED_RISK] 🎯 事件觸發 + 5秒備份同步模式已啟用")
+            print("[OPTIMIZED_RISK] 🛡️ 安全回退機制已就緒")
+
+        except Exception as e:
+            print(f"[OPTIMIZED_RISK] ❌ 優化風險管理器初始化失敗: {e}")
+            self.optimized_risk_enabled = False
+            self.optimized_risk_manager = None
 
     def init_real_order_system(self):
         """初始化實際下單系統"""
@@ -248,8 +365,22 @@ class SimpleIntegratedApp:
             # 3. 設定系統狀態
             self.virtual_real_system_enabled = True
 
+            # 🔧 新增：連接虛實單管理器到停損執行器
+            if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
+                self.stop_loss_executor.set_virtual_real_order_manager(self.virtual_real_order_manager)
+                print("[VIRTUAL_REAL] 🔗 虛實單管理器已連接到停損執行器")
+
+            # 🔧 新增：自動設置為實單模式
+            if self.virtual_real_order_manager:
+                success = self.virtual_real_order_manager.set_order_mode(True)  # True = 實單模式
+                if success:
+                    print("[VIRTUAL_REAL] 🚀 已自動切換到實單模式")
+                else:
+                    print("[VIRTUAL_REAL] ⚠️ 自動切換實單模式失敗，請檢查API連線")
+                    print("[VIRTUAL_REAL] 💡 將在API連線後自動重試切換實單模式")
+
             print("[VIRTUAL_REAL] ✅ Stage2虛實單整合系統初始化完成")
-            print("[VIRTUAL_REAL] 🔄 預設模式: 虛擬模式 (安全)")
+            print("[VIRTUAL_REAL] 🚀 預設模式: 實單模式 (生產環境)")
             print("[VIRTUAL_REAL] 📊 統一回報追蹤系統已就緒")
 
             # 🔧 更新多組策略管理器的下單組件
@@ -302,12 +433,23 @@ class SimpleIntegratedApp:
                     self.multi_group_position_manager.total_lot_manager = TotalLotManager()
                     print("[MULTI_GROUP] ✅ 總量追蹤管理器初始化完成")
 
-                # 🔧 保留：確保簡化追蹤器已初始化 (向後相容)
+                # 🔧 保留：確保簡化追蹤器已初始化，但不覆蓋已有實例 (向後相容)
                 if not hasattr(self.multi_group_position_manager, 'simplified_tracker') or \
                    not self.multi_group_position_manager.simplified_tracker:
                     from simplified_order_tracker import SimplifiedOrderTracker
                     self.multi_group_position_manager.simplified_tracker = SimplifiedOrderTracker()
+                    # 🔧 重新設置回調（因為是新實例）
+                    self.multi_group_position_manager._setup_simplified_tracker_callbacks()
                     print("[MULTI_GROUP] ✅ 簡化追蹤器初始化完成")
+                else:
+                    print("[MULTI_GROUP] ✅ 簡化追蹤器已存在，跳過重複創建")
+                    # 🔧 確保回調已註冊（防止回調丟失）
+                    if hasattr(self.multi_group_position_manager.simplified_tracker, 'fill_callbacks'):
+                        callback_count = len(self.multi_group_position_manager.simplified_tracker.fill_callbacks)
+                        print(f"[MULTI_GROUP] 📊 當前回調數量: {callback_count}")
+                        if callback_count == 0:
+                            print("[MULTI_GROUP] ⚠️ 檢測到回調丟失，重新設置...")
+                            self.multi_group_position_manager._setup_simplified_tracker_callbacks()
 
                 # 🔍 DEBUG: 設定簡化追蹤器的console開關
                 if hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
@@ -476,6 +618,11 @@ class SimpleIntegratedApp:
                 if hasattr(self.multi_group_position_manager, '_setup_simplified_tracker_callbacks'):
                     self.multi_group_position_manager._setup_simplified_tracker_callbacks()
 
+                # 🔧 新增：確保多組部位管理器也連接虛實單管理器
+                if hasattr(self.multi_group_position_manager, 'virtual_real_order_manager'):
+                    self.multi_group_position_manager.virtual_real_order_manager = self.virtual_real_order_manager
+                    print("[MULTI_GROUP] 🚀 多組部位管理器已連接虛實單管理器")
+
                 print("[MULTI_GROUP] ✅ 下單組件整合完成")
 
         except Exception as e:
@@ -504,6 +651,14 @@ class SimpleIntegratedApp:
 
         # 🎯 啟動狀態監聽器
         self.start_status_monitor()
+
+        # 🚀 啟動提示：頻率控制已預設啟用
+        print("🚀 報價頻率控制已預設啟用 (500ms間隔)")
+        print("💡 這將大幅降低報價處理延遲，提升系統性能")
+        print("💡 如需關閉，請點擊「🚀 關閉頻率控制」按鈕")
+
+        # 🚀 自動連接和啟用異步峰值更新
+        self._auto_enable_async_peak_update()
 
     def create_main_page(self, main_frame):
         """建立主要功能頁面"""
@@ -553,7 +708,9 @@ class SimpleIntegratedApp:
         self.btn_stop_quote = ttk.Button(btn_frame, text="停止報價", command=self.stop_quote, state="normal")
         self.btn_stop_quote.pack(side=tk.LEFT, padx=5)
 
-
+        # 🚀 零風險頻率控制按鈕（預設啟用，避免GIL風險的設計）
+        self.btn_toggle_throttle = ttk.Button(btn_frame, text="🚀 關閉頻率控制", command=self.toggle_quote_throttle, state="normal")
+        self.btn_toggle_throttle.pack(side=tk.LEFT, padx=5)
 
         # 下單測試按鈕
         self.btn_test_order = ttk.Button(btn_frame, text="測試下單", command=self.test_order, state="disabled")
@@ -681,8 +838,30 @@ class SimpleIntegratedApp:
 
                 def OnConnect(self, btrUserID, nErrorCode):
                     """連線事件"""
+                    print(f"[DEBUG] OnConnect觸發: UserID={btrUserID}, ErrorCode={nErrorCode}")
+
                     if nErrorCode == 0:
                         msg = f"OnConnect: {btrUserID} Connected!"
+
+                        # 🔧 新增：API連線成功後自動切換實單模式
+                        print(f"[DEBUG] 檢查虛實單管理器: {hasattr(self.parent, 'virtual_real_order_manager')}")
+                        if hasattr(self.parent, 'virtual_real_order_manager') and self.parent.virtual_real_order_manager:
+                            current_mode = self.parent.virtual_real_order_manager.is_real_mode
+                            print(f"[DEBUG] 當前模式: {current_mode} (True=實單, False=虛擬)")
+
+                            if not current_mode:
+                                print("[API_CONNECT] 🔄 嘗試切換到實單模式...")
+                                success = self.parent.virtual_real_order_manager.set_order_mode(True)
+                                if success:
+                                    print("[API_CONNECT] 🚀 API連線成功，已自動切換到實單模式")
+                                    self.parent.add_log("🚀 API連線成功，已自動切換到實單模式")
+                                else:
+                                    print("[API_CONNECT] ⚠️ API連線成功但實單模式切換失敗")
+                                    self.parent.add_log("⚠️ API連線成功但實單模式切換失敗")
+                            else:
+                                print("[API_CONNECT] ✅ 實單模式已啟用")
+                        else:
+                            print("[DEBUG] 虛實單管理器未找到或未初始化")
                     else:
                         msg = f"OnConnect: {btrUserID} Connect Error!"
                     self.parent.add_log(msg)
@@ -792,30 +971,44 @@ class SimpleIntegratedApp:
                             else:
                                 self.parent.add_log(f"📋 回報: {order_type} - {type_desc}")
 
-                            # 🔧 統一回報處理：避免重複處理，按優先級處理
-                            processed = False
+                            # 🔧 修復：並行回報處理，讓兩個追蹤器同時接收回報
+                            simplified_processed = False
+                            total_processed = False
 
-                            # 優先級1: 簡化追蹤器（最新的FIFO邏輯）
+                            # 處理1: 簡化追蹤器（主要FIFO邏輯）
                             if hasattr(self.parent, 'multi_group_position_manager') and self.parent.multi_group_position_manager:
                                 try:
                                     if hasattr(self.parent.multi_group_position_manager, 'simplified_tracker') and \
                                        self.parent.multi_group_position_manager.simplified_tracker:
-                                        processed = self.parent.multi_group_position_manager.simplified_tracker.process_order_reply(bstrData)
-                                        if processed:
+                                        simplified_processed = self.parent.multi_group_position_manager.simplified_tracker.process_order_reply(bstrData)
+                                        if simplified_processed:
                                             print(f"✅ [REPLY] 簡化追蹤器處理成功")
                                 except Exception as tracker_error:
                                     print(f"❌ [REPLY] 簡化追蹤器處理失敗: {tracker_error}")
 
-                            # 優先級2: 總量追蹤管理器（如果簡化追蹤器沒有處理）
-                            if not processed and hasattr(self.parent, 'multi_group_position_manager') and self.parent.multi_group_position_manager:
-                                try:
-                                    if hasattr(self.parent.multi_group_position_manager, 'total_lot_manager') and \
-                                       self.parent.multi_group_position_manager.total_lot_manager:
-                                        processed = self.parent.multi_group_position_manager.total_lot_manager.process_order_reply(bstrData)
-                                        if processed:
-                                            print(f"✅ [REPLY] 總量追蹤管理器處理成功")
-                                except Exception as tracker_error:
-                                    print(f"❌ [REPLY] 總量追蹤管理器處理失敗: {tracker_error}")
+                            # 處理2: 總量追蹤管理器（🔧 暫時停用，避免重複追價）
+                            # 🚨 問題：總量追蹤器也在觸發追價，造成每次追價都下2口
+                            # 暫時停用總量追蹤器，只使用簡化追蹤器
+                            total_processed = False  # 強制設為False，暫停總量追蹤器
+                            if False:  # 暫時停用
+                                if hasattr(self.parent, 'multi_group_position_manager') and self.parent.multi_group_position_manager:
+                                    try:
+                                        if hasattr(self.parent.multi_group_position_manager, 'total_lot_manager') and \
+                                           self.parent.multi_group_position_manager.total_lot_manager:
+                                            total_processed = self.parent.multi_group_position_manager.total_lot_manager.process_order_reply(bstrData)
+                                            if total_processed:
+                                                print(f"✅ [REPLY] 總量追蹤管理器處理成功")
+                                    except Exception as tracker_error:
+                                        print(f"❌ [REPLY] 總量追蹤管理器處理失敗: {tracker_error}")
+                            else:
+                                print(f"🔧 [REPLY] 總量追蹤管理器已暫停（避免重複追價）")
+
+                            # 🔧 新增：統計處理結果
+                            processed = simplified_processed or total_processed
+                            if simplified_processed and total_processed:
+                                print(f"✅ [REPLY] 雙追蹤器同步處理成功")
+                            elif not processed:
+                                print(f"⚠️ [REPLY] 所有追蹤器都未處理此回報")
 
                             # 優先級3: 統一追蹤器（向後相容）
                             if not processed and hasattr(self.parent, 'unified_order_tracker') and self.parent.unified_order_tracker:
@@ -1114,7 +1307,340 @@ class SimpleIntegratedApp:
             except:
                 pass
 
+    def toggle_quote_throttle(self):
+        """切換報價頻率控制 - 零風險設計，避免GIL問題"""
+        try:
+            # 🛡️ 安全的狀態切換（不涉及GUI更新）
+            self.enable_quote_throttle = not self.enable_quote_throttle
 
+            if self.enable_quote_throttle:
+                # 啟用頻率控制
+                interval = getattr(self, 'quote_throttle_interval', 500)
+                self.add_log(f"🚀 報價頻率控制已啟用 ({interval}ms間隔)")
+                self.add_log("💡 這將大幅降低報價處理延遲")
+
+                # 🛡️ 安全的按鈕文字更新（最小化GUI操作）
+                try:
+                    self.btn_toggle_throttle.config(text="🚀 關閉頻率控制")
+                except:
+                    pass  # 忽略GUI更新錯誤，不影響功能
+
+            else:
+                # 關閉頻率控制
+                self.add_log("❌ 報價頻率控制已關閉")
+                self.add_log("💡 恢復原有的全頻率處理模式")
+                self.add_log("⚠️ 注意：可能會出現較高的報價處理延遲")
+
+                # 🛡️ 安全的按鈕文字更新
+                try:
+                    self.btn_toggle_throttle.config(text="🐌 啟用頻率控制")
+                except:
+                    pass  # 忽略GUI更新錯誤，不影響功能
+
+                # 清理頻率控制器
+                self.quote_throttler = None
+
+        except Exception as e:
+            self.add_log(f"❌ 切換頻率控制失敗: {e}")
+
+    def get_quote_throttle_stats(self):
+        """獲取頻率控制統計（Console安全）"""
+        try:
+            if self.quote_throttler:
+                stats = self.quote_throttler.get_stats()
+                if isinstance(stats, dict):
+                    self.add_log("📊 頻率控制統計:")
+                    self.add_log(f"   總接收: {stats['total_received']} 筆")
+                    self.add_log(f"   實際處理: {stats['total_processed']} 筆")
+                    self.add_log(f"   跳過率: {stats['skip_rate']:.1f}%")
+                    self.add_log(f"   平均頻率: {stats['avg_rate']:.1f} 筆/秒")
+                else:
+                    self.add_log("📊 頻率控制統計: 無數據")
+            else:
+                self.add_log("📊 頻率控制未啟用")
+        except Exception as e:
+            self.add_log(f"❌ 獲取統計失敗: {e}")
+
+    def set_peak_log_interval(self, interval=20):
+        """🎯 設定峰值更新LOG顯示間隔"""
+        try:
+            if hasattr(self, 'multi_group_risk_engine') and self.multi_group_risk_engine:
+                self.multi_group_risk_engine.set_peak_log_interval(interval)
+                self.add_log(f"🎯 峰值更新LOG間隔已設為 {interval} 秒")
+            else:
+                self.add_log("⚠️ 風險管理引擎未初始化")
+        except Exception as e:
+            self.add_log(f"❌ 設定峰值LOG間隔失敗: {e}")
+
+    def disable_peak_update_logs(self):
+        """🔇 關閉峰值更新日誌"""
+        try:
+            if hasattr(self, 'async_updater') and self.async_updater:
+                self.async_updater.set_log_options(enable_peak_logs=False, enable_task_logs=False)
+                self.add_log("🔇 峰值更新日誌已關閉")
+            else:
+                self.add_log("⚠️ 異步更新器未初始化")
+        except Exception as e:
+            self.add_log(f"❌ 關閉峰值日誌失敗: {e}")
+
+    def check_and_switch_to_real_mode(self):
+        """🔧 檢查並切換到實單模式"""
+        try:
+            if hasattr(self, 'virtual_real_order_manager') and self.virtual_real_order_manager:
+                current_mode = self.virtual_real_order_manager.is_real_mode
+                print(f"[MODE_CHECK] 當前模式: {'實單' if current_mode else '虛擬'}")
+                self.add_log(f"當前模式: {'實單' if current_mode else '虛擬'}")
+
+                if not current_mode:
+                    print("[MODE_CHECK] 🔄 手動切換到實單模式...")
+                    success = self.virtual_real_order_manager.set_order_mode(True)
+                    if success:
+                        print("[MODE_CHECK] 🚀 已成功切換到實單模式")
+                        self.add_log("🚀 已成功切換到實單模式")
+                    else:
+                        print("[MODE_CHECK] ⚠️ 實單模式切換失敗")
+                        self.add_log("⚠️ 實單模式切換失敗，請檢查API連線狀態")
+                else:
+                    print("[MODE_CHECK] ✅ 已經是實單模式")
+                    self.add_log("✅ 已經是實單模式")
+            else:
+                print("[MODE_CHECK] ❌ 虛實單管理器未初始化")
+                self.add_log("❌ 虛實單管理器未初始化")
+        except Exception as e:
+            print(f"[MODE_CHECK] ❌ 檢查模式失敗: {e}")
+            self.add_log(f"❌ 檢查模式失敗: {e}")
+
+    def toggle_async_peak_update(self):
+        """🚀 切換異步峰值更新（零風險控制）"""
+        try:
+            if not self.async_peak_update_connected:
+                self.add_log("⚠️ 異步更新器未連接，無法啟用異步峰值更新")
+                return False
+
+            # 🛡️ 安全的狀態切換
+            self.enable_async_peak_update = not self.enable_async_peak_update
+
+            if self.enable_async_peak_update:
+                # 啟用異步峰值更新
+                if hasattr(self, 'multi_group_risk_engine') and self.multi_group_risk_engine:
+                    success = self.multi_group_risk_engine.enable_async_peak_updates(True)
+                    if success:
+                        self.add_log("🚀 異步峰值更新已啟用")
+                        self.add_log("💡 峰值更新將使用異步處理，大幅降低延遲")
+                    else:
+                        self.enable_async_peak_update = False
+                        self.add_log("❌ 啟用異步峰值更新失敗")
+                else:
+                    self.enable_async_peak_update = False
+                    self.add_log("⚠️ 風險管理引擎未初始化")
+            else:
+                # 關閉異步峰值更新
+                if hasattr(self, 'multi_group_risk_engine') and self.multi_group_risk_engine:
+                    self.multi_group_risk_engine.enable_async_peak_updates(False)
+                self.add_log("❌ 異步峰值更新已關閉")
+                self.add_log("💡 峰值更新恢復同步處理模式")
+
+        except Exception as e:
+            self.add_log(f"❌ 切換異步峰值更新失敗: {e}")
+
+    def connect_async_peak_update(self):
+        """🔗 連接異步峰值更新系統（零風險初始化）"""
+        try:
+            # 檢查必要組件
+            if not hasattr(self, 'multi_group_risk_engine') or not self.multi_group_risk_engine:
+                print("⚠️ 風險管理引擎未初始化，無法連接異步峰值更新")
+                return False
+
+            if not hasattr(self, 'async_updater') or not self.async_updater:
+                print("⚠️ 異步更新器未初始化，無法連接異步峰值更新")
+                return False
+
+            # 🔗 連接異步更新器到風險管理引擎（如果還沒連接的話）
+            if not hasattr(self.multi_group_risk_engine, 'async_updater') or not self.multi_group_risk_engine.async_updater:
+                self.multi_group_risk_engine.set_async_updater(self.async_updater)
+                print("[ASYNC] 🔗 異步更新器已連接到風險管理引擎")
+
+            self.async_peak_update_connected = True
+            print("🔗 異步峰值更新系統已連接")
+            print("💡 可使用「🚀 啟用異步峰值更新」按鈕啟用")
+            return True
+
+        except Exception as e:
+            print(f"❌ 連接異步峰值更新失敗: {e}")
+            return False
+
+    def _auto_enable_async_peak_update(self):
+        """🚀 自動連接和啟用異步峰值更新（延遲執行，確保組件已初始化）"""
+        def delayed_enable():
+            try:
+                # 等待2秒確保所有組件已初始化
+                import threading
+                import time
+                time.sleep(2)
+
+                # 自動連接
+                if self.connect_async_peak_update():
+                    # 自動啟用
+                    if self.enable_async_peak_update:
+                        if hasattr(self, 'multi_group_risk_engine') and self.multi_group_risk_engine:
+                            success = self.multi_group_risk_engine.enable_async_peak_updates(True)
+                            if success:
+                                # 🎯 設定峰值LOG頻率控制
+                                self.multi_group_risk_engine.set_peak_log_interval(20)
+                                print("🚀 異步峰值更新已自動啟用")
+                                print("💡 峰值更新將使用異步處理，進一步降低延遲")
+                                print("🎯 峰值更新LOG頻率控制：20秒內最多顯示一次")
+
+                                # 🚀 連接停損執行器的異步更新（解決平倉延遲問題）
+                                self._connect_stop_loss_executor_async()
+
+                                # 🧹 初始化系統維護管理器（解決長時間運行的資源累積問題）
+                                self._setup_system_maintenance()
+                            else:
+                                print("⚠️ 異步峰值更新自動啟用失敗，將使用同步模式")
+                        else:
+                            print("⚠️ 風險管理引擎未就緒，異步峰值更新將稍後啟用")
+                else:
+                    print("⚠️ 異步峰值更新自動連接失敗，將使用同步模式")
+
+            except Exception as e:
+                print(f"⚠️ 異步峰值更新自動啟用失敗: {e}")
+
+        # 在背景線程中延遲執行
+        import threading
+        threading.Thread(target=delayed_enable, daemon=True).start()
+
+    def _connect_stop_loss_executor_async(self):
+        """🚀 連接停損執行器和統一出場管理器的異步更新（解決平倉延遲問題）"""
+        try:
+            # 檢查停損執行器是否存在
+            if hasattr(self, 'multi_group_risk_engine') and self.multi_group_risk_engine:
+                # 獲取停損執行器
+                stop_executor = getattr(self.multi_group_risk_engine, 'stop_loss_executor', None)
+                if stop_executor:
+                    # 連接異步更新器
+                    if hasattr(self, 'async_updater') and self.async_updater:
+                        stop_executor.set_async_updater(self.async_updater, enabled=True)
+                        print("🚀 停損執行器異步更新已啟用")
+                    else:
+                        print("⚠️ 異步更新器未初始化，停損執行器將使用同步模式")
+                else:
+                    print("⚠️ 停損執行器未找到，無法連接異步更新")
+
+                # 🚀 連接統一出場管理器的異步更新
+                unified_exit = getattr(self.multi_group_risk_engine, 'unified_exit_manager', None)
+                if unified_exit:
+                    if hasattr(self, 'async_updater') and self.async_updater:
+                        unified_exit.set_async_updater(self.async_updater, enabled=True)
+                        print("🚀 統一出場管理器異步更新已啟用")
+                        print("💡 平倉操作將使用異步處理，大幅降低延遲")
+                    else:
+                        print("⚠️ 異步更新器未初始化，統一出場管理器將使用同步模式")
+                else:
+                    print("⚠️ 統一出場管理器未找到，無法連接異步更新")
+            else:
+                print("⚠️ 風險管理引擎未初始化，無法連接平倉組件異步更新")
+
+        except Exception as e:
+            print(f"❌ 連接平倉組件異步更新失敗: {e}")
+
+    def _setup_system_maintenance(self):
+        """🧹 設置系統維護管理器（解決長時間運行的資源累積問題）"""
+        try:
+            # 初始化維護管理器
+            maintenance_manager = init_maintenance_manager(console_enabled=True)
+
+            # 註冊維護任務
+
+            # 1. 內存緩存清理（每小時）
+            if hasattr(self, 'async_updater') and self.async_updater:
+                maintenance_manager.register_task(
+                    name="內存緩存清理",
+                    func=lambda: self.async_updater.cleanup_old_cache_entries(force_cleanup=True),
+                    interval_seconds=3600,  # 1小時
+                    description="清理異步更新器中的過期內存緩存條目"
+                )
+
+            # 2. 訂單追蹤器清理（每30分鐘）
+            if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
+                # 簡化追蹤器清理
+                if hasattr(self.multi_group_position_manager, 'simplified_tracker'):
+                    maintenance_manager.register_task(
+                        name="簡化追蹤器清理",
+                        func=lambda: self.multi_group_position_manager.simplified_tracker.cleanup_completed_groups(3600),
+                        interval_seconds=1800,  # 30分鐘
+                        description="清理已完成的策略組和過期訂單"
+                    )
+
+                # 總量追蹤器清理
+                if hasattr(self.multi_group_position_manager, 'total_lot_manager'):
+                    maintenance_manager.register_task(
+                        name="總量追蹤器清理",
+                        func=lambda: self.multi_group_position_manager.total_lot_manager.cleanup_completed_trackers(3600),
+                        interval_seconds=1800,  # 30分鐘
+                        description="清理已完成的總量追蹤器"
+                    )
+
+            # 3. 平倉追蹤器清理（每15分鐘）
+            if hasattr(self, 'multi_group_risk_engine') and self.multi_group_risk_engine:
+                if hasattr(self.multi_group_risk_engine, 'unified_exit_manager'):
+                    exit_manager = self.multi_group_risk_engine.unified_exit_manager
+                    if hasattr(exit_manager, 'exit_tracker'):
+                        maintenance_manager.register_task(
+                            name="平倉追蹤器清理",
+                            func=lambda: exit_manager.exit_tracker.cleanup_expired_orders(300),
+                            interval_seconds=900,  # 15分鐘
+                            description="清理過期的平倉訂單"
+                        )
+
+            # 4. 資料庫清理（每天）
+            if hasattr(self, 'db_manager') and self.db_manager:
+                maintenance_manager.register_task(
+                    name="資料庫清理",
+                    func=lambda: self.db_manager.cleanup_old_quotes(24),
+                    interval_seconds=86400,  # 24小時
+                    description="清理24小時前的即時報價資料"
+                )
+
+            # 5. 統計信息重置（每天）
+            maintenance_manager.register_task(
+                name="統計信息重置",
+                func=self._reset_daily_stats,
+                interval_seconds=86400,  # 24小時
+                description="重置每日統計信息"
+            )
+
+            # 啟動維護管理器
+            maintenance_manager.start()
+
+            print("🧹 系統維護管理器已啟用")
+            print("💡 將定期清理內存緩存、過期訂單、舊日誌等資源")
+            print("🎯 維護任務：內存緩存(1h)、訂單清理(30m)、資料庫清理(24h)")
+
+        except Exception as e:
+            print(f"❌ 設置系統維護管理器失敗: {e}")
+
+    def _reset_daily_stats(self):
+        """重置每日統計信息"""
+        try:
+            # 重置報價頻率控制器統計
+            if hasattr(self, 'quote_throttler') and self.quote_throttler:
+                self.quote_throttler.total_received = 0
+                self.quote_throttler.total_processed = 0
+                self.quote_throttler.start_time = time.time()
+
+            # 重置異步更新器統計
+            if hasattr(self, 'async_updater') and self.async_updater:
+                with self.async_updater.stats_lock:
+                    self.async_updater.stats['total_tasks'] = 0
+                    self.async_updater.stats['completed_tasks'] = 0
+                    self.async_updater.stats['failed_tasks'] = 0
+                    self.async_updater.stats['cache_hits'] = 0
+
+            print("[MAINTENANCE] 📊 每日統計信息已重置")
+
+        except Exception as e:
+            print(f"[MAINTENANCE] ❌ 重置統計信息失敗: {e}")
 
     def register_quote_events(self):
         """註冊報價事件 - 使用群益官方方式"""
@@ -1127,7 +1653,23 @@ class SimpleIntegratedApp:
                     self.parent = parent
 
                 def OnNotifyTicksLONG(self, sMarketNo, nStockidx, nPtr, lDate, lTimehms, lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-                    """簡化版報價事件 - Console輸出為主 + 停損監控整合"""
+                    """簡化版報價事件 - Console輸出為主 + 停損監控整合 + 性能監控"""
+
+                    # 🚀 零風險頻率控制（可選功能，預設關閉）
+                    if hasattr(self.parent, 'enable_quote_throttle') and self.parent.enable_quote_throttle:
+                        # 延遲初始化頻率控制器
+                        if not hasattr(self.parent, 'quote_throttler') or self.parent.quote_throttler is None:
+                            interval = getattr(self.parent, 'quote_throttle_interval', 500)
+                            self.parent.quote_throttler = SimpleQuoteThrottler(interval)
+                            print(f"🚀 報價頻率控制已啟用 ({interval}ms間隔)")
+
+                        # 檢查是否應該處理此次報價
+                        if not self.parent.quote_throttler.should_process():
+                            return  # 🔄 跳過此次處理，等待下次間隔
+
+                    # ⏰ 性能監控：記錄報價處理開始時間
+                    quote_start_time = time.time()
+
                     try:
                         # 解析價格資訊
                         corrected_price = nClose / 100.0
@@ -1150,8 +1692,40 @@ class SimpleIntegratedApp:
                                 if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
                                     print(f"[PRICE_UPDATE] ⚠️ 停損監控錯誤: {e}")
 
-                        # 🎯 平倉機制系統整合 - 使用統一管理器處理所有平倉邏輯
-                        if hasattr(self.parent, 'exit_mechanism_manager') and self.parent.exit_mechanism_manager:
+                        # 🚀 優化風險管理系統整合 - 優先使用優化版本
+                        if hasattr(self.parent, 'optimized_risk_manager') and self.parent.optimized_risk_manager:
+                            try:
+                                # 🎯 使用優化風險管理器 (事件觸發 + 內存緩存)
+                                results = self.parent.optimized_risk_manager.update_price(
+                                    corrected_price, formatted_time
+                                )
+
+                                # 📊 記錄處理結果 (靜默模式，避免過多輸出)
+                                if results and 'error' not in results:
+                                    total_events = sum(results.values())
+                                    if total_events > 0 and hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
+                                        print(f"[OPTIMIZED_RISK] 📊 風險事件: {total_events} 個")
+
+                            except Exception as e:
+                                # 🛡️ 安全回退：如果優化版本失敗，自動使用原始版本
+                                if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
+                                    print(f"[OPTIMIZED_RISK] ⚠️ 優化版本錯誤，回退到原始版本: {e}")
+
+                                # 回退到原始平倉機制
+                                if hasattr(self.parent, 'exit_mechanism_manager') and self.parent.exit_mechanism_manager:
+                                    try:
+                                        results = self.parent.exit_mechanism_manager.process_price_update(
+                                            corrected_price, formatted_time
+                                        )
+                                        if results and 'error' not in results:
+                                            total_events = sum(results.values())
+                                            if total_events > 0:
+                                                print(f"[FALLBACK_RISK] 📊 平倉事件: {total_events} 個")
+                                    except Exception as fallback_error:
+                                        print(f"[FALLBACK_RISK] ❌ 原始版本也失敗: {fallback_error}")
+
+                        # 🔄 回退模式：如果沒有優化版本，使用原始平倉機制系統
+                        elif hasattr(self.parent, 'exit_mechanism_manager') and self.parent.exit_mechanism_manager:
                             try:
                                 # 使用統一管理器處理價格更新
                                 results = self.parent.exit_mechanism_manager.process_price_update(
@@ -1169,7 +1743,28 @@ class SimpleIntegratedApp:
                                 if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
                                     print(f"[PRICE_UPDATE] ⚠️ 平倉機制系統錯誤: {e}")
 
-                        # 🔄 回退模式 - 如果統一管理器不可用，使用分散組件
+                        # 🚀 優先模式：統一移動停利計算器（內存計算，無資料庫查詢）
+                        elif hasattr(self.parent, 'unified_trailing_enabled') and self.parent.unified_trailing_enabled:
+                            try:
+                                if hasattr(self.parent, 'trailing_calculator') and self.parent.trailing_calculator:
+                                    # 🚀 純內存計算，獲取所有活躍部位
+                                    active_positions = self.parent.trailing_calculator.get_active_positions()
+
+                                    # 為每個活躍部位更新價格（純內存操作）
+                                    for position_id in active_positions:
+                                        trigger_info = self.parent.trailing_calculator.update_price(
+                                            position_id, corrected_price
+                                        )
+
+                                        # 如果觸發平倉，觸發信息會自動通過回調傳遞給止損執行器
+                                        # 無需額外處理，回調機制已整合
+
+                            except Exception as e:
+                                # 靜默處理統一計算器錯誤，不影響報價流程
+                                if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
+                                    print(f"[PRICE_UPDATE] ⚠️ 統一移動停利計算器錯誤: {e}")
+
+                        # 🔄 回退模式：分散式組件（如果統一計算器不可用）
                         elif hasattr(self.parent, 'trailing_stop_system_enabled') and self.parent.trailing_stop_system_enabled:
                             try:
                                 # 檢查移動停利啟動
@@ -1191,9 +1786,9 @@ class SimpleIntegratedApp:
                                     )
 
                             except Exception as e:
-                                # 靜默處理移動停利錯誤，不影響報價流程
+                                # 靜默處理分散式組件錯誤，不影響報價流程
                                 if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
-                                    print(f"[PRICE_UPDATE] ⚠️ 移動停利系統錯誤: {e}")
+                                    print(f"[PRICE_UPDATE] ⚠️ 分散式移動停利系統錯誤: {e}")
 
                         # 🎯 多組策略價格更新整合
                         if hasattr(self.parent, 'multi_group_position_manager') and self.parent.multi_group_position_manager:
@@ -1236,9 +1831,31 @@ class SimpleIntegratedApp:
                         # 🔧 移除時間操作，避免GIL風險
                         # self.parent.last_quote_time = time.time()  # 已移除
 
+                        # 📊 性能監控：計算報價處理總耗時
+                        quote_elapsed = (time.time() - quote_start_time) * 1000
+
+                        # 🚨 延遲警告：如果報價處理超過100ms，輸出警告
+                        if quote_elapsed > 100:
+                            if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
+                                print(f"[PERFORMANCE] ⚠️ 報價處理延遲: {quote_elapsed:.1f}ms @{corrected_price}")
+
+                        # 📈 定期報告異步更新性能（每100次報價）
+                        if hasattr(self.parent, 'price_count') and self.parent.price_count % 100 == 0:
+                            if hasattr(self.parent, 'multi_group_position_manager') and self.parent.multi_group_position_manager:
+                                try:
+                                    stats = self.parent.multi_group_position_manager.get_async_update_stats()
+                                    if stats and stats.get('total_tasks', 0) > 0:
+                                        avg_delay = stats.get('avg_delay', 0) * 1000
+                                        max_delay = stats.get('max_delay', 0) * 1000
+                                        success_rate = (stats.get('completed_tasks', 0) / stats.get('total_tasks', 1)) * 100
+                                        print(f"[ASYNC_PERF] 📊 異步更新統計: 平均延遲:{avg_delay:.1f}ms 最大延遲:{max_delay:.1f}ms 成功率:{success_rate:.1f}%")
+                                except:
+                                    pass  # 靜默處理統計錯誤
+
                     except Exception as e:
                         # Console錯誤輸出
-                        print(f"❌ [ERROR] 報價處理錯誤: {e}")
+                        quote_elapsed = (time.time() - quote_start_time) * 1000 if 'quote_start_time' in locals() else 0
+                        print(f"❌ [ERROR] 報價處理錯誤: {e} (耗時:{quote_elapsed:.1f}ms)")
 
                     return 0
 
@@ -1584,6 +2201,16 @@ class SimpleIntegratedApp:
 
             ttk.Button(stats_row, text="📊 查看策略狀態", command=self.show_strategy_status).pack(side="left", padx=(20, 5))
 
+            # 🚀 頻率控制統計按鈕
+            ttk.Button(stats_row, text="🐌 頻率統計", command=self.get_quote_throttle_stats).pack(side="left", padx=5)
+
+            # 🚀 異步峰值更新控制按鈕
+            ttk.Button(stats_row, text="🔗 連接異步峰值", command=self.connect_async_peak_update).pack(side="left", padx=5)
+            ttk.Button(stats_row, text="🚀 啟用異步峰值", command=self.toggle_async_peak_update).pack(side="left", padx=5)
+
+            # 🎯 峰值LOG控制按鈕
+            ttk.Button(stats_row, text="🎯 峰值LOG控制", command=lambda: self.set_peak_log_interval(20)).pack(side="left", padx=5)
+
             # 🚀 Stage2 虛實單切換控制整合
             if hasattr(self, 'virtual_real_system_enabled') and self.virtual_real_system_enabled:
                 try:
@@ -1839,6 +2466,51 @@ class SimpleIntegratedApp:
             # 靜默處理，不影響策略邏輯
             pass
 
+    def _log_api_time_monitoring(self, price, api_time, sys_time, time_diff, count):
+        """API時間監控LOG - 重要事件，定期顯示"""
+        try:
+            # 初始化時間追蹤變數
+            if not hasattr(self, '_last_api_time_log'):
+                self._last_api_time_log = 0
+                self._api_time_log_interval = 30  # 30秒間隔
+
+            current_time = time.time()
+            should_log = False
+
+            # 條件1: 定期顯示（30秒間隔）
+            if current_time - self._last_api_time_log > self._api_time_log_interval:
+                should_log = True
+                self._last_api_time_log = current_time
+
+            # 條件2: 時間差異異常（立即顯示）
+            if isinstance(time_diff, (int, float)) and abs(time_diff) > 10:  # 超過10秒
+                should_log = True
+
+            # 條件3: 每1000筆報價顯示一次
+            if count % 1000 == 0:
+                should_log = True
+
+            if should_log:
+                if time_diff == "ERR":
+                    print(f"🔍 策略收到: price={price}, api_time={api_time}, sys_time={sys_time}, diff=計算錯誤, count={count}")
+                else:
+                    # 根據時間差異添加警告標記
+                    if isinstance(time_diff, (int, float)):
+                        if abs(time_diff) > 30:
+                            status = "🚨"  # 嚴重延遲
+                        elif abs(time_diff) > 10:
+                            status = "⚠️"   # 輕微延遲
+                        else:
+                            status = "✅"   # 正常
+                    else:
+                        status = "🔍"
+
+                    print(f"{status} 策略收到: price={price}, api_time={api_time}, sys_time={sys_time}, diff={time_diff}s, count={count}")
+
+        except Exception as e:
+            # 回退到簡單格式
+            print(f"🔍 策略收到: price={price}, api_time={api_time}, sys_time={sys_time}, count={count}")
+
     def process_strategy_logic_safe(self, price, time_str):
         """安全的策略邏輯處理 - 避免頻繁UI更新"""
         try:
@@ -1866,15 +2538,16 @@ class SimpleIntegratedApp:
                         elif time_diff < -43200:
                             time_diff += 86400
 
-                        print(f"🔍 策略收到: price={price}, api_time={time_str}, sys_time={current_time}, diff={time_diff}s, count={self.price_count}")
+                        # 🎯 重要：API時間監控LOG - 定期顯示 + 異常立即顯示
+                        self._log_api_time_monitoring(price, time_str, current_time, time_diff, self.price_count)
 
-                        # 🚨 延遲警告
+                        # 🚨 延遲警告 - 立即顯示重要事件
                         if abs(time_diff) > 30:  # 超過30秒
                             print(f"⚠️ 時間差異警告: {time_diff}秒 (API時間 vs 系統時間)")
 
                     except Exception as e:
-                        # 時間計算錯誤時回退到原始格式
-                        print(f"🔍 策略收到: price={price}, api_time={time_str}, sys_time={current_time}, count={self.price_count}")
+                        # 時間計算錯誤時回退到原始格式 - 立即顯示
+                        self._log_api_time_monitoring(price, time_str, current_time, "ERR", self.price_count)
                         print(f"⚠️ 時間差異計算錯誤: {e}")
 
             # 🔧 簡化統計更新，避免複雜時間操作 (僅在監控啟用時)
@@ -2142,6 +2815,89 @@ class SimpleIntegratedApp:
                     if success:
                         success_count += 1
                         print(f"✅ [MULTI_GROUP] 組別 {group_config.group_id} 進場成功")
+
+                        # 🚀 新增：通知優化風險管理器新部位建立 (修復版)
+                        if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
+                            try:
+                                # 🔧 修復：使用正確的方法獲取部位數據
+                                with self.multi_group_db_manager.get_connection() as conn:
+                                    # 🔧 修復：確保 row_factory 設置正確
+                                    conn.row_factory = sqlite3.Row
+                                    cursor = conn.cursor()
+                                    cursor.execute('''
+                                        SELECT pr.*, sg.range_high, sg.range_low
+                                        FROM position_records pr
+                                        JOIN strategy_groups sg ON pr.group_id = sg.id
+                                        WHERE pr.group_id = ? AND pr.status IN ('PENDING', 'ACTIVE')
+                                        ORDER BY pr.lot_id
+                                    ''', (group_db_id,))
+
+                                    new_positions = cursor.fetchall()
+
+                                    for position in new_positions:
+                                        # 🔧 修復：安全處理 sqlite3.Row 對象
+                                        try:
+                                            # 嘗試將 sqlite3.Row 轉換為字典
+                                            if hasattr(position, 'keys'):
+                                                # 這是 sqlite3.Row 對象
+                                                try:
+                                                    position_dict = dict(position)
+                                                except Exception:
+                                                    # 手動轉換
+                                                    columns = [description[0] for description in cursor.description]
+                                                    position_dict = dict(zip(columns, position))
+                                            elif isinstance(position, dict):
+                                                position_dict = position.copy()
+                                            else:
+                                                # 未知類型，嘗試直接使用
+                                                position_dict = position
+
+                                            # 🛡️ 安全檢查：確保必要數據不為空
+                                            # 使用安全的訪問方式
+                                            if isinstance(position_dict, dict):
+                                                range_high = position_dict.get('range_high') or getattr(self, 'range_high', 0)
+                                                range_low = position_dict.get('range_low') or getattr(self, 'range_low', 0)
+                                                position_id = position_dict.get('id')
+                                            else:
+                                                # 如果不是字典，嘗試使用索引訪問
+                                                try:
+                                                    range_high = position['range_high'] if 'range_high' in position.keys() else getattr(self, 'range_high', 0)
+                                                    range_low = position['range_low'] if 'range_low' in position.keys() else getattr(self, 'range_low', 0)
+                                                    position_id = position['id'] if 'id' in position.keys() else None
+                                                except Exception:
+                                                    # 最後的備用方案
+                                                    range_high = getattr(self, 'range_high', 0)
+                                                    range_low = getattr(self, 'range_low', 0)
+                                                    position_id = None
+                                                    if self.console_enabled:
+                                                        print(f"[OPTIMIZED_RISK] ⚠️ 無法安全訪問部位數據")
+
+                                            if range_high and range_low:  # 只有在有效區間時才處理
+                                                # 構建部位數據
+                                                position_data = {
+                                                    'id': position_id,
+                                                    'direction': direction,
+                                                    'entry_price': price,
+                                                    'range_high': range_high,
+                                                    'range_low': range_low,
+                                                    'group_id': group_db_id
+                                                }
+                                                # 🎯 事件觸發：立即加入監控
+                                                self.optimized_risk_manager.on_new_position(position_data)
+
+                                                if self.console_enabled:
+                                                    print(f"[OPTIMIZED_RISK] 🎯 新部位已加入監控: {position_id}")
+                                            else:
+                                                if self.console_enabled:
+                                                    print(f"[OPTIMIZED_RISK] ⚠️ 跳過部位 {position_id}：區間數據無效")
+                                        except Exception as row_error:
+                                            if self.console_enabled:
+                                                print(f"[OPTIMIZED_RISK] ❌ 處理部位數據失敗: {row_error}")
+
+                            except Exception as e:
+                                if self.console_enabled:
+                                    print(f"[OPTIMIZED_RISK] ⚠️ 新部位事件觸發失敗: {e}")
+                                    print(f"[OPTIMIZED_RISK] 💡 將使用原始風險管理系統")
 
                         # 🔧 新增：下單成功後立即啟用回報處理
                         if hasattr(self, 'enable_order_reply_processing'):
@@ -2757,6 +3513,11 @@ class SimpleIntegratedApp:
                                            command=self.toggle_console_quote)
         self.btn_toggle_console.pack(side="left", padx=5)
 
+        # 🔧 新增：實單模式檢查按鈕
+        self.btn_check_real_mode = ttk.Button(control_row, text="🔍 檢查實單模式",
+                                            command=self.check_and_switch_to_real_mode)
+        self.btn_check_real_mode.pack(side="left", padx=5)
+
         # 策略Console控制按鈕
         self.btn_toggle_strategy_console = ttk.Button(control_row, text="🔇 關閉策略Console",
                                                     command=self.toggle_console_strategy)
@@ -2941,8 +3702,46 @@ class SimpleIntegratedApp:
             # 🚀 擴展資料庫以支援平倉機制
             self._extend_database_for_exit_mechanism()
 
+            # 🚀 初始化全局異步更新器（解決報價延遲問題）
+            try:
+                from async_db_updater import AsyncDatabaseUpdater
+                self.async_updater = AsyncDatabaseUpdater(self.multi_group_db_manager, console_enabled=True)
+                # 🔇 預設關閉峰值更新日誌（避免過多輸出）
+                self.async_updater.set_log_options(enable_peak_logs=False, enable_task_logs=False)
+                self.async_updater.start()
+                print("[MULTI_GROUP] 🚀 全局異步更新器已啟動")
+                print("[MULTI_GROUP] 🔇 峰值更新日誌已預設關閉")
+            except Exception as e:
+                print(f"[MULTI_GROUP] ⚠️ 異步更新器初始化失敗: {e}")
+                self.async_updater = None
+
             # 初始化風險管理引擎
             self.multi_group_risk_engine = RiskManagementEngine(self.multi_group_db_manager)
+
+            # 🚀 連接全局異步更新器到風險管理引擎
+            if hasattr(self, 'async_updater') and self.async_updater:
+                # 🔧 檢查異步更新器健康狀態
+                if self.async_updater.running and self.async_updater.worker_thread and self.async_updater.worker_thread.is_alive():
+                    self.multi_group_risk_engine.set_async_updater(self.async_updater)
+                    print("[MULTI_GROUP] 🔗 風險管理引擎已連接全局異步更新器")
+                else:
+                    print("[MULTI_GROUP] ⚠️ 異步更新器未正常運行，嘗試重啟...")
+                    self.async_updater.start()  # 重新啟動
+                    if self.async_updater.running:
+                        self.multi_group_risk_engine.set_async_updater(self.async_updater)
+                        print("[MULTI_GROUP] 🔗 風險管理引擎已連接重啟後的異步更新器")
+                    else:
+                        print("[MULTI_GROUP] ❌ 異步更新器重啟失敗")
+
+            # 🔧 設置停損執行器到風險管理引擎（如果已創建）
+            if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
+                self.multi_group_risk_engine.set_stop_loss_executor(self.stop_loss_executor)
+                print("[MULTI_GROUP] 🔗 停損執行器已設置到風險管理引擎")
+
+                # 🔧 同時設置到優化風險管理器
+                if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
+                    self.optimized_risk_manager.set_stop_loss_executor(self.stop_loss_executor)
+                    print("[MULTI_GROUP] 🔗 停損執行器已設置到優化風險管理器")
 
             # 🔍 DEBUG: 設定console開關給風險管理引擎
             if hasattr(self.multi_group_risk_engine, 'console_enabled'):
@@ -2987,6 +3786,16 @@ class SimpleIntegratedApp:
                 self.multi_group_db_manager,
                 default_config
             )
+
+            # 🚀 連接全局異步更新器到部位管理器
+            if hasattr(self, 'async_updater') and self.async_updater:
+                # 🔧 修復：使用新的設置方法
+                if hasattr(self.multi_group_position_manager, 'set_async_updater'):
+                    self.multi_group_position_manager.set_async_updater(self.async_updater)
+                else:
+                    # 備用方法：直接設置
+                    self.multi_group_position_manager.async_updater = self.async_updater
+                print("[MULTI_GROUP] 🔗 部位管理器已連接全局異步更新器")
 
             # 🔧 新增：設置父引用，讓部位管理器能訪問報價數據
             import weakref
@@ -3080,6 +3889,20 @@ class SimpleIntegratedApp:
                 if self.console_enabled:
                     print("[STOP_LOSS] 🔍 停損執行器DEBUG模式已啟用")
 
+            # 🔧 設置停損執行器到風險管理引擎
+            if hasattr(self, 'multi_group_risk_engine') and self.multi_group_risk_engine:
+                self.multi_group_risk_engine.set_stop_loss_executor(self.stop_loss_executor)
+
+                # 🚀 連接異步更新器到停損執行器
+                if hasattr(self, 'async_updater') and self.async_updater:
+                    self.stop_loss_executor.set_async_updater(self.async_updater, enabled=True)
+                    print("[STOP_LOSS] 🚀 停損執行器異步更新已啟用")
+
+            # 🔧 設置停損執行器到優化風險管理器
+            if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
+                self.optimized_risk_manager.set_stop_loss_executor(self.stop_loss_executor)
+                print("[STOP_LOSS] 🔗 停損執行器已設置到優化風險管理器")
+
             # 🔧 設定停損執行器的簡化追蹤器引用 (稍後連接)
             # 這將在多組部位管理器初始化後設定
 
@@ -3131,13 +3954,46 @@ class SimpleIntegratedApp:
             self.stop_loss_executor = None
 
     def _init_trailing_stop_system(self):
-        """初始化移動停利系統"""
+        """初始化移動停利系統 - 🔧 優化：優先使用統一計算器，保留分散式組件作為備份"""
         try:
+            print("[TRAILING] 🎯 初始化移動停利系統...")
+
+            # 🚀 優先嘗試統一計算器架構（內存計算 + 5秒批次更新）
+            try:
+                from trailing_stop_calculator import TrailingStopCalculator
+
+                print("[TRAILING] 🔄 嘗試啟動統一移動停利計算器...")
+
+                # 創建統一移動停利計算器
+                self.trailing_calculator = TrailingStopCalculator(
+                    self.multi_group_db_manager,
+                    self.async_updater if hasattr(self, 'async_updater') else None,
+                    console_enabled=True
+                )
+
+                # 🔗 連接到止損執行器（使用現有平倉機制）
+                if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
+                    self.stop_loss_executor.set_trailing_stop_calculator(self.trailing_calculator)
+                    print("[TRAILING] 🔗 移動停利計算器已連接到止損執行器")
+
+                # 設置統一計算器模式
+                self.unified_trailing_enabled = True
+                self.trailing_stop_system_enabled = False  # 停用分散式組件
+
+                print("[TRAILING] ✅ 統一移動停利計算器已啟動（內存計算模式）")
+                print("[TRAILING] 🚀 性能優化: 純內存計算 + 5秒批次更新")
+                return  # 成功啟動統一計算器，直接返回
+
+            except Exception as unified_error:
+                print(f"[TRAILING] ⚠️ 統一計算器啟動失敗，回退到分散式組件: {unified_error}")
+                # 繼續執行分散式組件初始化
+
+            # 🔄 回退模式：使用分散式組件（原有邏輯）
             from trailing_stop_activator import create_trailing_stop_activator
             from peak_price_tracker import create_peak_price_tracker
             from drawdown_monitor import create_drawdown_monitor
 
-            print("[TRAILING] 🎯 初始化移動停利系統...")
+            print("[TRAILING] 🔄 啟動分散式移動停利組件（備份模式）...")
 
             # 創建移動停利啟動器
             self.trailing_stop_activator = create_trailing_stop_activator(
@@ -3213,13 +4069,15 @@ class SimpleIntegratedApp:
             self.peak_price_tracker.add_update_callback(on_peak_price_updated)
             self.drawdown_monitor.add_drawdown_callback(on_drawdown_triggered)
 
-            # 啟用移動停利系統
+            # 啟用分散式移動停利系統
             self.trailing_stop_system_enabled = True
+            self.unified_trailing_enabled = False  # 明確標示使用分散式組件
 
-            print("[TRAILING] ✅ 移動停利系統初始化完成")
+            print("[TRAILING] ✅ 分散式移動停利系統初始化完成")
             print("[TRAILING] 📋 組件: 啟動器、峰值追蹤器、回撤監控器")
             print("[TRAILING] 🔗 所有回調函數已註冊")
             print("[TRAILING] 🎯 分層啟動: 15/40/65點, 20%回撤")
+            print("[TRAILING] ⚠️ 注意: 使用備份模式，可能影響高頻報價性能")
 
         except ImportError as e:
             print(f"[TRAILING] ⚠️ 移動停利系統模組載入失敗: {e}")
@@ -3227,12 +4085,14 @@ class SimpleIntegratedApp:
             self.peak_price_tracker = None
             self.drawdown_monitor = None
             self.trailing_stop_system_enabled = False
+            self.unified_trailing_enabled = False
         except Exception as e:
-            print(f"[TRAILING] ❌ 移動停利系統初始化失敗: {e}")
+            print(f"[TRAILING] ❌ 移動停利系統初始化完全失敗: {e}")
             self.trailing_stop_activator = None
             self.peak_price_tracker = None
             self.drawdown_monitor = None
             self.trailing_stop_system_enabled = False
+            self.unified_trailing_enabled = False
 
     def _init_protection_system(self):
         """初始化累積獲利保護系統"""
@@ -3337,6 +4197,15 @@ class SimpleIntegratedApp:
                 self.drawdown_monitor = self.exit_mechanism_manager.drawdown_monitor
                 self.protection_manager = self.exit_mechanism_manager.protection_manager
                 self.stop_loss_state_manager = self.exit_mechanism_manager.stop_loss_state_manager
+
+                # 🔧 設置停損執行器到風險管理引擎（平倉機制管理器模式）
+                if hasattr(self, 'multi_group_risk_engine') and self.multi_group_risk_engine and self.stop_loss_executor:
+                    self.multi_group_risk_engine.set_stop_loss_executor(self.stop_loss_executor)
+
+                    # 🚀 連接異步更新器到停損執行器
+                    if hasattr(self, 'async_updater') and self.async_updater:
+                        self.stop_loss_executor.set_async_updater(self.async_updater, enabled=True)
+                        print("[EXIT_MANAGER] 🚀 停損執行器異步更新已啟用")
 
                 # 啟用系統
                 self.trailing_stop_system_enabled = True

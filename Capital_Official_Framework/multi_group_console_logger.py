@@ -6,6 +6,7 @@
 """
 
 import time
+import os
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -58,18 +59,65 @@ class MultiGroupConsoleLogger:
         print("💡 [LOGGER] 使用Console模式，避免GIL問題")
     
     def setup_file_logging(self):
-        """設定文件日誌"""
+        """設定文件日誌（帶輪轉機制）"""
         try:
-            log_filename = f"multi_group_strategy_{datetime.now().strftime('%Y%m%d')}.log"
-            logging.basicConfig(
+            # 創建logs目錄
+            logs_dir = "logs"
+            os.makedirs(logs_dir, exist_ok=True)
+
+            # 設定日誌文件名
+            log_filename = os.path.join(logs_dir, f"multi_group_strategy_{datetime.now().strftime('%Y%m%d')}.log")
+
+            # 設定輪轉日誌處理器
+            from logging.handlers import RotatingFileHandler
+
+            # 創建輪轉處理器：最大10MB，保留5個備份
+            file_handler = RotatingFileHandler(
                 filename=log_filename,
-                level=logging.INFO,
-                format='%(asctime)s - %(levelname)s - %(message)s',
-                filemode='a'
+                maxBytes=10*1024*1024,  # 10MB
+                backupCount=5,
+                encoding='utf-8'
             )
-            print(f"📁 [LOGGER] 文件日誌啟用: {log_filename}")
+
+            # 設定格式
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+            file_handler.setLevel(logging.INFO)
+
+            # 添加到根記錄器
+            root_logger = logging.getLogger()
+            root_logger.setLevel(logging.INFO)
+            root_logger.addHandler(file_handler)
+
+            print(f"📁 [LOGGER] 輪轉文件日誌啟用: {log_filename} (最大10MB，保留5個備份)")
+
+            # 清理舊日誌文件
+            self._cleanup_old_logs(logs_dir)
+
         except Exception as e:
             print(f"❌ [LOGGER] 文件日誌設定失敗: {e}")
+
+    def _cleanup_old_logs(self, logs_dir, max_days=7):
+        """清理舊日誌文件（保留最近7天）"""
+        try:
+            current_time = time.time()
+            count = 0
+
+            for filename in os.listdir(logs_dir):
+                if filename.endswith('.log') or filename.endswith('.log.1'):
+                    file_path = os.path.join(logs_dir, filename)
+                    file_age = current_time - os.path.getmtime(file_path)
+
+                    # 如果文件超過7天，刪除
+                    if file_age > (max_days * 24 * 60 * 60):
+                        os.remove(file_path)
+                        count += 1
+
+            if count > 0:
+                print(f"🧹 [LOGGER] 清理{count}個超過{max_days}天的舊日誌文件")
+
+        except Exception as e:
+            print(f"⚠️ [LOGGER] 清理舊日誌文件失敗: {e}")
     
     def log(self, category: LogCategory, level: LogLevel, message: str, 
             group_id: Optional[int] = None, position_id: Optional[int] = None):

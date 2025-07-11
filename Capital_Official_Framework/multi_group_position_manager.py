@@ -19,6 +19,8 @@ from multi_group_config import (
 from multi_group_database import MultiGroupDatabaseManager
 from simplified_order_tracker import SimplifiedOrderTracker
 from total_lot_manager import TotalLotManager
+from async_db_updater import AsyncDatabaseUpdater
+from async_db_updater import AsyncDatabaseUpdater
 
 # 設定日誌
 logging.basicConfig(level=logging.INFO)
@@ -50,6 +52,12 @@ class MultiGroupPositionManager:
 
         # 初始化日誌
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+
+        # 🚀 新增：異步資料庫更新器（延遲更新方案）
+        # 🔧 修復：不自動創建，等待外部設置全局異步更新器
+        self.async_updater = None  # 將由外部設置
+        self.async_update_enabled = True  # 可以動態開關
+
         self.logger.info("多組部位管理器初始化完成")
 
         # 設置回調
@@ -57,6 +65,21 @@ class MultiGroupPositionManager:
         self._setup_simplified_tracker_callbacks()  # 保留舊版相容性
         if self.order_tracker:
             self._setup_order_callbacks()
+
+    def set_async_updater(self, async_updater):
+        """
+        設置異步更新器
+
+        Args:
+            async_updater: AsyncDatabaseUpdater實例
+        """
+        self.async_updater = async_updater
+        if async_updater:
+            self.async_update_enabled = True
+            self.logger.info("✅ 異步更新器已設置")
+        else:
+            self.async_update_enabled = False
+            self.logger.warning("⚠️ 異步更新器已移除")
     
     def create_entry_signal(self, direction: str, signal_time: str,
                            range_high: float, range_low: float) -> List[int]:
@@ -133,10 +156,18 @@ class MultiGroupPositionManager:
                            actual_time: str) -> bool:
         """執行特定組的進場 - 修復版本：先下單再記錄"""
         try:
-            # 獲取組資訊
-            group_info = self.db_manager.get_strategy_group_info(group_db_id)
+            # 🔧 修復：根據DB_ID獲取組資訊，然後用group_id查詢完整信息
+            # 先用主鍵查詢基本信息
+            group_basic_info = self.db_manager.get_strategy_group_by_db_id(group_db_id)
+            if not group_basic_info:
+                self.logger.error(f"找不到組資訊: DB_ID={group_db_id}")
+                return False
+
+            # 再用group_id查詢完整信息（包含JOIN的數據）
+            group_id = group_basic_info['group_id']
+            group_info = self.db_manager.get_strategy_group_info(group_id)
             if not group_info:
-                self.logger.error(f"找不到組資訊: {group_db_id}")
+                self.logger.error(f"找不到組完整資訊: group_id={group_id}, DB_ID={group_db_id}")
                 return False
 
             group_config = self.strategy_config.get_group_by_id(group_info['group_id'])
@@ -536,10 +567,11 @@ class MultiGroupPositionManager:
             # 添加成交回調
             self.simplified_tracker.add_fill_callback(self._on_simplified_fill)
 
-            # 添加追價回調
-            self.simplified_tracker.add_retry_callback(self._on_simplified_retry)
+            # 🔧 啟用簡化版追價回調（避免重複下單）
+            # 只註冊簡化追蹤器的追價回調，總量追蹤器已停用
+            self.simplified_tracker.add_retry_callback(self._on_simplified_retry_simple)
 
-            self.logger.info("✅ 簡化追蹤器回調機制設置完成")
+            self.logger.info("✅ 簡化追蹤器回調機制設置完成（追價回調已暫停）")
 
         except Exception as e:
             self.logger.error(f"設置簡化追蹤器回調失敗: {e}")
@@ -572,24 +604,47 @@ class MultiGroupPositionManager:
             # 根據訂單ID找到對應的部位ID
             position_id = self._get_position_id_by_order_id(order_info.order_id)
             if position_id:
-                # 確認部位成交
-                success = self.db_manager.confirm_position_filled(
-                    position_id=position_id,
-                    actual_fill_price=order_info.fill_price,
-                    fill_time=order_info.fill_time.strftime('%H:%M:%S') if order_info.fill_time else '',
-                    order_status='FILLED'
-                )
+                # 🚀 異步確認部位成交（解決建倉延遲問題）
+                if self.async_update_enabled and self.async_updater:
+                    # 🚀 異步更新（非阻塞）
+                    fill_time_str = order_info.fill_time.strftime('%H:%M:%S') if order_info.fill_time else ''
 
-                if success:
-                    # 初始化風險管理狀態（成交後才初始化）
-                    self.db_manager.create_risk_management_state(
+                    # 異步確認成交
+                    self.async_updater.schedule_position_fill_update(
                         position_id=position_id,
-                        peak_price=order_info.fill_price,
-                        current_time=order_info.fill_time.strftime('%H:%M:%S') if order_info.fill_time else '',
-                        update_reason="成交初始化"
+                        fill_price=order_info.fill_price,
+                        fill_time=fill_time_str,
+                        order_status='FILLED'
                     )
 
-                    self.logger.info(f"✅ 部位{position_id}成交確認: @{order_info.fill_price}")
+                    # 異步初始化風險管理狀態
+                    self.async_updater.schedule_risk_state_creation(
+                        position_id=position_id,
+                        peak_price=order_info.fill_price,
+                        current_time=fill_time_str,
+                        update_reason="異步成交初始化"
+                    )
+
+                    self.logger.info(f"🚀 部位{position_id}異步成交確認已排程: @{order_info.fill_price}")
+                else:
+                    # 🛡️ 同步更新（備用模式）
+                    success = self.db_manager.confirm_position_filled(
+                        position_id=position_id,
+                        actual_fill_price=order_info.fill_price,
+                        fill_time=order_info.fill_time.strftime('%H:%M:%S') if order_info.fill_time else '',
+                        order_status='FILLED'
+                    )
+
+                    if success:
+                        # 初始化風險管理狀態（成交後才初始化）
+                        self.db_manager.create_risk_management_state(
+                            position_id=position_id,
+                            peak_price=order_info.fill_price,
+                            current_time=order_info.fill_time.strftime('%H:%M:%S') if order_info.fill_time else '',
+                            update_reason="同步成交初始化"
+                        )
+
+                        self.logger.info(f"✅ 部位{position_id}成交確認: @{order_info.fill_price}")
 
         except Exception as e:
             self.logger.error(f"處理成交回調失敗: {e}")
@@ -611,17 +666,134 @@ class MultiGroupPositionManager:
         except Exception as e:
             self.logger.error(f"處理簡化成交回調失敗: {e}")
 
-    def _on_simplified_retry(self, group_id: int, qty: int, price: float, retry_count: int):
-        """簡化追蹤器追價回調"""
+    def _on_simplified_retry_simple(self, group_id: int, qty: int, price: float, retry_count: int):
+        """簡化版追價回調 - 避免重複下單"""
         try:
             self.logger.info(f"🔄 [簡化追蹤] 組{group_id}觸發追價: {qty}口 @{price}, "
                            f"第{retry_count}次重試")
 
-            # 觸發追價邏輯
-            self._execute_group_retry(group_id, qty, price, retry_count)
+            # 🔧 簡化版：只執行單一追價，不重複
+            self._execute_single_retry_for_group(group_id, qty, retry_count)
 
         except Exception as e:
             self.logger.error(f"處理簡化追價回調失敗: {e}")
+
+    def _execute_single_retry_for_group(self, group_id: int, qty: int, retry_count: int):
+        """為特定組執行單一追價 - 避免重複下單"""
+        try:
+            # 獲取組信息
+            group_info = self._get_group_info_for_retry(group_id)
+            if not group_info:
+                self.logger.error(f"無法獲取組{group_id}信息")
+                return
+
+            direction = group_info.get('direction')
+            product = "TM0000"
+
+            # 計算追價價格
+            retry_price = self._calculate_retry_price_for_group(direction, retry_count)
+            if not retry_price:
+                self.logger.error(f"無法計算組{group_id}追價價格")
+                return
+
+            self.logger.info(f"🔄 [簡化追蹤] 組{group_id}追價參數: {direction} {qty}口 @{retry_price} (第{retry_count}次)")
+
+            # 🔧 修復：執行單一下單 - 使用正確的方法
+            if self.order_manager:
+                # 🔧 修復：使用正確的execute_strategy_order方法
+                order_result = self.order_manager.execute_strategy_order(
+                    direction=direction,
+                    product=product,
+                    quantity=qty,
+                    price=retry_price,
+                    signal_source=f"group_{group_id}_retry_{retry_count}"
+                )
+
+                if order_result and order_result.success:
+                    self.logger.info(f"✅ 組{group_id}追價下單成功: 第{qty}口 @{retry_price}")
+
+                    # 🔧 修復：註冊到統一追蹤器 (與建倉邏輯一致)
+                    if hasattr(self, 'order_tracker') and self.order_tracker:
+                        try:
+                            self.order_tracker.register_order(
+                                order_id=order_result.order_id,
+                                product=product,
+                                direction=direction,
+                                quantity=qty,
+                                price=retry_price,
+                                is_virtual=(order_result.mode == "virtual"),
+                                signal_source=f"group_{group_id}_retry_{retry_count}",
+                                api_seq_no=order_result.api_result if hasattr(order_result, 'api_result') else None
+                            )
+                            self.logger.info(f"📝 組{group_id}追價訂單已註冊到統一追蹤器: {order_result.order_id}")
+                        except Exception as track_error:
+                            self.logger.warning(f"⚠️ 組{group_id}追價訂單註冊失敗: {track_error}")
+
+                    # 🔧 保留：同時註冊到FIFO匹配器 (向後相容)
+                    if hasattr(self, 'simplified_tracker') and self.simplified_tracker:
+                        if hasattr(self.simplified_tracker, 'fifo_matcher'):
+                            try:
+                                self.simplified_tracker.fifo_matcher.add_order(
+                                    order_id=order_result.order_id,
+                                    product=product,
+                                    direction=direction,
+                                    quantity=qty,
+                                    price=retry_price
+                                )
+                                self.logger.info(f"📝 組{group_id}追價訂單已註冊到FIFO: {order_result.order_id}")
+                            except Exception as fifo_error:
+                                self.logger.warning(f"⚠️ 組{group_id}追價訂單FIFO註冊失敗: {fifo_error}")
+                else:
+                    error_msg = getattr(order_result, 'error', '未知錯誤') if order_result else '下單結果為空'
+                    self.logger.error(f"❌ 組{group_id}追價下單失敗: {error_msg}")
+            else:
+                self.logger.error("下單管理器未初始化")
+
+        except Exception as e:
+            self.logger.error(f"執行組{group_id}單一追價失敗: {e}")
+
+    def _get_group_info_for_retry(self, group_id: int) -> Optional[Dict]:
+        """獲取組信息用於追價"""
+        try:
+            # 🔧 修復：使用正確的資料庫方法名稱
+            group_data = self.db_manager.get_strategy_group_info(group_id)
+            if group_data:
+                return {
+                    'direction': group_data['direction'],  # 使用字典鍵
+                    'target_price': group_data.get('range_high', 0),  # 使用range_high作為目標價
+                    'group_id': group_id
+                }
+            return None
+        except Exception as e:
+            self.logger.error(f"獲取組{group_id}信息失敗: {e}")
+            return None
+
+    def _calculate_retry_price_for_group(self, direction: str, retry_count: int) -> Optional[float]:
+        """計算組追價價格"""
+        try:
+            product = "TM0000"
+
+            # 獲取當前市價
+            if self.order_manager:
+                if direction == "LONG":
+                    current_ask1 = self.order_manager.get_ask1_price(product)
+                    if current_ask1:
+                        retry_price = current_ask1 + retry_count
+                        self.logger.info(f"🔄 [追價] LONG追價計算: ASK1({current_ask1}) + {retry_count} = {retry_price}")
+                        return retry_price
+                elif direction == "SHORT":
+                    current_bid1 = self.order_manager.get_bid1_price(product)
+                    if current_bid1:
+                        retry_price = current_bid1 - retry_count
+                        self.logger.info(f"🔄 [追價] SHORT追價計算: BID1({current_bid1}) - {retry_count} = {retry_price}")
+                        return retry_price
+
+            self.logger.warning(f"無法計算{direction}追價價格")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"計算追價價格失敗: {e}")
+            return None
 
     def _update_group_positions_on_fill(self, group_id: int, price: float, qty: int,
                                       filled_lots: int, total_lots: int):
@@ -629,6 +801,18 @@ class MultiGroupPositionManager:
         try:
             self.logger.info(f"📊 [簡化追蹤] 組{group_id}成交統計更新: "
                            f"{qty}口 @{price}, 總進度: {filled_lots}/{total_lots}")
+
+            # 🔧 新增：防重複處理檢查
+            processing_key = f"{group_id}_{price}_{qty}_{filled_lots}"
+            if not hasattr(self, '_processing_fills'):
+                self._processing_fills = set()
+
+            if processing_key in self._processing_fills:
+                self.logger.warning(f"⚠️ [簡化追蹤] 組{group_id}重複處理檢測，跳過: {processing_key}")
+                return
+
+            self._processing_fills.add(processing_key)
+            self.logger.info(f"🔍 [簡化追蹤] 組{group_id}開始處理: {processing_key}")
 
             # 🔧 修復：實際更新資料庫部位狀態
             # 查找該組的PENDING部位並按FIFO順序確認成交
@@ -657,8 +841,28 @@ class MultiGroupPositionManager:
 
                         pending_positions = cursor.fetchall()
 
-                        # 總是輸出重要的調試信息
-                        self.logger.info(f"🔍 [簡化追蹤] 組{group_id}(DB_ID:{group_db_id}) 找到 {len(pending_positions)} 個PENDING部位")
+                        # 🔧 改善：智能調試信息輸出
+                        if len(pending_positions) > 0:
+                            self.logger.info(f"🔍 [簡化追蹤] 組{group_id}(DB_ID:{group_db_id}) 找到 {len(pending_positions)} 個PENDING部位")
+                        else:
+                            # 🔧 修復：檢查是否已經全部成交，避免無意義警告
+                            cursor.execute('''
+                                SELECT COUNT(*) as total_count,
+                                       SUM(CASE WHEN order_status = 'FILLED' THEN 1 ELSE 0 END) as filled_count
+                                FROM position_records
+                                WHERE group_id = ?
+                            ''', (group_db_id,))
+
+                            count_result = cursor.fetchone()
+                            total_count = count_result[0] if count_result else 0
+                            filled_count = count_result[1] if count_result else 0
+
+                            if filled_count >= total_count and total_count > 0:
+                                # 所有部位已成交，這是正常情況
+                                self.logger.info(f"✅ [簡化追蹤] 組{group_id} 所有部位已成交 ({filled_count}/{total_count})，跳過重複處理")
+                                return  # 直接返回，避免無意義警告
+                            else:
+                                self.logger.info(f"🔍 [簡化追蹤] 組{group_id}(DB_ID:{group_db_id}) 無PENDING部位 (已成交:{filled_count}/{total_count})")
 
                         # 🔧 修復：確認成交，每次處理qty個部位
                         confirmed_count = 0
@@ -666,31 +870,101 @@ class MultiGroupPositionManager:
                             if confirmed_count >= qty:
                                 break  # 只處理本次成交的數量
 
+                            # ⏰ 記錄開始時間用於性能追蹤
+                            start_time = time.time()
+                            position_id = position[0]
+                            fill_time_str = datetime.now().strftime('%H:%M:%S')
+
+                            # 🚀 延遲更新方案：優先使用異步更新（如果啟用）
+                            if self.async_update_enabled and hasattr(self, 'async_updater'):
+                                # 🔧 健康檢查：確保異步更新器正常運行
+                                if not self.check_async_updater_health():
+                                    self.restart_async_updater_if_needed()
+                                try:
+                                    # 🎯 立即排程異步更新（非阻塞）
+                                    async_success_1 = True
+                                    async_success_2 = True
+
+                                    try:
+                                        self.async_updater.schedule_position_fill_update(
+                                            position_id=position_id,
+                                            fill_price=price,
+                                            fill_time=fill_time_str,
+                                            order_status='FILLED'
+                                        )
+                                    except Exception as e1:
+                                        async_success_1 = False
+                                        self.logger.warning(f"⚠️ [異步更新] 部位{position_id}成交更新排程失敗: {e1}")
+
+                                    try:
+                                        # 🎯 立即排程風險狀態創建（非阻塞）
+                                        # 🔧 修復：使用符合資料庫約束的 update_reason
+                                        self.async_updater.schedule_risk_state_creation(
+                                            position_id=position_id,
+                                            peak_price=price,
+                                            current_time=fill_time_str,
+                                            update_reason="成交初始化"
+                                        )
+                                    except Exception as e2:
+                                        async_success_2 = False
+                                        self.logger.warning(f"⚠️ [異步更新] 部位{position_id}風險狀態排程失敗: {e2}")
+
+                                    # 📊 記錄異步更新性能
+                                    async_elapsed = (time.time() - start_time) * 1000
+
+                                    # 🔧 改善：只有在兩個異步操作都成功時才跳過同步更新
+                                    if async_success_1 and async_success_2:
+                                        # 🔧 新增：註冊到統一移動停利計算器（如果啟用）
+                                        self._register_position_to_trailing_calculator(
+                                            position_id, position, price, group_id
+                                        )
+
+                                        confirmed_count += 1
+                                        self.logger.info(f"🚀 [異步更新] 部位{position_id}成交確認 @{price} (耗時:{async_elapsed:.1f}ms)")
+                                        continue  # 跳過同步更新
+                                    else:
+                                        self.logger.warning(f"⚠️ [異步更新] 部位{position_id}部分失敗，回退到同步更新")
+                                        # 繼續執行同步更新作為備份
+
+                                except Exception as async_error:
+                                    self.logger.warning(f"⚠️ [異步更新] 部位{position_id}異步更新失敗: {async_error}，回退到同步更新")
+                                    # 繼續執行同步更新作為備份
+
+                            # 🛡️ 備份方案：同步更新（保留原有邏輯）
+                            sync_start_time = time.time()
                             success = self.db_manager.confirm_position_filled(
-                                position_id=position[0],  # id
+                                position_id=position_id,
                                 actual_fill_price=price,
-                                fill_time=datetime.now().strftime('%H:%M:%S'),
+                                fill_time=fill_time_str,
                                 order_status='FILLED'
                             )
 
                             if success:
                                 # 初始化風險管理狀態
                                 self.db_manager.create_risk_management_state(
-                                    position_id=position[0],
+                                    position_id=position_id,
                                     peak_price=price,
-                                    current_time=datetime.now().strftime('%H:%M:%S'),
-                                    update_reason="初始化"
+                                    current_time=fill_time_str,
+                                    update_reason="成交初始化"
                                 )
 
-                                confirmed_count += 1
-                                self.logger.info(f"✅ [簡化追蹤] 部位{position[0]}成交確認: @{price}")
-                            else:
-                                self.logger.error(f"❌ [簡化追蹤] 部位{position[0]}成交確認失敗")
+                                # 🔧 新增：註冊到統一移動停利計算器（如果啟用）
+                                self._register_position_to_trailing_calculator(
+                                    position_id, position, price, group_id
+                                )
 
+                                # 📊 記錄同步更新性能
+                                sync_elapsed = (time.time() - sync_start_time) * 1000
+                                confirmed_count += 1
+                                self.logger.info(f"✅ [同步更新] 部位{position_id}成交確認 @{price} (耗時:{sync_elapsed:.1f}ms)")
+                            else:
+                                sync_elapsed = (time.time() - sync_start_time) * 1000
+                                self.logger.error(f"❌ [同步更新] 部位{position_id}成交確認失敗 (耗時:{sync_elapsed:.1f}ms)")
+
+                        # 🔧 改善：只在實際處理了部位時輸出成功信息
                         if confirmed_count > 0:
-                            self.logger.info(f"🎉 [簡化追蹤] 組{group_id} 成功確認 {confirmed_count} 個部位成交")
-                        else:
-                            self.logger.warning(f"⚠️ [簡化追蹤] 組{group_id} 沒有成功確認任何部位成交")
+                            total_elapsed = (time.time() - start_time) * 1000 if 'start_time' in locals() else 0
+                            self.logger.info(f"🎉 [簡化追蹤] 組{group_id} 成功確認 {confirmed_count} 個部位成交 (總耗時:{total_elapsed:.1f}ms)")
                 else:
                     self.logger.warning(f"⚠️ [簡化追蹤] 找不到組{group_id}的資料庫記錄")
 
@@ -699,6 +973,87 @@ class MultiGroupPositionManager:
 
         except Exception as e:
             self.logger.error(f"更新組部位成交狀態失敗: {e}")
+        finally:
+            # 🔧 清理處理標記
+            if hasattr(self, '_processing_fills'):
+                processing_key = f"{group_id}_{price}_{qty}_{filled_lots}"
+                self._processing_fills.discard(processing_key)
+                self.logger.info(f"🧹 [簡化追蹤] 組{group_id}處理完成，清理標記: {processing_key}")
+
+    def _register_position_to_trailing_calculator(self, position_id: int, position_data: tuple,
+                                                 fill_price: float, group_id: int):
+        """
+        註冊部位到統一移動停利計算器 - 🔧 新增：支援統一計算器架構
+
+        Args:
+            position_id: 部位ID
+            position_data: 部位資料元組
+            fill_price: 成交價格
+            group_id: 組ID
+        """
+        try:
+            # 檢查是否有統一移動停利計算器（使用弱引用）
+            parent = getattr(self, '_parent_ref', lambda: None)()
+            if not parent:
+                return  # 父引用不存在，跳過註冊
+
+            if not (hasattr(parent, 'unified_trailing_enabled') and parent.unified_trailing_enabled):
+                return  # 未啟用統一計算器，跳過註冊
+
+            if not (hasattr(parent, 'trailing_calculator') and parent.trailing_calculator):
+                return  # 統一計算器不存在，跳過註冊
+
+            # 從部位資料中提取信息
+            direction = position_data[3]  # direction 在第4個位置
+            lot_id = position_data[2]     # lot_id 在第3個位置
+
+            # 獲取組配置以確定移動停利參數
+            group_config = self._get_group_trailing_config(group_id, lot_id)
+
+            # 註冊到統一移動停利計算器
+            success = parent.trailing_calculator.register_position(
+                position_id=position_id,
+                direction=direction,
+                entry_price=fill_price,
+                activation_points=group_config.get('activation_points', 15.0),  # 預設15點啟動
+                pullback_percent=group_config.get('pullback_percent', 0.2)     # 預設20%回撤
+            )
+
+            if success:
+                self.logger.info(f"✅ [統一移動停利] 部位{position_id}已註冊: {direction} @{fill_price:.0f}, "
+                               f"啟動{group_config.get('activation_points', 15):.0f}點, "
+                               f"回撤{group_config.get('pullback_percent', 0.2)*100:.0f}%")
+            else:
+                self.logger.warning(f"⚠️ [統一移動停利] 部位{position_id}註冊失敗")
+
+        except Exception as e:
+            self.logger.error(f"註冊部位到統一移動停利計算器失敗: {e}")
+
+    def _get_group_trailing_config(self, group_id: int, lot_id: int) -> dict:
+        """
+        獲取組的移動停利配置 - 🔧 新增：支援分層移動停利
+
+        Args:
+            group_id: 組ID
+            lot_id: 口數ID
+
+        Returns:
+            dict: 移動停利配置
+        """
+        try:
+            # 分層移動停利配置（與原有邏輯一致）
+            if lot_id == 1:
+                return {'activation_points': 15.0, 'pullback_percent': 0.2}  # 第1口：15點啟動，20%回撤
+            elif lot_id == 2:
+                return {'activation_points': 40.0, 'pullback_percent': 0.2}  # 第2口：40點啟動，20%回撤
+            elif lot_id == 3:
+                return {'activation_points': 65.0, 'pullback_percent': 0.2}  # 第3口：65點啟動，20%回撤
+            else:
+                return {'activation_points': 15.0, 'pullback_percent': 0.2}  # 預設配置
+
+        except Exception as e:
+            self.logger.error(f"獲取組移動停利配置失敗: {e}")
+            return {'activation_points': 15.0, 'pullback_percent': 0.2}  # 預設配置
 
     def _on_group_complete(self, group_id: int):
         """組完成處理"""
@@ -1466,6 +1821,74 @@ class MultiGroupPositionManager:
         except Exception as e:
             self.logger.error(f"執行出場重試下單失敗: {e}")
             return False
+
+    # 🚀 延遲更新方案控制方法
+    def enable_async_update(self, enabled: bool = True):
+        """啟用/停用異步更新功能"""
+        self.async_update_enabled = enabled
+        status = "啟用" if enabled else "停用"
+        self.logger.info(f"🔧 異步更新功能已{status}")
+        if hasattr(self, 'async_updater'):
+            print(f"[ASYNC_UPDATE] 🔧 異步更新功能已{status}")
+
+    def get_async_update_stats(self) -> dict:
+        """獲取異步更新性能統計"""
+        if hasattr(self, 'async_updater'):
+            return self.async_updater.get_stats()
+        return {}
+
+    def report_async_update_performance(self):
+        """報告異步更新性能"""
+        if hasattr(self, 'async_updater'):
+            self.async_updater.report_performance_stats()
+        else:
+            print("[ASYNC_UPDATE] ⚠️ 異步更新器未初始化")
+
+    def shutdown_async_updater(self):
+        """關閉異步更新器"""
+        if hasattr(self, 'async_updater'):
+            self.async_updater.stop()
+            self.logger.info("🛑 異步更新器已關閉")
+
+    def check_async_updater_health(self):
+        """檢查異步更新器健康狀態"""
+        if not hasattr(self, 'async_updater') or not self.async_updater:
+            return False
+
+        # 檢查工作線程是否還在運行
+        if not self.async_updater.running or not self.async_updater.worker_thread.is_alive():
+            self.logger.warning("⚠️ 異步更新器工作線程已停止")
+            return False
+
+        # 檢查隊列是否過滿
+        queue_size = self.async_updater.update_queue.qsize()
+        if queue_size > 500:  # 隊列超過一半容量
+            self.logger.warning(f"⚠️ 異步更新器隊列過滿: {queue_size}/1000")
+            return False
+
+        return True
+
+    def restart_async_updater_if_needed(self):
+        """如果需要，重新啟動異步更新器"""
+        if not self.check_async_updater_health():
+            self.logger.info("🔄 重新啟動異步更新器...")
+            try:
+                # 停止舊的更新器
+                if hasattr(self, 'async_updater'):
+                    self.async_updater.stop()
+
+                # 創建新的更新器
+                from async_db_updater import AsyncDatabaseUpdater
+                self.async_updater = AsyncDatabaseUpdater(self.db_manager, console_enabled=True)
+                self.async_updater.start()
+
+                self.logger.info("✅ 異步更新器重新啟動成功")
+                return True
+            except Exception as e:
+                self.logger.error(f"❌ 異步更新器重新啟動失敗: {e}")
+                self.async_update_enabled = False  # 禁用異步更新
+                return False
+        return True
 
 if __name__ == "__main__":
     # 測試多組部位管理器

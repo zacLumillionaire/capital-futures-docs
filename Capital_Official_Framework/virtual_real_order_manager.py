@@ -108,7 +108,7 @@ class VirtualRealOrderManager:
         self.default_account = default_account
         
         # 模式控制
-        self.is_real_mode = False  # 預設虛擬模式
+        self.is_real_mode = True  # 🔧 修改：預設實單模式
         self.mode_lock = threading.Lock()
         
         # 商品映射
@@ -377,9 +377,13 @@ class VirtualRealOrderManager:
                     if direction == 'BUY':  # 多單進場
                         price = self.get_ask1_price(product)
                         price_type = "ASK1"
+                        # 🔧 可選：限價單模式 - 使用ASK1+1點確保成交
+                        # price = price + 1 if price else None
                     elif direction == 'SELL':  # 空單進場
                         price = self.get_bid1_price(product)
                         price_type = "BID1"
+                        # 🔧 可選：限價單模式 - 使用BID1-1點確保成交
+                        # price = price - 1 if price else None
                     else:
                         return OrderResult(False, self.get_current_mode(),
                                          error=f"無效的方向: {direction}")

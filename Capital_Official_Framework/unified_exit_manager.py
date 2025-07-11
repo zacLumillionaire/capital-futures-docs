@@ -38,11 +38,23 @@ class UnifiedExitManager:
         
         # 出場歷史記錄
         self.exit_history = []
-        
+
+        # 🚀 異步更新支援（解決平倉延遲問題）
+        self.async_updater = None
+        self.async_update_enabled = True  # 🔧 修改：預設啟用異步更新
+
         if self.console_enabled:
             print("[UNIFIED_EXIT] ✅ 統一出場管理器初始化完成")
-    
-    def trigger_exit(self, position_id: int, exit_reason: str, 
+
+    def set_async_updater(self, async_updater, enabled=True):
+        """🚀 設置異步更新器（解決平倉延遲問題）"""
+        self.async_updater = async_updater
+        self.async_update_enabled = enabled
+        if self.console_enabled:
+            status = "啟用" if enabled else "關閉"
+            print(f"[UNIFIED_EXIT] 🚀 異步更新已{status}")
+
+    def trigger_exit(self, position_id: int, exit_reason: str,
                     exit_price: Optional[float] = None) -> bool:
         """
         統一出場觸發方法 - 所有出場的統一入口
@@ -175,14 +187,24 @@ class UnifiedExitManager:
             
             # 3. 處理下單結果 (與進場邏輯一致)
             if order_result.success:
-                # 🔧 修復：不更新為EXITING狀態，因為資料庫約束不允許
-                # 改為記錄出場原因和價格，但保持ACTIVE狀態直到成交確認
-                self.db_manager.update_position_status(
-                    position_id=position_info['id'],
-                    status='ACTIVE',  # 保持ACTIVE狀態
-                    exit_reason=exit_reason,
-                    exit_price=exit_price
-                )
+                # 🚀 異步更新部位狀態（解決平倉延遲問題）
+                if self.async_update_enabled and self.async_updater:
+                    # 🚀 異步更新（非阻塞）
+                    self.async_updater.schedule_position_status_update(
+                        position_id=position_info['id'],
+                        status='ACTIVE',  # 保持ACTIVE狀態
+                        exit_reason=exit_reason,
+                        exit_price=exit_price,
+                        update_reason="出場下單成功"
+                    )
+                else:
+                    # 🛡️ 同步更新（備用模式）
+                    self.db_manager.update_position_status(
+                        position_id=position_info['id'],
+                        status='ACTIVE',  # 保持ACTIVE狀態
+                        exit_reason=exit_reason,
+                        exit_price=exit_price
+                    )
                 
                 # 建立部位訂單映射 (用於追價)
                 if hasattr(self.position_manager, 'position_order_mapping'):

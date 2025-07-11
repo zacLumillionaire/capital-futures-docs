@@ -450,17 +450,24 @@ class MultiGroupDatabaseManager:
             raise
 
     def get_active_positions_by_group(self, group_id: int) -> List[Dict]:
-        """取得指定組的活躍部位"""
+        """取得指定組的活躍部位 - 🔧 修復：包含策略組信息"""
         try:
+            from datetime import date
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT p.*, r.peak_price, r.current_stop_loss, r.trailing_activated, r.protection_activated
+                    SELECT p.*, r.peak_price, r.current_stop_loss, r.trailing_activated, r.protection_activated,
+                           sg.range_high, sg.range_low, sg.direction
                     FROM position_records p
                     LEFT JOIN risk_management_states r ON p.id = r.position_id
+                    LEFT JOIN (
+                        SELECT * FROM strategy_groups
+                        WHERE date = ?
+                        ORDER BY id DESC
+                    ) sg ON p.group_id = sg.group_id
                     WHERE p.group_id = ? AND p.status = 'ACTIVE'
                     ORDER BY p.lot_id
-                ''', (group_id,))
+                ''', (date.today().isoformat(), group_id))
 
                 rows = cursor.fetchall()
                 return [dict(row) for row in rows]
@@ -469,8 +476,13 @@ class MultiGroupDatabaseManager:
             logger.error(f"查詢活躍部位失敗: {e}")
             return []
 
+    def get_group_positions(self, group_id: int) -> List[Dict]:
+        """取得指定組的部位 - 別名方法，向後兼容"""
+        # 🔧 修復：添加此方法解決 'get_group_positions' 不存在的錯誤
+        return self.get_active_positions_by_group(group_id)
+
     def get_all_active_positions(self) -> List[Dict]:
-        """取得所有活躍部位"""
+        """取得所有活躍部位 - 🔧 修復：正確關聯策略組"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -479,10 +491,14 @@ class MultiGroupDatabaseManager:
                            sg.range_high, sg.range_low
                     FROM position_records p
                     LEFT JOIN risk_management_states r ON p.id = r.position_id
-                    LEFT JOIN strategy_groups sg ON p.group_id = sg.id
+                    LEFT JOIN (
+                        SELECT * FROM strategy_groups
+                        WHERE date = ?
+                        ORDER BY id DESC
+                    ) sg ON p.group_id = sg.group_id
                     WHERE p.status = 'ACTIVE'
                     ORDER BY p.group_id, p.lot_id
-                ''')
+                ''', (date.today().isoformat(),))
 
                 rows = cursor.fetchall()
                 return [dict(row) for row in rows]
@@ -492,19 +508,39 @@ class MultiGroupDatabaseManager:
             return []
 
     def get_strategy_group_info(self, group_id: int) -> Optional[Dict]:
-        """取得策略組資訊"""
+        """取得策略組資訊 - 🔧 修復：根據group_id查詢，不是主鍵id"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                # 🔧 修復：查詢條件改為 group_id，並限制為今日記錄
                 cursor.execute('''
-                    SELECT * FROM strategy_groups WHERE id = ?
-                ''', (group_id,))
+                    SELECT * FROM strategy_groups
+                    WHERE group_id = ? AND date = ?
+                    ORDER BY id DESC LIMIT 1
+                ''', (group_id, date.today().isoformat()))
 
                 row = cursor.fetchone()
                 return dict(row) if row else None
 
         except Exception as e:
             logger.error(f"查詢策略組資訊失敗: {e}")
+            return None
+
+    def get_strategy_group_by_db_id(self, db_id: int) -> Optional[Dict]:
+        """根據主鍵ID取得策略組基本資訊 - 🔧 新增：解決進場邏輯問題"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT * FROM strategy_groups
+                    WHERE id = ?
+                ''', (db_id,))
+
+                row = cursor.fetchone()
+                return dict(row) if row else None
+
+        except Exception as e:
+            logger.error(f"根據DB_ID查詢策略組失敗: {e}")
             return None
 
     def get_daily_strategy_summary(self, date_str: Optional[str] = None) -> Dict:
@@ -904,16 +940,20 @@ class MultiGroupDatabaseManager:
             return False
 
     def get_position_by_id(self, position_id: int) -> Optional[Dict]:
-        """根據ID取得部位資訊"""
+        """根據ID取得部位資訊 - 🔧 修復：正確關聯策略組"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT pr.*, sg.direction as group_direction, sg.date, sg.range_high, sg.range_low
                     FROM position_records pr
-                    JOIN strategy_groups sg ON pr.group_id = sg.id
+                    JOIN (
+                        SELECT * FROM strategy_groups
+                        WHERE date = ?
+                        ORDER BY id DESC
+                    ) sg ON pr.group_id = sg.group_id
                     WHERE pr.id = ?
-                ''', (position_id,))
+                ''', (date.today().isoformat(), position_id))
 
                 row = cursor.fetchone()
                 if row:

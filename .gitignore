@@ -90,3 +90,6 @@ venv.bak/
 
 # Ignore database files
 *.db
+
+# Ignore local configuration file
+config.yaml

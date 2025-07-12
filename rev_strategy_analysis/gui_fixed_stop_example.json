@@ -1,0 +1,56 @@
+{
+  "comment": "GUI固定停損模式配置示例",
+  "description": "在rev_web_trading_gui.py中使用此配置來啟用固定停損模式",
+  
+  "fixed_stop_mode": true,
+  "trade_lots": 3,
+  "lot_settings": {
+    "lot1": {
+      "trigger": 14,
+      "trailing": 0,
+      "protection": 0
+    },
+    "lot2": {
+      "trigger": 40,
+      "trailing": 0,
+      "protection": 0
+    },
+    "lot3": {
+      "trigger": 41,
+      "trailing": 0,
+      "protection": 0
+    }
+  },
+  "filters": {
+    "range_filter": {
+      "enabled": false,
+      "max_range_points": 50
+    },
+    "risk_filter": {
+      "enabled": false,
+      "daily_loss_limit": 150,
+      "profit_target": 200
+    }
+  },
+  "start_date": "2024-11-04",
+  "end_date": "2024-11-10",
+  "range_start_time": "08:55",
+  "range_end_time": "08:57",
+  
+  "usage_instructions": [
+    "1. 在rev_web_trading_gui.py中找到配置發送部分",
+    "2. 添加 'fixed_stop_mode': True 到配置中",
+    "3. 設定 trailing 為 0 (0%回檔)",
+    "4. 設定 protection 為 0 (停用保護性停損)",
+    "5. trigger 數值將被用作固定停損點數"
+  ],
+  
+  "expected_behavior": {
+    "lot1_stop_loss": "進場價 - 14點",
+    "lot2_stop_loss": "進場價 - 40點", 
+    "lot3_stop_loss": "進場價 - 41點",
+    "take_profit": "區間邊緣 (統一停利)",
+    "no_protection": "前一口表現不影響後續口數",
+    "no_trailing": "停損點固定不變"
+  }
+}

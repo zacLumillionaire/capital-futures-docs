@@ -1,0 +1,19 @@
+# config.yaml (重建純淨版)
+store:
+  type: neo4j
+
+graph:
+  neo4j:
+    url: "neo4j://host.docker.internal:7687"
+    user: "neo4j"
+    password: "kkd5ys+UCC" # 這是您 Neo4j 的密碼
+
+llm:
+  service: "openai"
+  openai:
+    apikey: "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" # 您的 OpenAI Key
+    model: "gpt-4.1-mini"
+
+auth:
+  required: true
+  apikey: "zep_local_secret" # 這是您本地 Zep 伺服器的密碼

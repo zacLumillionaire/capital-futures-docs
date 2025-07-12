@@ -1,0 +1,5 @@
+﻿time_interval,mode,lot1_stop_loss,lot2_stop_loss,lot3_stop_loss,mdd,total_pnl,win_rate,experiment_id,recommendation_reason
+10:30-10:32,各口獨立停利 L1:41 L2:41 L3:40,15,15,60,0,0,0,10:3010:32_L1SL15TP41_L2SL15TP41_L3SL60TP40_fixed_points,fixed_only
+11:30-11:32,各口獨立停利 L1:41 L2:15 L3:15,15,15,15,0,0,0,11:3011:32_L1SL15TP41_L2SL15TP15_L3SL15TP15_fixed_points,fixed_only
+12:30-12:32,各口獨立停利 L1:40 L2:40 L3:41,50,60,60,0,0,0,12:3012:32_L1SL50TP40_L2SL60TP40_L3SL60TP41_range_boundary,fixed_only
+13:00-13:02,各口獨立停利 L1:15 L2:40 L3:15,15,15,60,0,0,0,13:0013:02_L1SL15TP15_L2SL15TP40_L3SL60TP15_range_boundary,fixed_only

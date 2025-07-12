@@ -1,0 +1,102 @@
+{
+  "metadata": {
+    "generated_at": "2025-07-10T13:55:00.019149",
+    "statistics": {
+      "total_experiments": 3
+    },
+    "config": {
+      "start_date": "2024-11-04",
+      "end_date": "2025-06-28",
+      "range_start_time": "08:46",
+      "range_end_time": "08:47",
+      "lot1_trigger_range": [
+        15,
+        15
+      ],
+      "lot1_trailing_range": [
+        10,
+        10
+      ],
+      "lot2_trigger_range": [
+        40,
+        40
+      ],
+      "lot2_trailing_range": [
+        10,
+        10
+      ],
+      "lot3_trigger_range": [
+        40,
+        50
+      ],
+      "lot3_trailing_range": [
+        20,
+        20
+      ],
+      "protection_range": [
+        2,
+        2
+      ],
+      "max_parallel": 1
+    }
+  },
+  "experiments": [
+    {
+      "experiment_id": 1,
+      "trade_lots": 3,
+      "start_date": "2024-11-04",
+      "end_date": "2025-06-28",
+      "range_start_time": "08:46",
+      "range_end_time": "08:47",
+      "lot1_trigger": 15,
+      "lot1_trailing": 10,
+      "lot2_trigger": 40,
+      "lot2_trailing": 10,
+      "lot2_protection": 2,
+      "lot3_trigger": 40,
+      "lot3_trailing": 20,
+      "lot3_protection": 2,
+      "range_filter_enabled": false,
+      "risk_filter_enabled": false,
+      "stop_loss_filter_enabled": false
+    },
+    {
+      "experiment_id": 2,
+      "trade_lots": 3,
+      "start_date": "2024-11-04",
+      "end_date": "2025-06-28",
+      "range_start_time": "08:46",
+      "range_end_time": "08:47",
+      "lot1_trigger": 15,
+      "lot1_trailing": 10,
+      "lot2_trigger": 40,
+      "lot2_trailing": 10,
+      "lot2_protection": 2,
+      "lot3_trigger": 45,
+      "lot3_trailing": 20,
+      "lot3_protection": 2,
+      "range_filter_enabled": false,
+      "risk_filter_enabled": false,
+      "stop_loss_filter_enabled": false
+    },
+    {
+      "experiment_id": 3,
+      "trade_lots": 3,
+      "start_date": "2024-11-04",
+      "end_date": "2025-06-28",
+      "range_start_time": "08:46",
+      "range_end_time": "08:47",
+      "lot1_trigger": 15,
+      "lot1_trailing": 10,
+      "lot2_trigger": 40,
+      "lot2_trailing": 10,
+      "lot2_protection": 2,
+      "lot3_trigger": 50,
+      "lot3_trailing": 20,
+      "lot3_protection": 2,
+      "range_filter_enabled": false,
+      "risk_filter_enabled": false,
+      "stop_loss_filter_enabled": false
+    }
+  ]
+}

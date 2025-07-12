@@ -1,0 +1,4 @@
+experiment_id,time_interval,lot1_stop_loss,lot2_stop_loss,lot3_stop_loss,take_profit,total_pnl,max_drawdown,win_rate,total_trades
+10:3010:31_L1SL20_L2SL50_L3SL50_TP30,10:30-10:31,20,50,50,30,1599.0,-1105.0,71.05,152
+10:3010:31_L1SL10_L2SL35_L3SL55_TP70,10:30-10:31,10,35,55,70,2037.0,-849.0,67.11,152
+11:3011:31_L1SL20_L2SL40_L3SL50_TP80,11:30-11:31,20,40,50,80,1948.0,-557.0,71.9,153

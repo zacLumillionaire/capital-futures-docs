@@ -84,3 +84,9 @@ venv.bak/
 # ===================================================================
 [Bb]in/
 [Oo]bj/
+
+# Ignore all result directories, no matter how deep they are
+**/results/
+
+# Ignore database files
+*.db

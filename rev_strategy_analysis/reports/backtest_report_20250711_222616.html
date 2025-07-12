@@ -1,0 +1,79 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>回測分析報告</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }
+        .stat-card { background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; }
+        .stat-value { font-size: 24px; font-weight: bold; color: #2e7d32; }
+        .stat-label { font-size: 14px; color: #666; margin-top: 5px; }
+        .log-section { margin-top: 30px; }
+        .log-content { background: #f8f9fa; padding: 15px; border-radius: 5px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; font-size: 12px; }
+        .debug-section { margin-top: 20px; background: #fff3cd; padding: 15px; border-radius: 5px; }
+        h1, h2 { color: #333; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Profit-Funded Risk 多口交易策略回測報告</h1>
+            <p>報告生成時間: 2025-07-11 22:26:16</p>
+        </div>
+
+        <h2>📈 關鍵統計指標</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">N/A</div>
+                <div class="stat-label">總交易天數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">N/A</div>
+                <div class="stat-label">總交易次數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">N/A</div>
+                <div class="stat-label">勝率</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">N/A</div>
+                <div class="stat-label">總損益</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">N/A</div>
+                <div class="stat-label">獲利次數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">N/A</div>
+                <div class="stat-label">虧損次數</div>
+            </div>
+        </div>
+
+        <div class="debug-section">
+            <h3>🔧 除錯資訊</h3>
+            <p><strong>返回碼:</strong> 0</p>
+            <p><strong>stdout 長度:</strong> 0</p>
+            <p><strong>stderr 長度:</strong> 616</p>
+        </div>
+
+        <div class="log-section">
+            <h2>📋 詳細回測日誌 (stdout)</h2>
+            <div class="log-content">無輸出內容</div>
+        </div>
+
+        <div class="log-section"><h2>⚠️ 錯誤訊息 (stderr)</h2><div class="log-content">[2025-07-11T22:26:06+0800] INFO [__main__.main:875] 🎮 GUI模式：初始化資料庫連線池...
+[2025-07-11T22:26:06+0800] INFO [app_setup.init_all_db_pools:13] 🚀 開始初始化資料庫連線池...
+[2025-07-11T22:26:15+0800] INFO [shared.set_db_pool:20] 🔌 shared.py: 正在設定 db_pool_b...
+[2025-07-11T22:26:15+0800] INFO [shared.set_db_pool:23] ✅ shared.py: db_pool_b 已成功設定。
+[2025-07-11T22:26:15+0800] INFO [app_setup.init_all_db_pools:31] ✅ to-wp 資料庫連線池已成功建立並注入 shared 模組。
+[2025-07-11T22:26:15+0800] INFO [__main__.main:877] ✅ GUI模式：資料庫連線池初始化成功。
+[2025-07-11T22:26:15+0800] ERROR [__main__.main:899] ❌ GUI模式執行失敗：local variable &#x27;json&#x27; referenced before assignment
+</div></div>
+    </div>
+</body>
+</html>
+                

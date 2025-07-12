@@ -1,0 +1,146 @@
+
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>時間區間MDD分析報告 - quick_test</title>
+    <style>
+        body { font-family: 'Microsoft JhengHei', Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 10px; }
+        .section { margin: 30px 0; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background: #fafafa; }
+        .section h2 { color: #333; border-bottom: 2px solid #667eea; padding-bottom: 10px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
+        .stat-card { background: white; padding: 15px; border-radius: 8px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .stat-value { font-size: 24px; font-weight: bold; color: #667eea; }
+        .stat-label { color: #666; margin-top: 5px; }
+        .recommendations-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        .recommendations-table th, .recommendations-table td { border: 1px solid #ddd; padding: 12px; text-align: center; }
+        .recommendations-table th { background-color: #667eea; color: white; }
+        .recommendations-table tr:nth-child(even) { background-color: #f9f9f9; }
+        .interval-details { margin: 15px 0; padding: 15px; background: white; border-radius: 5px; }
+        .positive { color: #28a745; }
+        .negative { color: #dc3545; }
+        .neutral { color: #6c757d; }
+        .highlight { background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🕙 時間區間MDD分析報告</h1>
+            <p>配置: quick_test | 生成時間: 2025-07-10 00:49:58</p>
+        </div>
+
+        <div class="section">
+            <h2>📊 總體統計</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value negative">0.00</div>
+                    <div class="stat-label">預期每日損益</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value negative">0.00</div>
+                    <div class="stat-label">預期每日MDD</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value neutral">0.00%</div>
+                    <div class="stat-label">平均勝率</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value neutral">2</div>
+                    <div class="stat-label">分析區間數</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value neutral">0.000</div>
+                    <div class="stat-label">風險調整收益</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>📋 每日交易配置建議</h2>
+            <table class="recommendations-table">
+                <thead>
+                    <tr>
+                        <th>時間區間</th>
+                        <th>停利模式</th>
+                        <th>L1停損</th>
+                        <th>L2停損</th>
+                        <th>L3停損</th>
+                        <th>MDD</th>
+                        <th>損益</th>
+                        <th>勝率</th>
+                        <th>推薦原因</th>
+                    </tr>
+                </thead>
+                <tbody>
+        
+                    <tr>
+                        <td>10:30-10:32</td>
+                        <td>各口獨立停利 L1:60 L2:60 L3:60</td>
+                        <td>15</td>
+                        <td>20</td>
+                        <td>30</td>
+                        <td class="negative">0.00</td>
+                        <td class="negative">0.00</td>
+                        <td>0.00%</td>
+                        <td>僅固定停利可用</td>
+                    </tr>
+            
+                    <tr>
+                        <td>12:30-12:32</td>
+                        <td>各口獨立停利 L1:40 L2:60 L3:40</td>
+                        <td>15</td>
+                        <td>25</td>
+                        <td>30</td>
+                        <td class="negative">0.00</td>
+                        <td class="negative">0.00</td>
+                        <td>0.00%</td>
+                        <td>僅固定停利可用</td>
+                    </tr>
+            
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>🔍 各時間區間詳細分析</h2>
+            
+            <div class="interval-details">
+                <h3>🕙 10:30-10:32</h3>
+                <p><strong>實驗數量:</strong> 13</p>
+                <p><strong>平均MDD:</strong> <span class="negative">0.00</span></p>
+                <p><strong>平均損益:</strong> <span class="negative">0.00</span></p>
+                <p><strong>平均勝率:</strong> 0.00%</p>
+                
+                <div class="highlight">
+                    <strong>最佳固定停利:</strong> MDD 0.00, 損益 0.00,
+                    停損 L1:15 L2:20 L3:30
+                </div>
+                </div>
+            <div class="interval-details">
+                <h3>🕙 12:30-12:32</h3>
+                <p><strong>實驗數量:</strong> 7</p>
+                <p><strong>平均MDD:</strong> <span class="negative">0.00</span></p>
+                <p><strong>平均損益:</strong> <span class="negative">0.00</span></p>
+                <p><strong>平均勝率:</strong> 0.00%</p>
+                
+                <div class="highlight">
+                    <strong>最佳固定停利:</strong> MDD 0.00, 損益 0.00,
+                    停損 L1:15 L2:25 L3:30
+                </div>
+                </div></div>
+        <div class="section">
+            <h2>📈 實驗摘要</h2>
+            <p><strong>配置名稱:</strong> 快速測試</p>
+            <p><strong>總實驗數:</strong> 20</p>
+            <p><strong>成功實驗數:</strong> 20</p>
+            <p><strong>分析時間區間數:</strong> 2</p>
+            <p><strong>生成時間:</strong> 2025-07-10T00:49:58.166118</p>
+        </div>
+    </div>
+</body>
+</html>
+        

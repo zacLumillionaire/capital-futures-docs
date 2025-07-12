@@ -1,0 +1,10 @@
+# docker-compose.yml (重建版)
+services:
+  zep:
+    image: ghcr.io/getzep/zep:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.yaml:/config/zep.yaml
+      - ./zep_data:/opt/zep/.zep
+    command: ["--config", "/config/zep.yaml"]

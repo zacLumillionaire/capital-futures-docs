@@ -1,0 +1,6 @@
+﻿experiment_id,time_interval,lot1_stop_loss,lot2_stop_loss,lot3_stop_loss,mdd,total_pnl,risk_adjusted_return,take_profit_mode
+12:3012:32_L1SL55_L2SL70_L3SL70_RangeBoundary,12:30-12:32,55,70,70,-1236.0,2513.0,2.0331715210355985,range_boundary
+10:3010:32_L1SL15_L2SL15_L3SL65_RangeBoundary,10:30-10:32,15,15,65,-643.0,2532.0,3.9377916018662518,range_boundary
+10:0010:02_L1SL15_L2SL60_L3SL70_RangeBoundary,10:00-10:02,15,60,70,-1587.0,2192.0,1.3812224322621298,range_boundary
+13:0013:02_L1SL50_L2SL65_L3SL70_RangeBoundary,13:00-13:02,50,65,70,-1393.0,339.0,0.24335965541995694,range_boundary
+11:0011:02_L1SL25_L2SL50_L3SL60_RangeBoundary,11:00-11:02,25,50,60,-1227.0,-387.0,0.3154034229828851,range_boundary

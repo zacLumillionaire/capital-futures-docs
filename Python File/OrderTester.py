@@ -42,8 +42,37 @@ from reply.order_reply import OrderReplyFrame
 from quote.future_quote import FutureQuoteFrame
 from query.position_query import PositionQueryFrame
 
-# 🔧 GIL修復：移除過渡期功能 - 價格橋接和TCP伺服器
-# 策略已整合，不再需要這些過渡功能
+# 導入價格橋接模組
+try:
+    from price_bridge import write_price_to_bridge
+    PRICE_BRIDGE_AVAILABLE = True
+    print("✅ 價格橋接模組載入成功")
+except ImportError as e:
+    PRICE_BRIDGE_AVAILABLE = False
+    print(f"⚠️ 價格橋接模組未載入: {e}")
+
+# 導入TCP價格伺服器模組
+try:
+    from tcp_price_server import start_price_server, stop_price_server, broadcast_price_tcp, get_server_status
+    TCP_PRICE_SERVER_AVAILABLE = True
+    print("✅ TCP價格伺服器模組載入成功")
+except ImportError as e:
+    TCP_PRICE_SERVER_AVAILABLE = False
+    print(f"⚠️ TCP價格伺服器模組未載入: {e}")
+
+# 導入Queue基礎設施
+try:
+    from queue_infrastructure import (
+        get_queue_infrastructure,
+        TickData,
+        get_queue_manager
+    )
+    QUEUE_INFRASTRUCTURE_AVAILABLE = True
+    print("✅ Queue基礎設施載入成功")
+except ImportError as e:
+    QUEUE_INFRASTRUCTURE_AVAILABLE = False
+    print(f"⚠️ Queue基礎設施載入失敗: {e}")
+    print("📝 將使用傳統模式運行")
 
 # 設定日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -505,18 +534,12 @@ def register_reply_message_event():
 
 class OrderTesterApp(tk.Tk):
     """下單測試主應用程式"""
-
+    
     def __init__(self):
         super().__init__()
 
         self.title("群益證券API期貨下單測試程式")
         self.geometry("1000x800")
-
-        # 🔧 GIL錯誤修復：添加線程安全鎖
-        self.quote_lock = threading.Lock()
-        self.strategy_lock = threading.Lock()
-        self.ui_lock = threading.Lock()
-        self.order_lock = threading.Lock()
 
         # TCP價格伺服器狀態
         self.tcp_server_enabled = False
@@ -661,8 +684,31 @@ class OrderTesterApp(tk.Tk):
                                    bg="#DC143C", fg="white", width=10, state="disabled")
         self.btn_logout.grid(column=3, row=1, padx=5, pady=5)
 
-        # 🔧 GIL修復：移除TCP價格伺服器UI區域
-        # 策略已整合，不再需要TCP價格廣播功能
+        # TCP價格伺服器控制區域
+        tcp_frame = tk.LabelFrame(parent, text="TCP價格伺服器 (新功能)", padx=10, pady=10)
+        tcp_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        # TCP開關
+        self.var_tcp_enabled = tk.BooleanVar()
+        self.check_tcp_enabled = tk.Checkbutton(tcp_frame, text="啟用TCP價格伺服器",
+                                               variable=self.var_tcp_enabled,
+                                               command=self.toggle_tcp_server)
+        self.check_tcp_enabled.grid(column=0, row=0, sticky=tk.W, padx=5, pady=5)
+
+        # TCP狀態顯示
+        tk.Label(tcp_frame, text="伺服器狀態:").grid(column=1, row=0, sticky=tk.W, padx=(20,5), pady=5)
+        self.label_tcp_status = tk.Label(tcp_frame, text="未啟動", fg="red")
+        self.label_tcp_status.grid(column=2, row=0, padx=5, pady=5)
+
+        # TCP連接數顯示
+        tk.Label(tcp_frame, text="連接數:").grid(column=3, row=0, sticky=tk.W, padx=(20,5), pady=5)
+        self.label_tcp_clients = tk.Label(tcp_frame, text="0", fg="blue")
+        self.label_tcp_clients.grid(column=4, row=0, padx=5, pady=5)
+
+        # TCP說明
+        tcp_info = tk.Label(tcp_frame, text="📡 啟用後可讓策略程式透過TCP接收即時報價 (localhost:8888)",
+                           fg="gray", font=("Arial", 8))
+        tcp_info.grid(column=0, row=1, columnspan=5, sticky=tk.W, padx=5, pady=2)
 
         # 訊息顯示
         msg_frame = tk.LabelFrame(parent, text="登入訊息", padx=5, pady=5)
@@ -852,11 +898,68 @@ class OrderTesterApp(tk.Tk):
         except Exception as e:
             self.add_login_message(f"【錯誤】自動連線回報主機時發生錯誤: {str(e)}")
 
-    # 🔧 GIL修復：移除TCP伺服器功能 - toggle_tcp_server
-    pass
+    def toggle_tcp_server(self):
+        """切換TCP價格伺服器狀態"""
+        if not TCP_PRICE_SERVER_AVAILABLE:
+            messagebox.showerror("錯誤", "TCP價格伺服器模組未載入")
+            self.var_tcp_enabled.set(False)
+            return
 
-    # 🔧 GIL修復：移除TCP伺服器功能 - start_tcp_server, stop_tcp_server, update_tcp_status
-    pass
+        if self.var_tcp_enabled.get():
+            # 啟動TCP伺服器
+            self.start_tcp_server()
+        else:
+            # 停止TCP伺服器
+            self.stop_tcp_server()
+
+    def start_tcp_server(self):
+        """啟動TCP價格伺服器"""
+        try:
+            if start_price_server():
+                self.tcp_server_running = True
+                self.tcp_server_enabled = True
+                self.label_tcp_status.config(text="運行中", fg="green")
+                self.add_login_message("✅ TCP價格伺服器已啟動 (localhost:8888)")
+
+                # 啟動狀態更新
+                self.update_tcp_status()
+            else:
+                self.var_tcp_enabled.set(False)
+                self.label_tcp_status.config(text="啟動失敗", fg="red")
+                self.add_login_message("❌ TCP價格伺服器啟動失敗")
+
+        except Exception as e:
+            self.var_tcp_enabled.set(False)
+            self.label_tcp_status.config(text="錯誤", fg="red")
+            self.add_login_message(f"❌ TCP價格伺服器啟動異常: {e}")
+
+    def stop_tcp_server(self):
+        """停止TCP價格伺服器"""
+        try:
+            stop_price_server()
+            self.tcp_server_running = False
+            self.tcp_server_enabled = False
+            self.label_tcp_status.config(text="已停止", fg="red")
+            self.label_tcp_clients.config(text="0")
+            self.add_login_message("⏹️ TCP價格伺服器已停止")
+
+        except Exception as e:
+            self.add_login_message(f"❌ 停止TCP價格伺服器異常: {e}")
+
+    def update_tcp_status(self):
+        """更新TCP伺服器狀態"""
+        if self.tcp_server_running:
+            try:
+                status = get_server_status()
+                if status:
+                    client_count = status.get('connected_clients', 0)
+                    self.label_tcp_clients.config(text=str(client_count))
+
+                # 每2秒更新一次
+                self.after(2000, self.update_tcp_status)
+
+            except Exception as e:
+                logger.error(f"更新TCP狀態失敗: {e}")
 
     def create_strategy_panel(self, parent_frame, skcom_objects):
         """創建簡化策略面板 - 階段1 + 實單功能整合"""
@@ -1188,12 +1291,6 @@ class OrderTesterApp(tk.Tk):
                                              bg="red", fg="white", font=("Arial", 10), state="disabled")
             self.strategy_stop_btn.pack(side="left", padx=5)
 
-            # 🔧 測試按鈕：測試策略日誌功能
-            test_log_btn = tk.Button(control_frame, text="測試日誌",
-                                   command=self.test_strategy_log,
-                                   bg="orange", fg="white", font=("Arial", 10))
-            test_log_btn.pack(side="left", padx=5)
-
             # 日誌顯示區域
             log_frame = tk.LabelFrame(strategy_container, text="策略日誌", fg="gray")
             log_frame.pack(fill="both", expand=True, padx=5, pady=5)
@@ -1253,9 +1350,6 @@ class OrderTesterApp(tk.Tk):
             self.add_strategy_log("📊 等待報價數據...")
             self.add_strategy_log("⏰ 預設區間: 08:46-08:48")
 
-            # 🔧 測試日誌功能
-            self.add_strategy_log("🧪 測試：策略日誌功能正常")
-
             logger.info("✅ 策略面板創建成功")
 
         except Exception as e:
@@ -1295,194 +1389,37 @@ class OrderTesterApp(tk.Tk):
         )
 
     def add_strategy_log(self, message):
-        """添加策略日誌 - 🔧 GIL錯誤修復：線程安全版本"""
+        """添加策略日誌"""
         try:
-            # 🔧 調試：檢查調用情況
-            import threading
-            current_thread = threading.current_thread()
-            is_main_thread = current_thread == threading.main_thread()
-            print(f"[DEBUG] add_strategy_log 調用: thread={current_thread.name}, is_main={is_main_thread}, message={message}")
-
-            if is_main_thread:
-                # 在主線程中，直接更新UI
-                print(f"[DEBUG] 在主線程中，直接調用 _safe_add_strategy_log_ui")
-                self._safe_add_strategy_log_ui(message)
-            else:
-                # 在背景線程中，使用after_idle安全地安排到主線程
-                print(f"[DEBUG] 在背景線程中，使用 after_idle 安排")
-                if hasattr(self, 'root'):
-                    self.root.after_idle(self._safe_add_strategy_log_ui, message)
-                else:
-                    # 如果沒有root，只輸出到控制台
-                    print(f"[DEBUG] 沒有root，只輸出到控制台")
-                    logger.info(f"[策略] {message}")
-        except Exception as e:
-            # 如果UI更新失敗，至少記錄到日誌
-            print(f"[DEBUG] add_strategy_log 異常: {e}")
-            logger.info(f"[策略] {message} (UI更新失敗: {e})")
-
-    def _safe_add_strategy_log_ui(self, message):
-        """線程安全的策略日誌UI更新 - 只在主線程中調用"""
-        try:
-            # 🔧 調試：檢查控件狀態
-            has_widget = hasattr(self, 'strategy_log_text')
-            print(f"[DEBUG] _safe_add_strategy_log_ui 調用: has_widget={has_widget}, message={message}")
-
-            if has_widget:
+            if hasattr(self, 'strategy_log_text'):
                 from datetime import datetime
                 timestamp = datetime.now().strftime("%H:%M:%S")
                 log_message = f"[{timestamp}] {message}\n"
 
                 self.strategy_log_text.insert(tk.END, log_message)
                 self.strategy_log_text.see(tk.END)
-                print(f"[DEBUG] 策略日誌UI更新成功: {message}")
-            else:
-                print(f"[DEBUG] strategy_log_text 控件不存在")
 
-            # 同時輸出到控制台
-            logger.info(f"[策略] {message}")
+                # 同時輸出到控制台
+                logger.info(f"[策略] {message}")
         except Exception as e:
-            # 如果連這個都失敗，只能記錄到日誌
-            print(f"[DEBUG] 策略日誌UI更新失敗: {e}")
-            logger.info(f"[策略] {message} (UI更新失敗: {e})")
-
-    def update_strategy_status(self, status_type, **kwargs):
-        """更新重要策略狀態到UI - 🔧 安全的低頻狀態更新"""
-        try:
-            # 🔧 確保在主線程中執行
-            import threading
-            if threading.current_thread() != threading.main_thread():
-                # 如果不在主線程，安排到主線程執行
-                if hasattr(self, 'root'):
-                    self.root.after_idle(self.update_strategy_status, status_type, **kwargs)
-                return
-
-            # 根據狀態類型更新不同的資訊
-            if status_type == "range_status":
-                self._update_range_status(**kwargs)
-            elif status_type == "position_status":
-                self._update_position_status(**kwargs)
-            elif status_type == "entry_status":
-                self._update_entry_status(**kwargs)
-            elif status_type == "direction_status":
-                self._update_direction_status(**kwargs)
-
-        except Exception as e:
-            print(f"【策略狀態】更新失敗: {e}")
-
-    def _update_range_status(self, high=None, low=None, range_size=None, status=None):
-        """更新區間狀態資訊"""
-        try:
-            if high is not None and low is not None:
-                range_size = high - low if range_size is None else range_size
-                message = f"📊 區間狀態更新 - 高點:{high} 低點:{low} 區間大小:{range_size}點"
-                self.add_strategy_log(message)
-                print(f"【區間狀態】{message}")
-
-            if status is not None:
-                message = f"📈 區間狀態: {status}"
-                self.add_strategy_log(message)
-                print(f"【區間狀態】{message}")
-
-        except Exception as e:
-            print(f"【區間狀態】更新失敗: {e}")
-
-    def _update_position_status(self, filled_lots=None, active_lots=None, total_lots=None):
-        """更新部位狀態資訊"""
-        try:
-            if filled_lots is not None or active_lots is not None:
-                filled = filled_lots if filled_lots is not None else 0
-                active = active_lots if active_lots is not None else 0
-                total = total_lots if total_lots is not None else (filled + active)
-
-                message = f"📋 部位狀態 - 已成交:{filled}口 活躍委託:{active}口 總計:{total}口"
-                self.add_strategy_log(message)
-                print(f"【部位狀態】{message}")
-
-        except Exception as e:
-            print(f"【部位狀態】更新失敗: {e}")
-
-    def _update_entry_status(self, price=None, time=None, direction=None, quantity=None):
-        """更新進場狀態資訊"""
-        try:
-            if price is not None and time is not None:
-                direction_text = direction if direction else "未知"
-                quantity_text = f"{quantity}口" if quantity else ""
-
-                message = f"🎯 進場狀態 - 方向:{direction_text} 價格:{price} 時間:{time} {quantity_text}"
-                self.add_strategy_log(message)
-                print(f"【進場狀態】{message}")
-
-        except Exception as e:
-            print(f"【進場狀態】更新失敗: {e}")
-
-    def _update_direction_status(self, direction=None, signal=None, confidence=None):
-        """更新方向狀態資訊"""
-        try:
-            if direction is not None:
-                signal_text = f" 信號:{signal}" if signal else ""
-                confidence_text = f" 信心度:{confidence}%" if confidence else ""
-
-                message = f"🧭 方向判斷 - {direction}{signal_text}{confidence_text}"
-                self.add_strategy_log(message)
-                print(f"【方向狀態】{message}")
-
-        except Exception as e:
-            print(f"【方向狀態】更新失敗: {e}")
-
-    def test_strategy_log(self):
-        """測試策略日誌功能"""
-        try:
-            import threading
-            from datetime import datetime
-
-            current_time = datetime.now().strftime("%H:%M:%S")
-            test_message = f"🧪 測試訊息 - 時間:{current_time} 線程:{threading.current_thread().name}"
-
-            print(f"[DEBUG] 測試按鈕被點擊，準備添加測試訊息: {test_message}")
-            self.add_strategy_log(test_message)
-
-            # 也測試狀態更新
-            self.update_strategy_status("range_status",
-                                      high=12345.0,
-                                      low=12300.0,
-                                      range_size=45.0,
-                                      status="測試狀態")
-
-        except Exception as e:
-            print(f"[DEBUG] 測試策略日誌失敗: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"添加策略日誌失敗: {e}")
 
     def start_strategy_monitoring(self):
-        """啟動策略監控 - 🔧 GIL錯誤修復版本"""
+        """啟動策略監控"""
         try:
-            # 🔧 使用線程鎖保護狀態變更
-            with self.strategy_lock:
-                self.strategy_monitoring = True
-
-            # UI更新使用UI鎖
-            with self.ui_lock:
-                self.strategy_start_btn.config(state="disabled")
-                self.strategy_stop_btn.config(state="normal")
+            self.strategy_monitoring = True
+            self.strategy_start_btn.config(state="disabled")
+            self.strategy_stop_btn.config(state="normal")
 
             self.add_strategy_log("🚀 策略監控已啟動")
             self.add_strategy_log("📡 開始接收報價數據...")
-            self.add_strategy_log(f"🔧 GIL修復：使用線程安全機制")
 
             # 設定報價回調 - 這裡是關鍵整合點
             self.setup_quote_callback()
 
-            # 🔧 調試：檢查LOG處理器狀態
-            future_order_logger = logging.getLogger('order.future_order')
-            self.add_strategy_log(f"📊 LOG處理器狀態: {len(future_order_logger.handlers)} 個處理器")
-            self.add_strategy_log(f"📊 策略監控狀態: {self.strategy_monitoring}")
-
         except Exception as e:
             logger.error(f"啟動策略監控失敗: {e}")
             self.add_strategy_log(f"❌ 啟動失敗: {e}")
-            # 恢復狀態
-            self.strategy_monitoring = False
 
     def stop_strategy_monitoring(self):
         """停止策略監控"""
@@ -1522,18 +1459,11 @@ class OrderTesterApp(tk.Tk):
                     self.strategy_app = strategy_app
 
                 def emit(self, record):
-                    """🔧 GIL錯誤修復：線程安全的emit方法"""
                     try:
                         message = record.getMessage()
 
                         # 總是顯示接收到的LOG (不管策略是否啟動)
                         print(f"[DEBUG] LOG處理器收到: {message}")
-
-                        # 🔧 檢查是否在主線程中
-                        import threading
-                        if threading.current_thread() != threading.main_thread():
-                            print(f"[DEBUG] 在背景線程中，跳過所有UI相關處理")
-                            return
 
                         # 檢查策略監控狀態
                         monitoring = getattr(self.strategy_app, 'strategy_monitoring', False)
@@ -1543,12 +1473,8 @@ class OrderTesterApp(tk.Tk):
                         if "【Tick】價格:" in message:
                             print(f"[DEBUG] 發現Tick報價LOG")
                             if monitoring:
-                                print(f"[DEBUG] 策略監控中，安排到主線程處理...")
-                                # 🔧 使用after_idle安全地安排到主線程
-                                if hasattr(self.strategy_app, 'root'):
-                                    self.strategy_app.root.after_idle(
-                                        self.strategy_app.safe_process_tick_log, message
-                                    )
+                                print(f"[DEBUG] 策略監控中，開始處理...")
+                                self.strategy_app.process_tick_log(message)
                             else:
                                 print(f"[DEBUG] 策略監控未啟動，跳過處理")
                         else:
@@ -1560,53 +1486,23 @@ class OrderTesterApp(tk.Tk):
                         traceback.print_exc()
                         pass  # 忽略所有錯誤，避免影響LOG系統
 
-            # 🔧 GIL錯誤修復：暫時禁用自定義日誌處理器
             # 添加到order.future_order的logger
             future_order_logger = logging.getLogger('order.future_order')
-            # self.strategy_log_handler = StrategyLogHandler(self)
+            self.strategy_log_handler = StrategyLogHandler(self)
+            future_order_logger.addHandler(self.strategy_log_handler)
 
-            # 🔧 GIL修復：確保LOG級別正確設置
-            future_order_logger.setLevel(logging.INFO)  # 確保INFO級別的LOG可以通過
-            # self.strategy_log_handler.setLevel(logging.INFO)
-
-            # 🔧 暫時註釋掉，避免GIL錯誤
-            # future_order_logger.addHandler(self.strategy_log_handler)
-
-            print("🔧 [GIL修復] 自定義日誌處理器已禁用，避免GIL錯誤")
-
-            # 🔧 調試：確認logger設定（暫時禁用）
+            # 調試：確認logger設定
             print(f"[DEBUG] Logger名稱: order.future_order")
             print(f"[DEBUG] Logger級別: {future_order_logger.level}")
-            # print(f"[DEBUG] Handler級別: {self.strategy_log_handler.level}")
             print(f"[DEBUG] Handler數量: {len(future_order_logger.handlers)}")
-            # print(f"[DEBUG] 策略Handler已添加: {self.strategy_log_handler in future_order_logger.handlers}")
-
-            # 🔧 測試LOG輸出（暫時禁用）
-            # future_order_logger.info("🧪 測試LOG輸出 - 策略LOG處理器")
-            print("[DEBUG] 自定義日誌處理器已禁用")
+            print(f"[DEBUG] 策略Handler已添加: {self.strategy_log_handler in future_order_logger.handlers}")
 
         except Exception as e:
             logger.error(f"設定策略LOG處理器失敗: {e}")
 
-    def safe_process_tick_log(self, log_message):
-        """線程安全的Tick報價LOG處理 - 只在主線程中調用"""
-        try:
-            # 🔧 確保在主線程中執行
-            import threading
-            if threading.current_thread() != threading.main_thread():
-                print(f"[DEBUG] safe_process_tick_log 不在主線程中，跳過")
-                return
-
-            # 調用原始的處理方法
-            self.process_tick_log(log_message)
-
-        except Exception as e:
-            print(f"[DEBUG] safe_process_tick_log 錯誤: {e}")
-
     def process_tick_log(self, log_message):
-        """處理Tick報價LOG - 包含區間計算邏輯 - 🔧 GIL錯誤修復版本"""
+        """處理Tick報價LOG - 包含區間計算邏輯"""
         try:
-            # 🔧 避免嵌套鎖定，只在必要時使用鎖
             self.add_strategy_log(f"🔍 收到LOG: {log_message}")
 
             # 解析LOG訊息：【Tick】價格:2228200 買:2228100 賣:2228200 量:1 時間:22:59:21
@@ -1620,35 +1516,33 @@ class OrderTesterApp(tk.Tk):
 
                 self.add_strategy_log(f"📊 解析成功: 原始價格={raw_price}, 轉換價格={price}, 時間={time_str}")
 
-                # 更新基本顯示 - 這個函數內部有自己的鎖
+                # 更新基本顯示
                 self.add_strategy_log(f"🔄 開始更新顯示...")
                 self.update_strategy_display_simple(price, time_str)
 
-                # 區間計算邏輯 - 使用策略鎖保護
-                with self.strategy_lock:
-                    self.add_strategy_log(f"📈 開始區間計算...")
-                    self.process_range_calculation(price, time_str)
+                # 區間計算邏輯
+                self.add_strategy_log(f"📈 開始區間計算...")
+                self.process_range_calculation(price, time_str)
 
-                    # 出場條件檢查 - 如果已有部位，檢查出場條件
-                    if hasattr(self, 'position') and self.position and hasattr(self, 'lots') and self.lots:
-                        self.add_strategy_log(f"🔍 檢查出場條件...")
-                        # 創建時間戳對象
-                        timestamp = datetime.strptime(time_str, "%H:%M:%S").replace(
-                            year=datetime.now().year,
-                            month=datetime.now().month,
-                            day=datetime.now().day
-                        )
-                        self.check_exit_conditions(Decimal(str(price)), timestamp)
+                # 出場條件檢查 - 如果已有部位，檢查出場條件
+                if hasattr(self, 'position') and self.position and hasattr(self, 'lots') and self.lots:
+                    self.add_strategy_log(f"🔍 檢查出場條件...")
+                    # 創建時間戳對象
+                    from datetime import datetime
+                    timestamp = datetime.strptime(time_str, "%H:%M:%S").replace(
+                        year=datetime.now().year,
+                        month=datetime.now().month,
+                        day=datetime.now().day
+                    )
+                    self.check_exit_conditions(Decimal(str(price)), timestamp)
 
             else:
                 self.add_strategy_log(f"❌ LOG格式不匹配: {log_message}")
 
         except Exception as e:
-            # 🔧 GIL錯誤修復：記錄錯誤但絕不拋出異常
-            try:
-                self.add_strategy_log(f"❌ process_tick_log錯誤: {e}")
-            except:
-                pass  # 連LOG都失敗就完全忽略
+            self.add_strategy_log(f"❌ process_tick_log錯誤: {e}")
+            # 靜默處理錯誤，不影響主程式
+            pass
 
     def process_range_calculation(self, price, time_str):
         """處理區間計算邏輯 + 進場機制 - 使用報價時間戳精確控制"""
@@ -1670,29 +1564,17 @@ class OrderTesterApp(tk.Tk):
                 self.in_range_period = True
                 self.range_calculated = False
                 self.range_prices = []
-                # self.range_status_var.set("🔄 收集區間數據中...")  # 🔧 暫時註釋UI變數更新
+                self.range_status_var.set("🔄 收集區間數據中...")
                 self._range_start_time = time_str
-
-                # ✅ 添加到策略日誌
-                self.add_strategy_log(f"📊 開始監控區間 - 時間: {time_str} (精確2分鐘)")
                 print(f"[策略] 📊 開始收集區間數據: {time_str} (精確2分鐘)")
 
             elif is_in_range and self.in_range_period:
                 # 在區間內，收集價格數據
                 self.range_prices.append(price)
 
-                # ✅ 每30個數據點通知一次（避免過於頻繁）
-                if len(self.range_prices) % 30 == 1:  # 第1, 31, 61... 個數據點
-                    self.add_strategy_log(f"📈 收集區間數據中... 已收集 {len(self.range_prices)} 個價格點")
-
             elif not is_in_range and self.in_range_period and minute_changed:
                 # 分鐘變化且離開區間 - 觸發計算 (上一分K收盤)
                 self.in_range_period = False
-
-                # ✅ 添加到策略日誌
-                self.add_strategy_log(f"⏰ 區間監控結束 - 分鐘變化: {self._last_range_minute:02d} → {current_minute:02d}")
-                self.add_strategy_log(f"📊 第2根1分K收盤，開始計算區間...")
-
                 print(f"[策略] ⏰ 檢測到分鐘變化: {self._last_range_minute:02d} → {current_minute:02d}")
                 print(f"[策略] 📊 第2根1分K收盤，開始計算區間...")
                 self.calculate_range_result()
@@ -1819,15 +1701,9 @@ class OrderTesterApp(tk.Tk):
                 self.waiting_for_entry = True
                 self.entry_signal_time = self.current_minute_candle['start_time']
 
-                # 🔧 暫時註釋UI變數更新，避免GIL錯誤
-                # self.signal_status_var.set("🔥 突破信號！")
-                # self.signal_direction_var.set("做多")
-
-                # ✅ 新增：更新方向狀態到策略日誌
-                self.update_strategy_status("direction_status",
-                                          direction="做多",
-                                          signal="突破上緣",
-                                          confidence=85)
+                # 更新UI顯示
+                self.signal_status_var.set("🔥 突破信號！")
+                self.signal_direction_var.set("做多")
 
                 print(f"[策略] 🔥 第一次突破！{minute:02d}分K線收盤價突破上緣!")
                 print(f"[策略]    收盤價: {float(close_price):.1f}, 區間上緣: {float(self.range_high):.1f}")
@@ -1841,15 +1717,9 @@ class OrderTesterApp(tk.Tk):
                 self.waiting_for_entry = True
                 self.entry_signal_time = self.current_minute_candle['start_time']
 
-                # 🔧 暫時註釋UI變數更新，避免GIL錯誤
-                # self.signal_status_var.set("🔥 突破信號！")
-                # self.signal_direction_var.set("做空")
-
-                # ✅ 新增：更新方向狀態到策略日誌
-                self.update_strategy_status("direction_status",
-                                          direction="做空",
-                                          signal="突破下緣",
-                                          confidence=85)
+                # 更新UI顯示
+                self.signal_status_var.set("🔥 突破信號！")
+                self.signal_direction_var.set("做空")
 
                 print(f"[策略] 🔥 第一次突破！{minute:02d}分K線收盤價突破下緣!")
                 print(f"[策略]    收盤價: {float(close_price):.1f}, 區間下緣: {float(self.range_low):.1f}")
@@ -1867,13 +1737,6 @@ class OrderTesterApp(tk.Tk):
             direction = 'LONG' if self.breakout_signal == 'LONG_SIGNAL' else 'SHORT'
 
             print(f"[策略] 🎯 執行進場! 方向: {direction}, 進場價: {float(price):.1f}")
-
-            # ✅ 新增：更新進場狀態到策略日誌
-            self.update_strategy_status("entry_status",
-                                      price=float(price),
-                                      time=time_str,
-                                      direction=direction,
-                                      quantity=3)  # 預設3口
 
             # 執行建倉
             self.enter_position(direction, price, time_str)
@@ -1988,17 +1851,11 @@ class OrderTesterApp(tk.Tk):
 
                 print(f"[策略]    停損規則: 移動停利={rule.use_trailing_stop}, 啟動點={rule.trailing_activation}, 回撤={rule.trailing_pullback}")
 
-            # 🔧 暫時註釋UI變數更新，避免GIL錯誤
-            # self.position_status_var.set(f"{direction} {trade_size}口")
-            # self.active_lots_var.set(str(trade_size))
-            # self.entry_price_var.set(f"{float(price):.1f}")
-            # self.entry_time_var.set(time_str)
-
-            # ✅ 新增：更新部位狀態到策略日誌
-            self.update_strategy_status("position_status",
-                                      filled_lots=trade_size,
-                                      active_lots=trade_size,
-                                      total_lots=trade_size)
+            # 更新UI顯示
+            self.position_status_var.set(f"{direction} {trade_size}口")
+            self.active_lots_var.set(str(trade_size))
+            self.entry_price_var.set(f"{float(price):.1f}")
+            self.entry_time_var.set(time_str)
 
             # 初始化停損狀態顯示
             stop_type_map = {
@@ -2396,18 +2253,11 @@ class OrderTesterApp(tk.Tk):
                 self.range_low = min(self.range_prices)
                 range_size = self.range_high - self.range_low
 
-                # 🔧 暫時註釋UI變數更新，避免GIL錯誤
-                # self.range_high_var.set(f"{self.range_high:.1f}")
-                # self.range_low_var.set(f"{self.range_low:.1f}")
-                # self.range_size_var.set(f"{range_size:.1f}")
-                # self.range_status_var.set("✅ 區間計算完成")
-
-                # ✅ 新增：更新重要狀態到策略日誌
-                self.update_strategy_status("range_status",
-                                          high=self.range_high,
-                                          low=self.range_low,
-                                          range_size=range_size,
-                                          status="區間計算完成")
+                # 更新顯示
+                self.range_high_var.set(f"{self.range_high:.1f}")
+                self.range_low_var.set(f"{self.range_low:.1f}")
+                self.range_size_var.set(f"{range_size:.1f}")
+                self.range_status_var.set("✅ 區間計算完成")
 
                 # 計算時間範圍
                 start_time = f"{self.range_start_hour:02d}:{self.range_start_minute:02d}"
@@ -2427,54 +2277,50 @@ class OrderTesterApp(tk.Tk):
                 print(f"[策略] 📊 數據點數: {len(self.range_prices)}")
                 print(f"[策略] 🎯 等待第3分鐘開始監控突破信號...")
 
-                # ✅ 添加到策略日誌
-                self.add_strategy_log(f"🎯 區間計算完成，等待第3分鐘開始監控突破信號...")
-
                 self.range_calculated = True
             else:
-                # self.range_status_var.set("❌ 無數據")  # 🔧 暫時註釋UI變數更新
+                self.range_status_var.set("❌ 無數據")
                 print(f"[策略] ❌ 2分鐘區間內無價格數據")
-
-                # ✅ 添加到策略日誌
-                self.add_strategy_log(f"❌ 區間計算失敗 - 2分鐘區間內無價格數據")
 
         except Exception as e:
             pass
 
     def update_strategy_display_simple(self, price, time_str):
-        """🔧 無UI更新方案：只記錄LOG，不更新任何UI - GIL錯誤完全修復版本"""
+        """最簡單的策略顯示更新 - 只更新變數，不觸發事件"""
         try:
-            # 🔧 完全移除UI更新，只記錄重要資訊到LOG
-            with self.strategy_lock:
-                # 只記錄到控制台，不觸發任何UI操作
-                print(f"【策略】價格更新: {price} @ {time_str}")
+            self.add_strategy_log(f"🔄 update_strategy_display_simple 被調用: price={price}, time={time_str}")
+            self.add_strategy_log(f"📊 strategy_monitoring狀態: {getattr(self, 'strategy_monitoring', 'undefined')}")
 
-                if self.strategy_monitoring:
-                    print(f"【策略】監控中 - 價格: {price}, 時間: {time_str}")
+            if self.strategy_monitoring:
+                self.add_strategy_log(f"✅ 策略監控中，開始更新UI...")
 
-                    # 🔧 移除所有UI變數更新，只保留數據記錄
-                    # 記錄到內部變數供策略邏輯使用
-                    self.last_strategy_price = price
-                    self.last_strategy_time = time_str
-
-                    # if hasattr(self, 'strategy_price_var'):
-                    #     self.strategy_price_var.set(str(price))
-                    #     self.strategy_time_var.set(time_str)
-
-                    # 🔧 記錄價格變化到LOG，不更新UI
-                    if not hasattr(self, '_last_strategy_price') or price != self._last_strategy_price:
-                        print(f"【策略】💰 價格更新: {price} @ {time_str}")
-                        self._last_strategy_price = price
-                    else:
-                        print(f"【策略】📊 價格無變化: {price}")
-
-                    print(f"【策略】✅ 數據更新完成")
+                # 檢查UI變數是否存在
+                if hasattr(self, 'strategy_price_var'):
+                    self.add_strategy_log(f"📊 找到strategy_price_var，設定價格: {price}")
+                    self.strategy_price_var.set(str(price))
                 else:
-                    print(f"【策略】⚠️ 策略監控未啟動，跳過處理")
+                    self.add_strategy_log(f"❌ 找不到strategy_price_var")
+
+                if hasattr(self, 'strategy_time_var'):
+                    self.add_strategy_log(f"⏰ 找到strategy_time_var，設定時間: {time_str}")
+                    self.strategy_time_var.set(time_str)
+                else:
+                    self.add_strategy_log(f"❌ 找不到strategy_time_var")
+
+                # 記錄價格變化
+                if not hasattr(self, '_last_strategy_price') or price != self._last_strategy_price:
+                    self.add_strategy_log(f"💰 價格更新: {price} 時間: {time_str}")
+                    self._last_strategy_price = price
+                else:
+                    self.add_strategy_log(f"📊 價格無變化: {price}")
+
+                self.add_strategy_log(f"✅ UI更新完成")
+            else:
+                self.add_strategy_log(f"⚠️ 策略監控未啟動，跳過UI更新")
 
         except Exception as e:
-            # 🔧 GIL錯誤修復：只記錄到控制台，不觸發UI
-            print(f"【策略】❌ update_strategy_display_simple錯誤: {e}")
+            self.add_strategy_log(f"❌ update_strategy_display_simple錯誤: {e}")
+            pass
 
     def stop_strategy_log_handler(self):
         """停止LOG監聽"""
@@ -2756,7 +2602,13 @@ class OrderTesterApp(tk.Tk):
             # 直接關閉，避免messagebox導致的GIL錯誤
             logger.info("正在關閉應用程式...")
 
-            # 🔧 GIL修復：移除TCP價格伺服器相關代碼
+            # 停止TCP價格伺服器
+            try:
+                if self.tcp_server_running:
+                    stop_price_server()
+                    logger.info("已停止TCP價格伺服器")
+            except Exception as e:
+                logger.error(f"停止TCP價格伺服器時發生錯誤: {e}")
 
             # 停止所有報價監控
             try:

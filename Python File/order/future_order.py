@@ -7,7 +7,6 @@
 import sys
 import os
 import time
-import threading
 from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -24,6 +23,27 @@ from order.future_config import *
 #     STRATEGY_AVAILABLE = False
 #     print(f"策略模組未載入: {e}")
 STRATEGY_AVAILABLE = False
+
+# 新增：Queue基礎設施導入
+try:
+    import sys
+    import os
+    # 添加父目錄到路徑，以便導入queue_infrastructure
+    parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+
+    from queue_infrastructure import (
+        get_queue_infrastructure,
+        TickData,
+        get_queue_manager
+    )
+    QUEUE_INFRASTRUCTURE_AVAILABLE = True
+    print("✅ Queue基礎設施導入成功")
+except ImportError as e:
+    QUEUE_INFRASTRUCTURE_AVAILABLE = False
+    print(f"⚠️ Queue基礎設施導入失敗: {e}")
+    print("📝 將使用傳統模式運行")
 
 # 設定日誌
 logging.basicConfig(level=logging.INFO)
@@ -301,12 +321,7 @@ class FutureOrderFrame(tk.Frame):
     def __init__(self, master=None, skcom_objects=None):
         super().__init__(master)
         self.master = master
-
-        # 🔧 GIL錯誤修復：添加線程安全鎖
-        self.quote_lock = threading.Lock()
-        self.ui_lock = threading.Lock()
-        self.data_lock = threading.Lock()
-
+        
         # SKCOM物件
         self.m_pSKCenter = skcom_objects.get('SKCenter') if skcom_objects else None
         self.m_pSKOrder = skcom_objects.get('SKOrder') if skcom_objects else None
@@ -329,8 +344,270 @@ class FutureOrderFrame(tk.Frame):
         self.last_update_time = None
         self.quote_event_handler = None
 
+        # 新增：Queue基礎設施初始化
+        self.queue_infrastructure = None
+        self.queue_mode_enabled = False
+        self.init_queue_infrastructure()
+
         # 策略回調相關 - 階段1整合
         self.strategy_callback = None
+
+    def init_queue_infrastructure(self):
+        """初始化Queue基礎設施"""
+        if not QUEUE_INFRASTRUCTURE_AVAILABLE:
+            self.add_message("⚠️ Queue基礎設施不可用，使用傳統模式")
+            return
+
+        try:
+            # 初始化Queue基礎設施
+            self.queue_infrastructure = get_queue_infrastructure(self.master)
+
+            if self.queue_infrastructure.initialize():
+                self.add_message("✅ Queue基礎設施初始化成功")
+
+                # 添加日誌回調 - 將Queue日誌顯示到UI
+                if self.queue_infrastructure.ui_updater:
+                    self.queue_infrastructure.add_log_callback(self.on_queue_log_message)
+
+                # 標記Queue模式可用
+                self.queue_mode_enabled = True
+                self.add_message("🎯 Queue模式已啟用，將使用新的數據流架構")
+            else:
+                self.add_message("❌ Queue基礎設施初始化失敗")
+
+        except Exception as e:
+            self.add_message(f"❌ Queue基礎設施初始化錯誤: {str(e)}")
+            self.queue_mode_enabled = False
+
+    def on_queue_log_message(self, message, level, source):
+        """處理來自Queue的日誌訊息"""
+        try:
+            # 根據來源和等級決定顯示格式
+            if source == "TICK":
+                # Tick資料使用簡化格式，避免UI過載
+                if level == "INFO" and "【Tick】" in message:
+                    # 控制Tick日誌頻率，避免UI過載
+                    if not hasattr(self, '_last_queue_tick_time'):
+                        self._last_queue_tick_time = 0
+
+                    current_time = time.time()
+                    if current_time - self._last_queue_tick_time > 2:  # 每2秒顯示一次
+                        self._last_queue_tick_time = current_time
+                        self.add_message(f"[Queue] {message}")
+            elif source == "STRATEGY":
+                # 策略訊息完整顯示
+                self.add_message(f"[策略] {message}")
+            elif source == "PROCESSOR":
+                # 處理器訊息
+                self.add_message(f"[處理器] {message}")
+            else:
+                # 其他系統訊息
+                self.add_message(f"[{source}] {message}")
+
+        except Exception as e:
+            # 避免日誌處理錯誤影響主要功能
+            pass
+
+    def start_queue_services(self):
+        """啟動Queue基礎設施的所有服務"""
+        if not self.queue_mode_enabled or not self.queue_infrastructure:
+            self.add_message("⚠️ Queue模式未啟用，無法啟動服務")
+            return False
+
+        try:
+            # 啟動所有Queue服務
+            if self.queue_infrastructure.start_all():
+                self.add_message("🚀 Queue服務已全部啟動")
+                self.add_message("📊 數據流: API事件 → Queue → 策略處理 → UI更新")
+                return True
+            else:
+                self.add_message("❌ Queue服務啟動失敗")
+                return False
+
+        except Exception as e:
+            self.add_message(f"❌ 啟動Queue服務錯誤: {str(e)}")
+            return False
+
+    def stop_queue_services(self):
+        """停止Queue基礎設施的所有服務"""
+        if not self.queue_infrastructure:
+            return
+
+        try:
+            self.queue_infrastructure.stop_all()
+            self.add_message("🛑 Queue服務已全部停止")
+        except Exception as e:
+            self.add_message(f"❌ 停止Queue服務錯誤: {str(e)}")
+
+    def get_queue_status(self):
+        """取得Queue基礎設施狀態"""
+        if not self.queue_infrastructure:
+            return {"available": False, "message": "Queue基礎設施未初始化"}
+
+        try:
+            status = self.queue_infrastructure.get_status()
+            return {
+                "available": True,
+                "initialized": status.get('initialized', False),
+                "running": status.get('running', False),
+                "queue_manager": status.get('queue_manager', {}),
+                "tick_processor": status.get('tick_processor', {}),
+                "ui_updater": status.get('ui_updater', {})
+            }
+        except Exception as e:
+            return {"available": False, "error": str(e)}
+
+    def create_queue_control_panel(self):
+        """創建Queue控制面板"""
+        # Queue控制面板
+        queue_frame = tk.LabelFrame(self, text="🚀 Queue架構控制", fg="blue", padx=10, pady=5)
+        queue_frame.grid(column=0, row=8, columnspan=6, sticky=tk.E + tk.W, padx=5, pady=5)
+
+        # 第一行：狀態顯示
+        status_row = tk.Frame(queue_frame)
+        status_row.grid(column=0, row=0, sticky=tk.E + tk.W, pady=5)
+
+        tk.Label(status_row, text="Queue狀態:", font=("Arial", 10, "bold")).pack(side="left", padx=5)
+
+        self.queue_status_label = tk.Label(status_row, text="未初始化", fg="gray", font=("Arial", 10))
+        self.queue_status_label.pack(side="left", padx=5)
+
+        # 第二行：控制按鈕
+        control_row = tk.Frame(queue_frame)
+        control_row.grid(column=0, row=1, sticky=tk.E + tk.W, pady=5)
+
+        # 啟動Queue服務按鈕
+        self.btn_start_queue = tk.Button(control_row, text="🚀 啟動Queue服務",
+                                        command=self.on_start_queue_services,
+                                        bg="green", fg="white", font=("Arial", 9, "bold"))
+        self.btn_start_queue.pack(side="left", padx=5)
+
+        # 停止Queue服務按鈕
+        self.btn_stop_queue = tk.Button(control_row, text="🛑 停止Queue服務",
+                                       command=self.on_stop_queue_services,
+                                       bg="red", fg="white", font=("Arial", 9, "bold"))
+        self.btn_stop_queue.pack(side="left", padx=5)
+
+        # 查看Queue狀態按鈕
+        self.btn_queue_status = tk.Button(control_row, text="📊 查看狀態",
+                                         command=self.on_show_queue_status,
+                                         bg="orange", fg="white", font=("Arial", 9, "bold"))
+        self.btn_queue_status.pack(side="left", padx=5)
+
+        # 切換模式按鈕
+        self.btn_toggle_mode = tk.Button(control_row, text="🔄 切換模式",
+                                        command=self.on_toggle_queue_mode,
+                                        bg="purple", fg="white", font=("Arial", 9, "bold"))
+        self.btn_toggle_mode.pack(side="left", padx=5)
+
+        # 初始化按鈕狀態
+        self.update_queue_control_buttons()
+
+    def update_queue_control_buttons(self):
+        """更新Queue控制按鈕狀態"""
+        try:
+            if not QUEUE_INFRASTRUCTURE_AVAILABLE:
+                # Queue基礎設施不可用
+                self.queue_status_label.config(text="基礎設施不可用", fg="red")
+                self.btn_start_queue.config(state="disabled")
+                self.btn_stop_queue.config(state="disabled")
+                self.btn_toggle_mode.config(state="disabled")
+                return
+
+            if self.queue_mode_enabled:
+                # Queue模式已啟用
+                status = self.get_queue_status()
+                if status.get('running', False):
+                    self.queue_status_label.config(text="✅ 運行中", fg="green")
+                    self.btn_start_queue.config(state="disabled")
+                    self.btn_stop_queue.config(state="normal")
+                else:
+                    self.queue_status_label.config(text="⏸️ 已初始化", fg="orange")
+                    self.btn_start_queue.config(state="normal")
+                    self.btn_stop_queue.config(state="disabled")
+
+                self.btn_toggle_mode.config(text="🔄 切換到傳統模式")
+            else:
+                # 傳統模式
+                self.queue_status_label.config(text="🔄 傳統模式", fg="blue")
+                self.btn_start_queue.config(state="disabled")
+                self.btn_stop_queue.config(state="disabled")
+                self.btn_toggle_mode.config(text="🚀 切換到Queue模式")
+
+        except Exception as e:
+            self.queue_status_label.config(text=f"錯誤: {str(e)}", fg="red")
+
+    def on_start_queue_services(self):
+        """啟動Queue服務按鈕事件"""
+        if self.start_queue_services():
+            self.update_queue_control_buttons()
+
+    def on_stop_queue_services(self):
+        """停止Queue服務按鈕事件"""
+        self.stop_queue_services()
+        self.update_queue_control_buttons()
+
+    def on_show_queue_status(self):
+        """顯示Queue狀態按鈕事件"""
+        status = self.get_queue_status()
+
+        if not status.get('available', False):
+            self.add_message("❌ Queue基礎設施不可用")
+            return
+
+        # 格式化狀態訊息
+        status_msg = f"""
+📊 Queue基礎設施狀態報告:
+
+🔧 初始化: {'✅ 已初始化' if status.get('initialized', False) else '❌ 未初始化'}
+🚀 運行狀態: {'✅ 運行中' if status.get('running', False) else '❌ 已停止'}
+
+📦 Queue管理器:
+  • Tick佇列: {status.get('queue_manager', {}).get('tick_queue_size', 0)}/{status.get('queue_manager', {}).get('tick_queue_maxsize', 0)}
+  • 日誌佇列: {status.get('queue_manager', {}).get('log_queue_size', 0)}/{status.get('queue_manager', {}).get('log_queue_maxsize', 0)}
+  • 已接收Tick: {status.get('queue_manager', {}).get('stats', {}).get('tick_received', 0)}
+  • 已處理Tick: {status.get('queue_manager', {}).get('stats', {}).get('tick_processed', 0)}
+
+🔄 Tick處理器:
+  • 處理線程: {'✅ 運行中' if status.get('tick_processor', {}).get('running', False) else '❌ 已停止'}
+  • 回調函數: {status.get('tick_processor', {}).get('callback_count', 0)} 個
+  • 處理計數: {status.get('tick_processor', {}).get('stats', {}).get('processed_count', 0)}
+  • 錯誤計數: {status.get('tick_processor', {}).get('stats', {}).get('error_count', 0)}
+
+🖥️ UI更新器:
+  • 更新循環: {'✅ 運行中' if status.get('ui_updater', {}).get('running', False) else '❌ 已停止'}
+  • 更新間隔: {status.get('ui_updater', {}).get('update_interval', 0)}ms
+  • UI更新次數: {status.get('ui_updater', {}).get('stats', {}).get('ui_updates', 0)}
+  • 日誌更新次數: {status.get('ui_updater', {}).get('stats', {}).get('log_updates', 0)}
+        """
+
+        self.add_message(status_msg)
+
+    def on_toggle_queue_mode(self):
+        """切換Queue模式按鈕事件"""
+        if not QUEUE_INFRASTRUCTURE_AVAILABLE:
+            self.add_message("❌ Queue基礎設施不可用，無法切換模式")
+            return
+
+        try:
+            if self.queue_mode_enabled:
+                # 切換到傳統模式
+                self.stop_queue_services()
+                self.queue_mode_enabled = False
+                self.add_message("🔄 已切換到傳統模式")
+            else:
+                # 切換到Queue模式
+                if self.queue_infrastructure and self.queue_infrastructure.initialized:
+                    self.queue_mode_enabled = True
+                    self.add_message("🚀 已切換到Queue模式")
+                else:
+                    self.add_message("❌ Queue基礎設施未初始化，無法切換")
+                    return
+
+            self.update_queue_control_buttons()
+
+        except Exception as e:
+            self.add_message(f"❌ 切換模式錯誤: {str(e)}")
         self.stocks_ready = False  # 商品資料是否準備完成
 
         # 策略面板暫時移除
@@ -622,12 +899,15 @@ class FutureOrderFrame(tk.Frame):
                                         command=self.clear_trade_report, bg="lightgray")
         self.btn_clear_trade.grid(column=0, row=1, pady=5)
 
+        # 新增：Queue控制面板
+        self.create_queue_control_panel()
+
         # 策略控制面板 (暫時移除，改為獨立分頁)
         # if STRATEGY_AVAILABLE:
         #     self.create_strategy_panel()
 
         # 設定主框架的權重，讓訊息區域可以擴展到底部
-        self.grid_rowconfigure(8, weight=1)  # 修改為第8行（訊息區域）
+        self.grid_rowconfigure(9, weight=1)  # 修改為第9行（訊息區域，因為新增了Queue控制面板）
         self.grid_columnconfigure(0, weight=1)
 
     def create_strategy_panel(self):
@@ -768,48 +1048,10 @@ class FutureOrderFrame(tk.Frame):
             messagebox.showerror("錯誤", f"設定商品代碼失敗: {str(e)}")
 
     def add_message(self, message):
-        """添加訊息到顯示區域 - 🔧 GIL錯誤修復：線程安全版本"""
-        try:
-            # 🔧 檢查是否在主線程中
-            import threading
-            if threading.current_thread() == threading.main_thread():
-                # 在主線程中，直接更新UI
-                self.text_message.insert(tk.END, message + "\n")
-                self.text_message.see(tk.END)
-            else:
-                # 在背景線程中，使用after_idle安全地安排到主線程
-                self.after_idle(self.safe_add_message, message)
-
-            logger.info(message)
-        except Exception as e:
-            # 如果UI更新失敗，至少記錄到日誌
-            logger.info(f"[UI更新失敗] {message}")
-
-    def safe_add_message(self, message):
-        """線程安全的訊息添加 - 只在主線程中調用"""
-        try:
-            self.text_message.insert(tk.END, message + "\n")
-            self.text_message.see(tk.END)
-        except Exception as e:
-            # 如果連這個都失敗，只能忽略了
-            pass
-
-    def safe_update_quote_display(self, price, time_str, bid, ask, qty):
-        """線程安全的報價顯示更新 - 只在主線程中調用"""
-        try:
-            # 更新價格和時間顯示
-            if hasattr(self, 'label_price'):
-                self.label_price.config(text=str(price))
-            if hasattr(self, 'label_time'):
-                self.label_time.config(text=time_str)
-
-            # 記錄Tick資訊到日誌
-            logger.info(f"【Tick】價格:{price} 買:{bid} 賣:{ask} 量:{qty} 時間:{time_str}")
-
-        except Exception as e:
-            # 如果UI更新失敗，只記錄到日誌
-            logger.info(f"【Tick】價格:{price} 買:{bid} 賣:{ask} 量:{qty} 時間:{time_str} (UI更新失敗)")
-            pass
+        """添加訊息到顯示區域"""
+        self.text_message.insert(tk.END, message + "\n")
+        self.text_message.see(tk.END)
+        logger.info(message)
     
     def clear_form(self):
         """清除表單"""
@@ -1216,98 +1458,218 @@ class FutureOrderFrame(tk.Frame):
                     self.parent = parent
 
                 def OnConnection(self, nKind, nCode):
-                    """連線狀態事件 - 🔧 GIL錯誤修復版本"""
+                    """連線狀態事件"""
                     try:
-                        # 🔧 使用線程鎖確保線程安全
-                        with self.parent.data_lock:
-                            if nKind == 3003:  # SK_SUBJECT_CONNECTION_STOCKS_READY
-                                # 直接設定狀態，不更新UI (避免GIL錯誤)
-                                self.parent.stocks_ready = True
-                                # 如果有待訂閱的商品，直接訂閱
-                                if hasattr(self.parent, 'pending_subscription') and self.parent.pending_subscription:
-                                    # 使用簡單的方式觸發訂閱
-                                    self.parent.after(100, self.parent.safe_subscribe_ticks)
-                    except Exception as e:
-                        # 🔧 GIL錯誤修復：記錄錯誤但絕不拋出異常
-                        try:
-                            import logging
-                            logging.getLogger('order.future_order').debug(f"OnConnection錯誤: {e}")
-                        except:
-                            pass  # 連LOG都失敗就完全忽略
+                        if nKind == 3003:  # SK_SUBJECT_CONNECTION_STOCKS_READY
+                            # 直接設定狀態，不更新UI (避免GIL錯誤)
+                            self.parent.stocks_ready = True
+                            # 如果有待訂閱的商品，直接訂閱
+                            if hasattr(self.parent, 'pending_subscription') and self.parent.pending_subscription:
+                                # 使用簡單的方式觸發訂閱
+                                self.parent.after(100, self.parent.safe_subscribe_ticks)
+                    except:
+                        pass  # 忽略所有錯誤，避免GIL問題
                     return 0
 
                 def OnNotifyTicksLONG(self, sMarketNo, nStockidx, nPtr, lDate, lTimehms, lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-                    """即時Tick資料事件 - 🔧 GIL錯誤修復版本 - 完全Queue化"""
+                    """即時Tick資料事件 - Queue架構改造版本"""
                     try:
-                        # 🔧 GIL錯誤修復：絕不直接更新UI，只更新數據和記錄LOG
+                        # 🚀 階段2: Queue模式處理 (優先)
+                        if hasattr(self.parent, 'queue_mode_enabled') and self.parent.queue_mode_enabled:
+                            try:
+                                # 創建TickData物件
+                                tick_data = TickData(
+                                    market_no=sMarketNo,
+                                    stock_idx=nStockidx,
+                                    date=lDate,
+                                    time_hms=lTimehms,
+                                    time_millis=lTimemillismicros,
+                                    bid=nBid,
+                                    ask=nAsk,
+                                    close=nClose,
+                                    qty=nQty,
+                                    timestamp=datetime.now()
+                                )
 
+                                # 將Tick資料放入Queue (非阻塞)
+                                queue_manager = get_queue_manager()
+                                success = queue_manager.put_tick_data(tick_data)
+
+                                if success:
+                                    # Queue模式成功，只做最基本的UI更新
+                                    time_str = f"{lTimehms:06d}"
+                                    formatted_time = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
+
+                                    # 最小化UI操作 - 只更新價格顯示
+                                    try:
+                                        self.parent.label_price.config(text=str(nClose))
+                                        self.parent.label_time.config(text=formatted_time)
+
+                                        # 更新基本數據變數
+                                        corrected_price = nClose / 100.0 if nClose > 100000 else nClose
+                                        self.parent.last_price = corrected_price
+                                        self.parent.last_update_time = formatted_time
+                                    except:
+                                        pass  # 忽略UI更新錯誤
+
+                                    # Queue模式成功，直接返回，不執行傳統邏輯
+                                    return 0
+                                else:
+                                    # Queue滿了，記錄警告但繼續使用傳統模式
+                                    print("⚠️ Queue已滿，回退到傳統模式")
+
+                            except Exception as queue_error:
+                                # Queue處理失敗，記錄錯誤但繼續使用傳統模式
+                                print(f"❌ Queue處理錯誤: {queue_error}")
+
+                        # 🔄 傳統模式處理 (備用/回退)
                         # 簡化時間格式化
                         time_str = f"{lTimehms:06d}"
                         formatted_time = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
 
-                        # 🎯 只更新數據，絕不直接操作UI控件
+                        # 直接更新價格顯示 (最小化UI操作)
                         try:
-                            with self.parent.data_lock:
+                            self.parent.label_price.config(text=str(nClose))
+                            self.parent.label_time.config(text=formatted_time)
+
+                            # 🎯 策略數據更新：安全方式，不直接調用回調
+                            try:
                                 # 修正價格格式 (群益API價格通常需要除以100)
                                 corrected_price = nClose / 100.0 if nClose > 100000 else nClose
 
-                                # 只更新數據變數，不操作UI
+                                # 只更新數據，不調用回調（避免GIL衝突）
                                 self.parent.last_price = corrected_price
                                 self.parent.last_update_time = formatted_time
+                            except Exception as strategy_error:
+                                # 數據更新失敗不影響主要功能
+                                pass
 
-                                # 🔧 無UI更新方案：只記錄LOG，不更新UI
-                                # 移除UI更新，避免任何GIL錯誤風險
-                                # self.parent.after_idle(
-                                #     self.parent.safe_update_quote_display,
-                                #     corrected_price, formatted_time, nBid, nAsk, nQty
-                                # )
+                            # 🔗 價格橋接：寫入價格到橋接檔案 (供test_ui_improvements.py使用)
+                            try:
+                                # 修正價格格式 (群益API價格通常需要除以100)
+                                corrected_price = nClose / 100.0 if nClose > 100000 else nClose
+                                corrected_bid = nBid / 100.0 if nBid > 100000 else nBid
+                                corrected_ask = nAsk / 100.0 if nAsk > 100000 else nAsk
 
-                        except Exception as data_error:
-                            # 數據更新失敗不影響主要功能
-                            pass
+                                # 檢查是否有價格橋接模組
+                                if hasattr(self.parent, '_price_bridge_available'):
+                                    if self.parent._price_bridge_available:
+                                        # 導入價格橋接函數
+                                        from price_bridge import write_price_to_bridge
 
-                        # 🔧 GIL錯誤修復：完全移除COM事件中的日誌記錄
-                        # 控制Tick顯示頻率，但絕不觸發日誌處理器
-                        if hasattr(self.parent, '_last_log_time'):
-                            current_time = time.time()
-                            if current_time - self.parent._last_log_time > 1:  # 每1秒顯示一次
-                                self.parent._last_log_time = current_time
-                                # 🔧 只輸出到控制台，絕不觸發日誌處理器
-                                print(f"【Tick】價格:{nClose} 買:{nBid} 賣:{nAsk} 量:{nQty} 時間:{formatted_time}")
-                        else:
-                            self.parent._last_log_time = time.time()
-                            # 🔧 只輸出到控制台，絕不觸發日誌處理器
-                            print(f"【Tick】價格:{nClose} 買:{nBid} 賣:{nAsk} 量:{nQty} 時間:{formatted_time}")
-                    except Exception as e:
-                        # 🔧 GIL錯誤修復：絕不在COM事件中調用日誌記錄
-                        # 只輸出到控制台，避免觸發日誌處理器
-                        print(f"OnNotifyTicksLONG錯誤: {e}")
+                                        # 寫入價格到橋接檔案
+                                        write_price_to_bridge(corrected_price, nQty, datetime.now())
+                                else:
+                                    # 第一次檢查，嘗試導入價格橋接
+                                    try:
+                                        from price_bridge import write_price_to_bridge
+                                        self.parent._price_bridge_available = True
+                                        # 立即寫入價格
+                                        write_price_to_bridge(corrected_price, nQty, datetime.now())
+                                        print("✅ 價格橋接已啟動")
+                                    except ImportError:
+                                        self.parent._price_bridge_available = False
+                                        print("⚠️ 價格橋接模組未找到")
+
+                                # 🚀 TCP價格廣播：新增功能
+                                try:
+                                    # 檢查是否有TCP價格伺服器模組
+                                    if hasattr(self.parent, '_tcp_server_available'):
+                                        if self.parent._tcp_server_available:
+                                            # 導入TCP廣播函數
+                                            from tcp_price_server import broadcast_price_tcp
+
+                                            # 準備價格資料
+                                            price_data = {
+                                                'price': corrected_price,
+                                                'bid': corrected_bid,
+                                                'ask': corrected_ask,
+                                                'volume': nQty,
+                                                'timestamp': formatted_time,
+                                                'date': lDate,
+                                                'source': 'OrderTester'
+                                            }
+
+                                            # TCP廣播價格
+                                            broadcast_price_tcp(price_data)
+                                    else:
+                                        # 第一次檢查，嘗試導入TCP伺服器
+                                        try:
+                                            from tcp_price_server import broadcast_price_tcp
+                                            self.parent._tcp_server_available = True
+                                            print("✅ TCP價格伺服器模組已載入")
+                                        except ImportError:
+                                            self.parent._tcp_server_available = False
+                                            print("⚠️ TCP價格伺服器模組未找到")
+                                except Exception as tcp_error:
+                                    # TCP廣播失敗不影響主要功能
+                                    pass
+
+                            except Exception as bridge_error:
+                                # 價格橋接失敗不影響主要功能
+                                pass
+
+                            # 控制LOG頻率，使用最安全的方式
+                            if hasattr(self.parent, '_last_log_time'):
+                                current_time = time.time()
+                                if current_time - self.parent._last_log_time > 1:  # 每1秒記錄一次
+                                    self.parent._last_log_time = current_time
+                                    tick_msg = f"【Tick】價格:{nClose} 買:{nBid} 賣:{nAsk} 量:{nQty} 時間:{formatted_time}"
+                                    # 只輸出到控制台，避免GIL錯誤
+                                    print(tick_msg)
+                                    # 使用最簡單的方式添加到LOG (直接調用，不使用after_idle)
+                                    try:
+                                        import logging
+                                        logging.getLogger('order.future_order').info(tick_msg)
+                                    except:
+                                        pass
+                            else:
+                                self.parent._last_log_time = time.time()
+                                tick_msg = f"【Tick】價格:{nClose} 買:{nBid} 賣:{nAsk} 量:{nQty} 時間:{formatted_time}"
+                                # 只輸出到控制台，避免GIL錯誤
+                                print(tick_msg)
+                                # 使用最簡單的方式添加到LOG
+                                try:
+                                    import logging
+                                    logging.getLogger('order.future_order').info(tick_msg)
+                                except:
+                                    pass
+                        except:
+                            pass  # 忽略UI更新錯誤
+                    except:
+                        pass  # 忽略所有錯誤
                     return 0
 
                 def OnNotifyBest5LONG(self, sMarketNo, nStockidx, nBestBid1, nBestBidQty1, nBestBid2, nBestBidQty2, nBestBid3, nBestBidQty3, nBestBid4, nBestBidQty4, nBestBid5, nBestBidQty5, nExtendBid, nExtendBidQty, nBestAsk1, nBestAskQty1, nBestAsk2, nBestAskQty2, nBestAsk3, nBestAskQty3, nBestAsk4, nBestAskQty4, nBestAsk5, nBestAskQty5, nExtendAsk, nExtendAskQty, nSimulate):
-                    """五檔報價事件 - 🔧 GIL錯誤修復版本：完全避免日誌記錄"""
+                    """五檔報價事件"""
                     try:
-                        # 🔧 GIL錯誤修復：絕不在COM事件中記錄日誌！
-                        # 只更新數據，不做任何UI操作或日誌記錄
-                        with self.parent.quote_lock:
-                            # 控制五檔顯示頻率
-                            if hasattr(self.parent, '_last_best5_time'):
-                                current_time = time.time()
-                                if current_time - self.parent._last_best5_time > 3:  # 每3秒顯示一次
-                                    self.parent._last_best5_time = current_time
-                                    # 🔧 只輸出到控制台，絕不觸發日誌處理器
-                                    print(f"【五檔】買1:{nBestBid1}({nBestBidQty1}) 賣1:{nBestAsk1}({nBestAskQty1})")
-                            else:
-                                self.parent._last_best5_time = time.time()
-                                # 🔧 只輸出到控制台，絕不觸發日誌處理器
-                                print(f"【五檔】買1:{nBestBid1}({nBestBidQty1}) 賣1:{nBestAsk1}({nBestAskQty1})")
-                    except Exception as e:
-                        # 🔧 GIL錯誤修復：記錄錯誤但絕不拋出異常
-                        try:
-                            import logging
-                            logging.getLogger('order.future_order').debug(f"OnNotifyBest5LONG錯誤: {e}")
-                        except:
-                            pass  # 連LOG都失敗就完全忽略
+                        # 控制五檔LOG頻率，使用最安全的方式
+                        if hasattr(self.parent, '_last_best5_time'):
+                            current_time = time.time()
+                            if current_time - self.parent._last_best5_time > 3:  # 每3秒記錄一次
+                                self.parent._last_best5_time = current_time
+                                best5_msg = f"【五檔】買1:{nBestBid1}({nBestBidQty1}) 賣1:{nBestAsk1}({nBestAskQty1})"
+                                # 只輸出到控制台，避免GIL錯誤
+                                print(best5_msg)
+                                # 使用最簡單的方式添加到LOG
+                                try:
+                                    import logging
+                                    logging.getLogger('order.future_order').info(best5_msg)
+                                except:
+                                    pass
+                        else:
+                            self.parent._last_best5_time = time.time()
+                            best5_msg = f"【五檔】買1:{nBestBid1}({nBestBidQty1}) 賣1:{nBestAsk1}({nBestAskQty1})"
+                            # 只輸出到控制台，避免GIL錯誤
+                            print(best5_msg)
+                            # 使用最簡單的方式添加到LOG
+                            try:
+                                import logging
+                                logging.getLogger('order.future_order').info(best5_msg)
+                            except:
+                                pass
+                    except:
+                        pass
                     return 0
 
             # 建立簡化的事件處理器
@@ -1516,35 +1878,35 @@ class FutureOrderFrame(tk.Frame):
             self.add_message(f"【錯誤】更新報價顯示時發生錯誤: {str(e)}")
 
     def safe_update_quote_display(self, price, time_str, bid, ask, qty):
-        """🔧 無UI更新方案：只記錄數據，不更新UI"""
+        """線程安全的報價顯示更新"""
         try:
-            # 🔧 移除所有UI更新，只保留數據記錄
-            # self.label_price.config(text=str(price))
-            # self.label_time.config(text=time_str)
-            # self.label_product.config(text=self.current_product)
+            # 更新最新價
+            self.label_price.config(text=str(price))
 
-            # 只記錄最新價格和時間到變數
+            # 更新時間
+            self.label_time.config(text=time_str)
+
+            # 更新商品代碼
+            self.label_product.config(text=self.current_product)
+
+            # 記錄最新價格和時間
             self.last_price = price
             self.last_update_time = time_str
 
-            # 🔧 移除UI顏色變化，只記錄LOG
-            price_change = ""
+            # 價格顏色變化 (簡單的漲跌顏色)
             if hasattr(self, '_previous_price'):
                 if price > self._previous_price:
-                    price_change = "↗️"  # 上漲
+                    self.label_price.config(fg="red")  # 上漲紅色
                 elif price < self._previous_price:
-                    price_change = "↘️"  # 下跌
+                    self.label_price.config(fg="green")  # 下跌綠色
                 else:
-                    price_change = "➡️"  # 平盤
-
-            # 🔧 只輸出LOG，不更新UI
-            print(f"【報價更新】{price_change} 價格:{price} 時間:{time_str} 買:{bid} 賣:{ask} 量:{qty}")
+                    self.label_price.config(fg="black")  # 平盤黑色
 
             self._previous_price = price
 
         except Exception as e:
-            # 🔧 錯誤處理也改為只記錄LOG
-            print(f"【錯誤】報價顯示更新失敗: {str(e)}")
+            # 錯誤處理也要線程安全
+            self.after_idle(self.safe_add_message, f"【錯誤】安全更新報價顯示時發生錯誤: {str(e)}")
 
     def safe_add_message(self, message):
         """線程安全的訊息添加"""

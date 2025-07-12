@@ -108,7 +108,7 @@ class VirtualRealOrderManager:
         self.default_account = default_account
         
         # 模式控制
-        self.is_real_mode = False  # 預設虛擬模式
+        self.is_real_mode = True  # 🔧 修改：預設實單模式
         self.mode_lock = threading.Lock()
         
         # 商品映射
@@ -280,9 +280,66 @@ class VirtualRealOrderManager:
                 print(f"[ORDER_MGR] ❌ 取得ASK1價格失敗: {e}")
             return None
 
+    def get_bid1_price(self, product: str) -> Optional[float]:
+        """
+        取得BID1價格 - 多單出場使用
+
+        Args:
+            product: 商品代碼
+
+        Returns:
+            float: BID1價格 或 None
+        """
+        try:
+            if not self.quote_manager:
+                return None
+
+            return self.quote_manager.get_best_bid_price(product)
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[ORDER_MGR] ❌ 取得BID1價格失敗: {e}")
+            return None
+
+    def get_exit_price(self, position_direction: str, product: str) -> Optional[float]:
+        """
+        取得出場價格 - 根據部位方向選擇BID1或ASK1
+
+        Args:
+            position_direction: 部位方向 (LONG/SHORT)
+            product: 商品代碼
+
+        Returns:
+            float: 出場價格 或 None
+        """
+        try:
+            if position_direction.upper() == "LONG":
+                # 多單出場 → 賣出 → 使用BID1價格
+                price = self.get_bid1_price(product)
+                if self.console_enabled and price:
+                    print(f"[EXIT_PRICE] 多單出場使用BID1: {price}")
+                return price
+
+            elif position_direction.upper() == "SHORT":
+                # 空單出場 → 買回 → 使用ASK1價格
+                price = self.get_ask1_price(product)
+                if self.console_enabled and price:
+                    print(f"[EXIT_PRICE] 空單出場使用ASK1: {price}")
+                return price
+
+            else:
+                if self.console_enabled:
+                    print(f"[EXIT_PRICE] ❌ 無效的部位方向: {position_direction}")
+                return None
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[EXIT_PRICE] ❌ 取得出場價格失敗: {e}")
+            return None
+
     def execute_strategy_order(self, direction: str, signal_source: str = "strategy_breakout",
                              product: Optional[str] = None, price: Optional[float] = None,
-                             quantity: Optional[int] = None) -> OrderResult:
+                             quantity: Optional[int] = None, new_close: int = 0) -> OrderResult:
         """
         執行策略下單 - 統一入口
 
@@ -292,6 +349,7 @@ class VirtualRealOrderManager:
             product: 商品代碼 (可選，自動取得)
             price: 價格 (可選，自動取得ASK1)
             quantity: 數量 (可選，自動取得策略配置)
+            new_close: 新平倉 (0=新倉, 1=平倉, 2=自動)
 
         Returns:
             OrderResult: 下單結果
@@ -314,12 +372,28 @@ class VirtualRealOrderManager:
                         return OrderResult(False, self.get_current_mode(),
                                          error="無法取得當前監控商品")
 
-                # 3. 取得ASK1價格
+                # 3. 根據方向取得正確價格
                 if not price:
-                    price = self.get_ask1_price(product)
+                    if direction == 'BUY':  # 多單進場
+                        price = self.get_ask1_price(product)
+                        price_type = "ASK1"
+                        # 🔧 可選：限價單模式 - 使用ASK1+1點確保成交
+                        # price = price + 1 if price else None
+                    elif direction == 'SELL':  # 空單進場
+                        price = self.get_bid1_price(product)
+                        price_type = "BID1"
+                        # 🔧 可選：限價單模式 - 使用BID1-1點確保成交
+                        # price = price - 1 if price else None
+                    else:
+                        return OrderResult(False, self.get_current_mode(),
+                                         error=f"無效的方向: {direction}")
+
                     if not price:
                         return OrderResult(False, self.get_current_mode(),
-                                         error=f"無法取得{product}的ASK1價格")
+                                         error=f"無法取得{product}的{price_type}價格")
+
+                    if self.console_enabled:
+                        print(f"[ENTRY_PRICE] {direction}進場使用{price_type}: {price}")
 
                 # 4. 取得策略配置數量
                 if not quantity:
@@ -333,7 +407,7 @@ class VirtualRealOrderManager:
                     quantity=quantity,
                     price=price,
                     order_type="FOK",
-                    new_close=0,  # 新倉
+                    new_close=new_close,  # 使用傳入的new_close參數
                     day_trade="N",  # 非當沖
                     signal_source=signal_source
                 )
@@ -363,7 +437,10 @@ class VirtualRealOrderManager:
                     'result': result
                 })
 
-                # 9. Console通知
+                # 9. 註冊訂單ID到回報過濾器 (暫時跳過，使用時間過濾)
+                # TODO: 實現訂單ID註冊機制
+
+                # 10. Console通知
                 if self.console_enabled:
                     status = "成功" if result.success else "失敗"
                     mode_desc = "實單" if result.mode == "real" else "虛擬"

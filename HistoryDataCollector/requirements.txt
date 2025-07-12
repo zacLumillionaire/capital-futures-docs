@@ -1,0 +1,31 @@
+# 群益期貨歷史資料收集器依賴套件
+
+# COM元件支援
+comtypes>=1.1.14
+
+# 資料庫支援
+sqlite3
+
+# 日期時間處理
+datetime
+
+# 日誌處理
+logging
+
+# GUI支援（如果需要）
+tkinter
+
+# 資料處理
+pandas>=1.5.0
+
+# 數值計算
+numpy>=1.21.0
+
+# 系統工具
+os
+sys
+argparse
+json
+time
+threading
+queue

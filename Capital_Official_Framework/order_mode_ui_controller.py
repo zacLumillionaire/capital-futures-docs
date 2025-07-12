@@ -47,7 +47,7 @@ class OrderModeUIController:
         self.product_label = None
         
         # 狀態變數
-        self.is_real_mode = tk.BooleanVar(value=False)  # 預設虛擬模式
+        self.is_real_mode = tk.BooleanVar(value=True)  # 🔧 修改：預設實單模式
         
         # 回調函數
         self.mode_change_callbacks = []

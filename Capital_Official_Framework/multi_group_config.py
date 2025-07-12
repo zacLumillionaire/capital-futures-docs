@@ -100,29 +100,29 @@ class MultiGroupStrategyConfig:
         return groups
     
     def _create_default_lot_rules(self) -> List[LotRule]:
-        """創建預設口數規則 - 基於OrderTester.py的成功配置"""
+        """創建預設口數規則 - 🔧 用戶自定義配置"""
         default_rules = [
-            # 第1口：快速移動停利 (15點啟動, 20%回撤)
+            # 第1口：快速移動停利 (15點啟動, 10%回撤)
             LotRule(
                 lot_id=1,
                 use_trailing_stop=True,
                 trailing_activation=Decimal('15'),
-                trailing_pullback=Decimal('0.20')
+                trailing_pullback=Decimal('0.10')  # 🔧 修改：20% → 10%
             ),
-            # 第2口：中等移動停利 + 保護 (40點啟動, 20%回撤, 2倍保護)
+            # 第2口：中等移動停利 + 保護 (40點啟動, 10%回撤, 2倍保護)
             LotRule(
                 lot_id=2,
                 use_trailing_stop=True,
                 trailing_activation=Decimal('40'),
-                trailing_pullback=Decimal('0.20'),
+                trailing_pullback=Decimal('0.10'),  # 🔧 修改：20% → 10%
                 protective_stop_multiplier=Decimal('2.0')
             ),
-            # 第3口：較大移動停利 + 保護 (65點啟動, 20%回撤, 2倍保護)
+            # 第3口：較大移動停利 + 保護 (41點啟動, 20%回撤, 2倍保護)
             LotRule(
                 lot_id=3,
                 use_trailing_stop=True,
-                trailing_activation=Decimal('65'),
-                trailing_pullback=Decimal('0.20'),
+                trailing_activation=Decimal('41'),  # 🔧 修改：65點 → 41點
+                trailing_pullback=Decimal('0.20'),  # 🔧 保持：20%回撤
                 protective_stop_multiplier=Decimal('2.0')
             )
         ]

@@ -1,0 +1,222 @@
+{
+  "timestamp": "2025-07-11T23:45:45.460889",
+  "async_diagnosis": {
+    "async_updater_status": {
+      "exists": true,
+      "is_running": true,
+      "queue_size": 15,
+      "last_update_time": 1752248740.2618198,
+      "update_frequency": 0.8,
+      "error_count": 3
+    },
+    "optimized_risk_cache": {
+      "position_cache_size": 8,
+      "stop_loss_cache_size": 8,
+      "trailing_cache_size": 2,
+      "problem_positions_in_cache": {
+        "133": {
+          "in_position_cache": true,
+          "in_stop_loss_cache": true,
+          "in_trailing_cache": false,
+          "cache_direction": "SHORT",
+          "cache_status": "ACTIVE"
+        },
+        "134": {
+          "in_position_cache": true,
+          "in_stop_loss_cache": true,
+          "in_trailing_cache": false,
+          "cache_direction": "SHORT",
+          "cache_status": "ACTIVE"
+        },
+        "135": {
+          "in_position_cache": true,
+          "in_stop_loss_cache": true,
+          "in_trailing_cache": false,
+          "cache_direction": "SHORT",
+          "cache_status": "ACTIVE"
+        }
+      },
+      "cache_consistency": true
+    },
+    "queue_analysis": {
+      "queue_depth": 15,
+      "processing_rate": 2.3,
+      "backlog_time": 6.5,
+      "queue_health": "degraded"
+    },
+    "timing_analysis": {
+      "update_intervals": [
+        0.8,
+        1.2,
+        0.9,
+        2.1,
+        0.7
+      ],
+      "sync_delays": [
+        0.1,
+        0.3,
+        0.8,
+        1.2,
+        0.2
+      ],
+      "race_conditions": 3,
+      "timing_health": "poor"
+    }
+  },
+  "lot_level_diagnosis": {
+    "simplified_tracker_status": {
+      "exists": true,
+      "exit_groups_count": 3,
+      "exit_orders_count": 0,
+      "global_exit_manager_status": {},
+      "lock_contention": 5
+    },
+    "exit_group_analysis": {
+      "problem_positions_exit_groups": {
+        "133": {
+          "exists": true,
+          "total_lots": 1,
+          "direction": "SHORT",
+          "exit_direction": "BUY",
+          "target_price": 22674.0,
+          "retry_counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        "134": {
+          "exists": true,
+          "total_lots": 1,
+          "direction": "SHORT",
+          "exit_direction": "BUY",
+          "target_price": 22674.0,
+          "retry_counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        "135": {
+          "exists": true,
+          "total_lots": 1,
+          "direction": "SHORT",
+          "exit_direction": "BUY",
+          "target_price": 22674.0,
+          "retry_counts": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "total_exit_groups": 3,
+      "registration_conflicts": 2,
+      "exit_group_health": "degraded"
+    },
+    "global_exit_manager": {
+      "exit_locks_count": 3,
+      "timeout_setting": 0.1,
+      "active_locks": {
+        "133": {
+          "timestamp": 1752248743.3718977,
+          "trigger_source": "optimized_risk_initial_stop_SHORT",
+          "exit_type": "initial_stop_loss"
+        },
+        "134": {
+          "timestamp": 1752248743.3718977,
+          "trigger_source": "optimized_risk_initial_stop_SHORT",
+          "exit_type": "initial_stop_loss"
+        },
+        "135": {
+          "timestamp": 1752248743.3718977,
+          "trigger_source": "optimized_risk_initial_stop_SHORT",
+          "exit_type": "initial_stop_loss"
+        }
+      },
+      "lock_efficiency": 0.65
+    },
+    "lock_analysis": {
+      "data_lock_contention": 8,
+      "cache_lock_contention": 12,
+      "global_lock_efficiency": 0.72,
+      "deadlock_risk": "medium"
+    }
+  },
+  "database_diagnosis": {
+    "query_performance": {
+      "position_query_times": [
+        3.1430721282958984,
+        8.411884307861328,
+        2.1028518676757812
+      ],
+      "join_query_times": [],
+      "average_query_time": 4.552602767944336,
+      "slow_queries": 0
+    },
+    "lock_detection": {
+      "active_connections": 3,
+      "locked_tables": [
+        "position_records",
+        "strategy_groups"
+      ],
+      "lock_wait_time": 1.2,
+      "lock_conflicts": 2
+    },
+    "concurrent_access": {
+      "concurrent_queries": 10,
+      "success_rate": 0.7,
+      "average_response_time": 850,
+      "timeout_count": 3
+    },
+    "join_complexity": {
+      "query_plan": {
+        "scan_type": "FULL_TABLE_SCAN",
+        "join_type": "NESTED_LOOP",
+        "estimated_rows": 1000,
+        "actual_rows": 850
+      },
+      "execution_time": 120,
+      "complexity_score": 7.5,
+      "optimization_suggestions": [
+        "添加group_id索引",
+        "簡化子查詢",
+        "使用緩存策略"
+      ]
+    }
+  },
+  "performance_diagnosis": {
+    "memory_usage": {
+      "total_memory": 156.8,
+      "cache_memory": 45.2,
+      "queue_memory": 23.1,
+      "memory_efficiency": 0.78
+    },
+    "thread_analysis": {
+      "active_threads": 1,
+      "blocked_threads": 2,
+      "thread_efficiency": 0.85,
+      "context_switches": 1250
+    },
+    "io_bottlenecks": {
+      "disk_io_rate": 45.2,
+      "network_io_rate": 12.8,
+      "database_io_wait": 0.15,
+      "io_efficiency": 0.72
+    },
+    "cpu_usage": {
+      "cpu_usage_percent": 68.5,
+      "query_cpu_time": 0.08,
+      "async_cpu_time": 0.12,
+      "cpu_efficiency": 0.75
+    }
+  },
+  "recommendations": [
+    "🚀 優先修復：增加異步隊列處理能力，減少積壓時間",
+    "🔧 重要修復：解決異步競爭條件，增強時序控制",
+    "⚙️ 配置調整：增加GlobalExitManager超時時間至1秒以上",
+    "🔒 鎖定優化：減少數據鎖競爭，優化鎖定策略",
+    "🔄 併發改進：增強資料庫併發處理能力",
+    "🧵 線程優化：解決線程阻塞問題，提高並發效率"
+  ]
+}

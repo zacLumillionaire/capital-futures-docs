@@ -1582,8 +1582,12 @@ class OrderTesterApp(tk.Tk):
             # 更新分鐘記錄
             self._last_range_minute = current_minute
 
-            # 區間計算完成後的進場邏輯
+            # 🔧 修正：區間計算完成後的進場邏輯
             if self.range_calculated and self.can_enter_position():
+                # 🚀 新增：即時空單檢測
+                self.check_immediate_short_entry(price, time_str)
+
+                # 原有：進場邏輯處理
                 self.process_entry_logic(price, time_str, hour, minute, second)
 
         except Exception as e:
@@ -1671,6 +1675,37 @@ class OrderTesterApp(tk.Tk):
         except Exception as e:
             pass
 
+    def check_immediate_short_entry(self, price, time_str):
+        """
+        即時空單進場檢測 - 不等1分K收盤
+        空單在下跌過程中只要碰到區間就立即進場
+        """
+        try:
+            if not self.range_high or not self.range_low:
+                return
+
+            # 如果已經檢測到第一次突破，就不再檢測
+            if self.first_breakout_detected:
+                return
+
+            # 🚀 空單即時檢測：任何報價跌破區間下緣就立即觸發
+            if price < self.range_low:
+                # 記錄第一次突破
+                self.first_breakout_detected = True
+                self.breakout_direction = 'SHORT'
+                self.breakout_signal = 'SHORT_SIGNAL'
+                self.waiting_for_entry = True
+
+                # 更新UI顯示
+                self.signal_status_var.set("🔥 突破信號！")
+                self.signal_direction_var.set("做空")
+
+                print(f"[策略] 🔥 即時空單觸發！報價:{price:.0f} < 下緣:{self.range_low:.0f}")
+                print(f"[策略] ⚡ 立即進場做空（不等1分K收盤）...")
+
+        except Exception as e:
+            pass
+
     def monitor_minute_candle_breakout(self):
         """監控分鐘K線突破 - 調用檢查方法"""
         try:
@@ -1680,7 +1715,10 @@ class OrderTesterApp(tk.Tk):
             pass
 
     def check_minute_candle_breakout(self):
-        """檢查分鐘K線收盤價是否突破區間 - 只檢測第一次突破"""
+        """
+        檢查分鐘K線收盤價是否突破區間 - 修正版本
+        🔧 現在只檢測多單（空單已改為即時檢測）
+        """
         try:
             if not self.current_minute_candle or not self.range_high or not self.range_low:
                 return
@@ -1692,7 +1730,7 @@ class OrderTesterApp(tk.Tk):
             close_price = self.current_minute_candle['close']
             minute = self.current_minute_candle['minute']
 
-            # 檢查第一次突破
+            # 🔧 修正：只檢查多單突破（空單已改為即時檢測）
             if close_price > self.range_high:
                 # 記錄第一次突破
                 self.first_breakout_detected = True
@@ -1709,21 +1747,8 @@ class OrderTesterApp(tk.Tk):
                 print(f"[策略]    收盤價: {float(close_price):.1f}, 區間上緣: {float(self.range_high):.1f}")
                 print(f"[策略] ⏳ 等待下一個報價進場做多...")
 
-            elif close_price < self.range_low:
-                # 記錄第一次突破
-                self.first_breakout_detected = True
-                self.breakout_direction = 'SHORT'
-                self.breakout_signal = 'SHORT_SIGNAL'
-                self.waiting_for_entry = True
-                self.entry_signal_time = self.current_minute_candle['start_time']
-
-                # 更新UI顯示
-                self.signal_status_var.set("🔥 突破信號！")
-                self.signal_direction_var.set("做空")
-
-                print(f"[策略] 🔥 第一次突破！{minute:02d}分K線收盤價突破下緣!")
-                print(f"[策略]    收盤價: {float(close_price):.1f}, 區間下緣: {float(self.range_low):.1f}")
-                print(f"[策略] ⏳ 等待下一個報價進場做空...")
+            # 🚀 移除空單檢測邏輯（已改為即時檢測）
+            # elif close_price < self.range_low: 已移除
 
         except Exception as e:
             pass

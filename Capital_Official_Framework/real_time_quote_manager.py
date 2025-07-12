@@ -179,7 +179,43 @@ class RealTimeQuoteManager:
             if self.console_enabled:
                 print(f"[QUOTE_MGR] ❌ 取得ASK價格失敗: {e}")
             return None
-    
+
+    def get_best_bid_price(self, product_code: str) -> Optional[float]:
+        """
+        取得最佳買價 - 多單出場使用
+
+        Args:
+            product_code: 商品代碼 (MTX00/TM0000)
+
+        Returns:
+            float: 最佳買價，如果無數據則返回None
+        """
+        try:
+            with self.data_lock:
+                if product_code not in self.quote_data:
+                    return None
+
+                quote = self.quote_data[product_code]
+
+                # 檢查數據新鮮度
+                if not self.is_quote_fresh(product_code):
+                    if self.console_enabled:
+                        print(f"[QUOTE_MGR] ⚠️ {product_code} 報價數據過期")
+                    return None
+
+                # 返回最佳買價 (BID1)
+                bid1 = quote.bid_prices[0] if quote.bid_prices else None
+
+                if bid1 is not None and bid1 > 0:
+                    return float(bid1)
+
+                return None
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[QUOTE_MGR] ❌ 取得BID價格失敗: {e}")
+            return None
+
     def get_ask_depth(self, product_code: str, levels: int = 5) -> List[Tuple[float, int]]:
         """
         取得ASK深度 - 大量下單參考

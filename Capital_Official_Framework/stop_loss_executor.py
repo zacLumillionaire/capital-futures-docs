@@ -22,7 +22,7 @@ except ImportError:
     class GlobalExitManager:
         def __init__(self):
             self.exit_locks = {}
-            self.exit_timeout = 0.5  # 🔧 調整為0.5秒，允許更頻繁的平倉追價
+            self.exit_timeout = 2.0  # 🔧 修復：調整為2.0秒，與主版本一致，應對平倉查詢延遲
 
         def mark_exit(self, position_id: str, trigger_source: str = "unknown", exit_type: str = "stop_loss") -> bool:
             current_time = time.time()
@@ -376,7 +376,44 @@ class StopLossExecutor:
             return StopLossExecutionResult(trigger_info.position_id, False, error_message=error_msg)
     
     def _get_position_info(self, position_id: int) -> Optional[Dict]:
-        """取得部位詳細資訊 - 🔧 修復：正確關聯策略組"""
+        """取得部位詳細資訊 - 🚀 優化：使用動態停損價格，避免複雜JOIN"""
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 🚀 優化查詢：直接使用最新的動態停損價格
+                cursor.execute('''
+                    SELECT
+                        pr.*,
+                        r.current_stop_loss,
+                        r.protection_activated,
+                        r.trailing_activated,
+                        r.peak_price
+                    FROM position_records pr
+                    LEFT JOIN risk_management_states r ON pr.id = r.position_id
+                    WHERE pr.id = ? AND pr.status = 'ACTIVE'
+                ''', (position_id,))
+
+                row = cursor.fetchone()
+                if row:
+                    columns = [description[0] for description in cursor.description]
+                    position_data = dict(zip(columns, row))
+
+                    # 🔧 確保關鍵欄位存在（向後兼容）
+                    if position_data.get('current_stop_loss') is None:
+                        # 如果沒有風險管理狀態，回退到原始查詢
+                        return self._get_position_info_fallback(position_id)
+
+                    return position_data
+                return None
+
+        except Exception as e:
+            logger.error(f"優化查詢部位資訊失敗: {e}")
+            # 🔧 失敗時回退到原始查詢
+            return self._get_position_info_fallback(position_id)
+
+    def _get_position_info_fallback(self, position_id: int) -> Optional[Dict]:
+        """回退查詢：原始複雜JOIN查詢（保留作為備用）"""
         try:
             from datetime import date
             with self.db_manager.get_connection() as conn:
@@ -399,7 +436,7 @@ class StopLossExecutor:
                 return None
 
         except Exception as e:
-            logger.error(f"查詢部位資訊失敗: {e}")
+            logger.error(f"回退查詢部位資訊失敗: {e}")
             return None
     
     def _execute_exit_order(self, position_info: Dict, exit_direction: str, 

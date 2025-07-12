@@ -181,7 +181,7 @@ class GlobalExitManager:
     def __init__(self):
         if not self._initialized:
             self.exit_locks = {}  # {position_id: {'timestamp': float, 'trigger_source': str, 'exit_type': str}}
-            self.exit_timeout = 0.1  # 🔧 修復：調整為0.1秒，與進場追價一致，允許更快的平倉追價
+            self.exit_timeout = 2.0  # 🔧 修復：調整為2.0秒，應對平倉查詢延遲，解決"找不到部位資訊"問題
             self._initialized = True
 
     def can_exit(self, position_id: str, trigger_source: str = "unknown") -> bool:

@@ -1,0 +1,47 @@
+{
+    "virtual_quote_config": {
+        "base_price": 21500,
+        "price_range": 50,
+        "spread": 5,
+        "quote_interval": 0.5,
+        "fill_probability": 0.95,
+        "fill_delay_ms": 200,
+        "volatility": 0.02,
+        "trend_factor": 0.0
+    },
+    "market_config": {
+        "product": "MTX00",
+        "market_no": 1,
+        "stock_idx": 0,
+        "trading_hours": {
+            "start": "08:45:00",
+            "end": "13:45:00"
+        }
+    },
+    "order_config": {
+        "default_account": "F0200006363839",
+        "order_types": ["ROD", "IOC", "FOK"],
+        "default_order_type": "FOK",
+        "max_quantity": 10,
+        "min_quantity": 1
+    },
+    "best5_config": {
+        "enabled": true,
+        "depth_levels": 5,
+        "quantity_range": [10, 50],
+        "price_step": 5
+    },
+    "logging_config": {
+        "enabled": true,
+        "level": "INFO",
+        "console_output": true,
+        "file_output": false,
+        "log_file": "virtual_quote_machine.log"
+    },
+    "performance_config": {
+        "max_memory_mb": 100,
+        "max_cpu_percent": 5,
+        "quote_buffer_size": 1000,
+        "order_buffer_size": 500
+    }
+}

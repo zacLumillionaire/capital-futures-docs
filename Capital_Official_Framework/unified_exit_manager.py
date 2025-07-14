@@ -117,7 +117,102 @@ class UnifiedExitManager:
             if self.console_enabled:
                 print(f"[UNIFIED_EXIT] ❌ 觸發出場異常: {e}")
             return False
-    
+
+    def execute_protective_stop(self, position_id: int, protective_price: float) -> bool:
+        """
+        執行保護性停損
+
+        Args:
+            position_id: 部位ID
+            protective_price: 保護性停損價格
+
+        Returns:
+            bool: 是否成功執行
+        """
+        try:
+            if self.console_enabled:
+                print(f"[UNIFIED_EXIT] 🛡️ 執行保護性停損: 部位{position_id} @{protective_price}")
+
+            # 使用統一出場方法執行保護性停損
+            success = self.trigger_exit(
+                position_id=position_id,
+                exit_reason="protection_stop",
+                exit_price=protective_price
+            )
+
+            if success and self.console_enabled:
+                print(f"[UNIFIED_EXIT] ✅ 保護性停損執行成功: 部位{position_id}")
+            elif not success and self.console_enabled:
+                print(f"[UNIFIED_EXIT] ❌ 保護性停損執行失敗: 部位{position_id}")
+
+            return success
+
+        except Exception as e:
+            self.logger.error(f"保護性停損執行異常: {e}")
+            if self.console_enabled:
+                print(f"[UNIFIED_EXIT] ❌ 保護性停損執行異常: {e}")
+            return False
+
+    def trigger_protective_stop_update(self, position_id: int, first_lot_profit: float,
+                                     protection_multiplier: float) -> bool:
+        """
+        觸發保護性停損更新
+
+        Args:
+            position_id: 部位ID
+            first_lot_profit: 第一口獲利
+            protection_multiplier: 保護倍數
+
+        Returns:
+            bool: 是否成功觸發更新
+        """
+        try:
+            if self.console_enabled:
+                print(f"[UNIFIED_EXIT] 🛡️ 觸發保護性停損更新: 部位{position_id}")
+                print(f"[UNIFIED_EXIT]   第一口獲利: {first_lot_profit:.1f}點")
+                print(f"[UNIFIED_EXIT]   保護倍數: {protection_multiplier}倍")
+
+            # 獲取部位信息
+            position_info = self.db_manager.get_position_by_id(position_id)
+            if not position_info:
+                if self.console_enabled:
+                    print(f"[UNIFIED_EXIT] ❌ 找不到部位{position_id}")
+                return False
+
+            # 計算保護性停損價格
+            direction = position_info['direction']
+            entry_price = position_info['entry_price']
+            stop_loss_amount = first_lot_profit * protection_multiplier
+
+            if direction == 'LONG':
+                new_stop_loss = entry_price - stop_loss_amount
+            else:  # SHORT
+                new_stop_loss = entry_price + stop_loss_amount  # 正確：空單止損往高點移動
+
+            # 更新資料庫狀態
+            from datetime import datetime
+            current_time = datetime.now().strftime("%H:%M:%S")
+
+            self.db_manager.update_risk_management_state(
+                position_id=position_id,
+                current_stop_loss=new_stop_loss,
+                protection_activated=True,
+                update_time=current_time,
+                update_category="保護性停損更新",
+                update_message=f"基於第一口獲利{first_lot_profit:.1f}點，{protection_multiplier}倍保護"
+            )
+
+            if self.console_enabled:
+                print(f"[UNIFIED_EXIT] ✅ 保護性停損更新完成: {new_stop_loss:.0f}")
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"保護性停損更新異常: {e}")
+            if self.console_enabled:
+                print(f"[UNIFIED_EXIT] ❌ 保護性停損更新異常: {e}")
+            return False
+
     def get_exit_price(self, position_direction: str, product: str = "TM0000") -> Optional[float]:
         """
         取得出場價格 - 多單用BID1，空單用ASK1

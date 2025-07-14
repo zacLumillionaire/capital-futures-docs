@@ -135,10 +135,11 @@ def test_risk_management_operations(db_manager, position_ids):
                 position_id=position_id,
                 peak_price=22540.0,
                 current_time=current_time,
-                update_reason="初始化"
+                update_category="初始化",
+                update_message="初始化"
             )
             print(f"✅ 創建風險管理狀態: 部位={position_id}")
-        
+
         # 更新風險管理狀態
         if position_ids:
             db_manager.update_risk_management_state(
@@ -146,7 +147,8 @@ def test_risk_management_operations(db_manager, position_ids):
                 peak_price=22550.0,
                 trailing_activated=True,
                 update_time=current_time,
-                update_reason="移動停利啟動"
+                update_category="移動停利啟動",
+                update_message="移動停利啟動"
             )
             print(f"✅ 更新風險管理狀態: 部位={position_ids[0]}")
         

@@ -36,6 +36,7 @@ class LotRule:
     trailing_activation: Optional[Decimal] = None  # 啟動點數
     trailing_pullback: Optional[Decimal] = None    # 回撤比例 (0.20 = 20%)
     protective_stop_multiplier: Optional[Decimal] = None  # 保護倍數
+    use_protective_stop: bool = True               # 🔧 新增：是否使用保護性停損
     fixed_tp_points: Optional[Decimal] = None      # 固定停利點數
     
     def to_json(self) -> str:
@@ -46,6 +47,7 @@ class LotRule:
             'trailing_activation': float(self.trailing_activation) if self.trailing_activation else None,
             'trailing_pullback': float(self.trailing_pullback) if self.trailing_pullback else None,
             'protective_stop_multiplier': float(self.protective_stop_multiplier) if self.protective_stop_multiplier else None,
+            'use_protective_stop': self.use_protective_stop,  # 🔧 新增
             'fixed_tp_points': float(self.fixed_tp_points) if self.fixed_tp_points else None
         })
     
@@ -59,6 +61,7 @@ class LotRule:
             trailing_activation=Decimal(str(data['trailing_activation'])) if data['trailing_activation'] else None,
             trailing_pullback=Decimal(str(data['trailing_pullback'])) if data['trailing_pullback'] else None,
             protective_stop_multiplier=Decimal(str(data['protective_stop_multiplier'])) if data['protective_stop_multiplier'] else None,
+            use_protective_stop=data.get('use_protective_stop', True),  # 🔧 新增，預設為True
             fixed_tp_points=Decimal(str(data['fixed_tp_points'])) if data['fixed_tp_points'] else None
         )
 
@@ -102,12 +105,14 @@ class MultiGroupStrategyConfig:
     def _create_default_lot_rules(self) -> List[LotRule]:
         """創建預設口數規則 - 🔧 用戶自定義配置"""
         default_rules = [
-            # 第1口：快速移動停利 (15點啟動, 10%回撤)
+            # 第1口：快速移動停利 (15點啟動, 10%回撤, 1倍保護)
             LotRule(
                 lot_id=1,
                 use_trailing_stop=True,
                 trailing_activation=Decimal('15'),
-                trailing_pullback=Decimal('0.10')  # 🔧 修改：20% → 10%
+                trailing_pullback=Decimal('0.10'),  # 🔧 修改：20% → 10%
+                protective_stop_multiplier=Decimal('1.0'),  # 🔧 新增：第1口也有保護倍數
+                use_protective_stop=True  # 🔧 新增：啟用保護性停損
             ),
             # 第2口：中等移動停利 + 保護 (40點啟動, 10%回撤, 2倍保護)
             LotRule(
@@ -115,7 +120,8 @@ class MultiGroupStrategyConfig:
                 use_trailing_stop=True,
                 trailing_activation=Decimal('40'),
                 trailing_pullback=Decimal('0.10'),  # 🔧 修改：20% → 10%
-                protective_stop_multiplier=Decimal('2.0')
+                protective_stop_multiplier=Decimal('2.0'),
+                use_protective_stop=True  # 🔧 新增：啟用保護性停損
             ),
             # 第3口：較大移動停利 + 保護 (41點啟動, 20%回撤, 2倍保護)
             LotRule(
@@ -123,7 +129,8 @@ class MultiGroupStrategyConfig:
                 use_trailing_stop=True,
                 trailing_activation=Decimal('41'),  # 🔧 修改：65點 → 41點
                 trailing_pullback=Decimal('0.20'),  # 🔧 保持：20%回撤
-                protective_stop_multiplier=Decimal('2.0')
+                protective_stop_multiplier=Decimal('2.0'),
+                use_protective_stop=True  # 🔧 新增：啟用保護性停損
             )
         ]
         

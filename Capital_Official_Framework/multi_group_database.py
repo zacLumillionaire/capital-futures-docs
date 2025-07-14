@@ -85,8 +85,8 @@ class MultiGroupDatabaseManager:
                         CHECK(order_status IN ('PENDING', 'FILLED', 'CANCELLED', 'REJECTED') OR order_status IS NULL),
                         CHECK(lot_id BETWEEN 1 AND 3),
                         CHECK(exit_reason IN ('移動停利', '保護性停損', '初始停損', '手動出場', 'FOK失敗', '下單失敗') OR exit_reason IS NULL),
-                        CHECK(retry_count >= 0 AND retry_count <= 5),
-                        CHECK(max_slippage_points > 0)
+                        CHECK(retry_count IS NULL OR (retry_count >= 0 AND retry_count <= 5)),
+                        CHECK(max_slippage_points IS NULL OR max_slippage_points > 0)
                     )
                 ''')
                 
@@ -100,11 +100,13 @@ class MultiGroupDatabaseManager:
                         trailing_activated BOOLEAN DEFAULT FALSE,
                         protection_activated BOOLEAN DEFAULT FALSE,
                         last_update_time TEXT NOT NULL,
-                        update_reason TEXT,
+                        update_category TEXT,
+                        update_message TEXT,
                         previous_stop_loss REAL,
-                        
+
                         FOREIGN KEY (position_id) REFERENCES position_records(id),
-                        CHECK(update_reason IN ('價格更新', '移動停利啟動', '保護性停損更新', '初始化', '成交初始化', '簡化追蹤成交確認') OR update_reason IS NULL)
+                        CHECK(update_category IN ('價格更新', '移動停利啟動', '保護性停損更新', '初始化', '成交初始化', '簡化追蹤成交確認') OR update_category IS NULL),
+                        CHECK(update_message IS NULL OR LENGTH(update_message) > 0)
                     )
                 ''')
                 
@@ -133,6 +135,9 @@ class MultiGroupDatabaseManager:
                 # 🔧 強制檢查並添加缺失欄位
                 self._ensure_required_columns(cursor)
 
+                # 🛡️ 升級保護性停損資料庫結構
+                self._upgrade_protective_stop_schema(cursor)
+
                 # 創建性能優化索引
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_strategy_groups_date_status ON strategy_groups(date, status)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_position_records_group_status ON position_records(group_id, status)')
@@ -146,6 +151,52 @@ class MultiGroupDatabaseManager:
         except Exception as e:
             logger.error(f"❌ 資料庫初始化失敗: {e}")
             raise
+
+    def _upgrade_protective_stop_schema(self, cursor):
+        """升級資料庫結構以支援保護性停損"""
+        try:
+            # 檢查position_records表是否需要添加保護性停損欄位
+            cursor.execute("PRAGMA table_info(position_records)")
+            pr_columns = [column[1] for column in cursor.fetchall()]
+
+            # 添加保護性停損相關欄位到position_records
+            protective_fields = [
+                ('protective_stop_price', 'REAL'),
+                ('protective_stop_activated', 'INTEGER DEFAULT 0'),
+                ('first_lot_exit_profit', 'REAL')
+            ]
+
+            for field_name, field_type in protective_fields:
+                if field_name not in pr_columns:
+                    try:
+                        cursor.execute(f'ALTER TABLE position_records ADD COLUMN {field_name} {field_type}')
+                        logger.info(f"✅ 添加position_records.{field_name}欄位")
+                    except Exception as e:
+                        logger.warning(f"⚠️ 添加position_records.{field_name}失敗: {e}")
+
+            # 檢查risk_management_states表是否需要添加保護性停損欄位
+            cursor.execute("PRAGMA table_info(risk_management_states)")
+            rms_columns = [column[1] for column in cursor.fetchall()]
+
+            # 添加保護性停損相關欄位到risk_management_states
+            if 'protective_stop_price' not in rms_columns:
+                try:
+                    cursor.execute('ALTER TABLE risk_management_states ADD COLUMN protective_stop_price REAL')
+                    logger.info("✅ 添加risk_management_states.protective_stop_price欄位")
+                except Exception as e:
+                    logger.warning(f"⚠️ 添加protective_stop_price失敗: {e}")
+
+            if 'cumulative_profit_before' not in rms_columns:
+                try:
+                    cursor.execute('ALTER TABLE risk_management_states ADD COLUMN cumulative_profit_before REAL DEFAULT 0')
+                    logger.info("✅ 添加risk_management_states.cumulative_profit_before欄位")
+                except Exception as e:
+                    logger.warning(f"⚠️ 添加cumulative_profit_before失敗: {e}")
+
+            logger.info("🛡️ 保護性停損資料庫結構升級完成")
+
+        except Exception as e:
+            logger.error(f"❌ 保護性停損資料庫結構升級失敗: {e}")
 
     def _upgrade_database_schema(self, cursor):
         """升級資料庫結構以支援訂單追蹤"""
@@ -270,8 +321,8 @@ class MultiGroupDatabaseManager:
                     CHECK(order_status IN ('PENDING', 'FILLED', 'CANCELLED', 'REJECTED') OR order_status IS NULL),
                     CHECK(lot_id BETWEEN 1 AND 3),
                     CHECK(exit_reason IN ('移動停利', '保護性停損', '初始停損', '手動出場', 'FOK失敗', '下單失敗') OR exit_reason IS NULL),
-                    CHECK(retry_count >= 0 AND retry_count <= 5),
-                    CHECK(max_slippage_points > 0)
+                    CHECK(retry_count IS NULL OR (retry_count >= 0 AND retry_count <= 5)),
+                    CHECK(max_slippage_points IS NULL OR max_slippage_points > 0)
                 )
             ''')
 
@@ -334,10 +385,35 @@ class MultiGroupDatabaseManager:
                              entry_price: Optional[float] = None, entry_time: Optional[str] = None,
                              rule_config: Optional[str] = None, order_id: Optional[str] = None,
                              api_seq_no: Optional[str] = None, order_status: str = 'PENDING') -> int:
-        """創建部位記錄 - 支援訂單追蹤"""
+        """創建部位記錄 - 支援訂單追蹤，包含group_id驗證"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+
+                # 🔧 新增：驗證group_id是否為有效的邏輯組別編號
+                today = date.today().isoformat()
+                cursor.execute('''
+                    SELECT COUNT(*) FROM strategy_groups
+                    WHERE group_id = ? AND date = ?
+                ''', (group_id, today))
+
+                group_exists = cursor.fetchone()[0] > 0
+                if not group_exists:
+                    # 檢查是否錯誤傳入了DB_ID
+                    cursor.execute('''
+                        SELECT group_id FROM strategy_groups
+                        WHERE id = ? AND date = ?
+                    ''', (group_id, today))
+
+                    db_id_result = cursor.fetchone()
+                    if db_id_result:
+                        correct_group_id = db_id_result[0]
+                        logger.error(f"❌ group_id驗證失敗: 傳入{group_id}是DB_ID，正確的group_id應為{correct_group_id}")
+                        raise ValueError(f"Invalid group_id: {group_id} is a DB_ID, should be {correct_group_id}")
+                    else:
+                        logger.error(f"❌ group_id驗證失敗: 找不到group_id={group_id}的策略組")
+                        raise ValueError(f"Strategy group not found: group_id={group_id}")
+
                 cursor.execute('''
                     INSERT INTO position_records
                     (group_id, lot_id, direction, entry_price, entry_time, rule_config,
@@ -383,16 +459,17 @@ class MultiGroupDatabaseManager:
             raise
     
     def create_risk_management_state(self, position_id: int, peak_price: float,
-                                   current_time: str, update_reason: str = "初始化"):
+                                   current_time: str, update_category: str = "初始化",
+                                   update_message: str = None):
         """創建風險管理狀態記錄"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO risk_management_states
-                    (position_id, peak_price, last_update_time, update_reason)
-                    VALUES (?, ?, ?, ?)
-                ''', (position_id, peak_price, current_time, update_reason))
+                    (position_id, peak_price, last_update_time, update_category, update_message)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (position_id, peak_price, current_time, update_category, update_message))
 
                 conn.commit()
                 logger.info(f"創建風險管理狀態: 部位={position_id}, 峰值={peak_price}")
@@ -405,49 +482,108 @@ class MultiGroupDatabaseManager:
     def update_risk_management_state(self, position_id: int, peak_price: float = None,
                                    current_stop_loss: float = None, trailing_activated: bool = None,
                                    protection_activated: bool = None, update_time: str = None,
-                                   update_reason: str = None):
+                                   update_category: str = None, update_message: str = None):
         """更新風險管理狀態"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 # 構建動態更新語句
                 update_fields = []
                 params = []
-                
+
                 if peak_price is not None:
                     update_fields.append("peak_price = ?")
                     params.append(peak_price)
-                
+
                 if current_stop_loss is not None:
                     update_fields.append("current_stop_loss = ?")
                     params.append(current_stop_loss)
-                
+
                 if trailing_activated is not None:
                     update_fields.append("trailing_activated = ?")
                     params.append(trailing_activated)
-                
+
                 if protection_activated is not None:
                     update_fields.append("protection_activated = ?")
                     params.append(protection_activated)
-                
+
                 if update_time is not None:
                     update_fields.append("last_update_time = ?")
                     params.append(update_time)
-                
-                if update_reason is not None:
-                    update_fields.append("update_reason = ?")
-                    params.append(update_reason)
-                
+
+                if update_category is not None:
+                    update_fields.append("update_category = ?")
+                    params.append(update_category)
+
+                if update_message is not None:
+                    update_fields.append("update_message = ?")
+                    params.append(update_message)
+
                 if update_fields:
                     params.append(position_id)
                     sql = f"UPDATE risk_management_states SET {', '.join(update_fields)} WHERE position_id = ?"
                     cursor.execute(sql, params)
                     conn.commit()
-                
+
         except Exception as e:
             logger.error(f"更新風險管理狀態失敗: {e}")
             raise
+
+    def update_protective_stop(self, position_id: int, protective_price: float,
+                             activated: bool = True, first_lot_profit: float = None) -> bool:
+        """
+        更新保護性停損狀態
+
+        Args:
+            position_id: 部位ID
+            protective_price: 保護性停損價格
+            activated: 是否啟動保護性停損
+            first_lot_profit: 第一口平倉獲利
+
+        Returns:
+            bool: 是否成功更新
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 更新position_records表
+                update_fields = []
+                params = []
+
+                if protective_price is not None:
+                    update_fields.append("protective_stop_price = ?")
+                    params.append(protective_price)
+
+                if activated is not None:
+                    update_fields.append("protective_stop_activated = ?")
+                    params.append(1 if activated else 0)
+
+                if first_lot_profit is not None:
+                    update_fields.append("first_lot_exit_profit = ?")
+                    params.append(first_lot_profit)
+
+                if update_fields:
+                    params.append(position_id)
+                    sql = f"UPDATE position_records SET {', '.join(update_fields)} WHERE id = ?"
+                    cursor.execute(sql, params)
+
+                # 同時更新risk_management_states表
+                if protective_price is not None:
+                    cursor.execute('''
+                        UPDATE risk_management_states
+                        SET protective_stop_price = ?, protection_activated = ?
+                        WHERE position_id = ?
+                    ''', (protective_price, activated, position_id))
+
+                conn.commit()
+                logger.info(f"✅ 保護性停損狀態更新成功: 部位{position_id}")
+                return True
+
+        except Exception as e:
+            logger.error(f"❌ 更新保護性停損狀態失敗: {e}")
+            return False
 
     def get_active_positions_by_group(self, group_id: int) -> List[Dict]:
         """取得指定組的活躍部位 - 🔧 修復：包含策略組信息"""
@@ -577,8 +713,8 @@ class MultiGroupDatabaseManager:
                         cursor.execute('''
                             SELECT COUNT(*) as winning_positions
                             FROM position_records pr
-                            JOIN strategy_groups sg ON pr.group_id = sg.id
-                            WHERE sg.date = ? AND pr.status = 'EXITED' AND pr.pnl > 0
+                            JOIN strategy_groups sg ON pr.group_id = sg.group_id AND sg.date = ?
+                            WHERE pr.status = 'EXITED' AND pr.pnl > 0
                         ''', (date_str,))
 
                         winning_row = cursor.fetchone()
@@ -813,8 +949,8 @@ class MultiGroupDatabaseManager:
                         SUM(CASE WHEN pr.status = 'EXITED' THEN 1 ELSE 0 END) as exited_positions,
                         ROUND(SUM(CASE WHEN pr.status = 'ACTIVE' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as success_rate
                     FROM position_records pr
-                    JOIN strategy_groups sg ON pr.group_id = sg.id
-                    WHERE sg.date = ?
+                    JOIN strategy_groups sg ON pr.group_id = sg.group_id AND sg.date = ?
+                    WHERE 1=1
                 ''', (date_str,))
 
                 row = cursor.fetchone()
@@ -872,13 +1008,12 @@ class MultiGroupDatabaseManager:
                 cursor.execute('''
                     SELECT pr.*, sg.direction as group_direction, sg.date
                     FROM position_records pr
-                    JOIN strategy_groups sg ON pr.group_id = sg.id
+                    JOIN strategy_groups sg ON pr.group_id = sg.group_id AND sg.date = date('now', 'localtime')
                     WHERE pr.status = 'FAILED'
                     AND pr.order_status = 'CANCELLED'
                     AND pr.retry_count < ?
                     AND (pr.last_retry_time IS NULL OR
                          (julianday('now') - julianday(pr.last_retry_time)) * 86400 < ?)
-                    AND sg.date = date('now', 'localtime')
                     ORDER BY pr.created_at ASC
                 ''', (max_retry_count, time_window_seconds))
 
@@ -940,26 +1075,71 @@ class MultiGroupDatabaseManager:
             return False
 
     def get_position_by_id(self, position_id: int) -> Optional[Dict]:
-        """根據ID取得部位資訊 - 🔧 修復：正確關聯策略組"""
+        """根據ID取得部位資訊 - 🔧 修復：使用分步查詢避免JOIN失敗"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+
+                # 🔧 步驟1：查詢部位基本信息
                 cursor.execute('''
-                    SELECT pr.*, sg.direction as group_direction, sg.date, sg.range_high, sg.range_low
-                    FROM position_records pr
-                    JOIN (
-                        SELECT * FROM strategy_groups
-                        WHERE date = ?
-                        ORDER BY id DESC
-                    ) sg ON pr.group_id = sg.group_id
-                    WHERE pr.id = ?
-                ''', (date.today().isoformat(), position_id))
+                    SELECT * FROM position_records WHERE id = ?
+                ''', (position_id,))
 
                 row = cursor.fetchone()
-                if row:
-                    columns = [description[0] for description in cursor.description]
-                    return dict(zip(columns, row))
-                return None
+                if not row:
+                    return None
+
+                # 轉換為字典
+                columns = [description[0] for description in cursor.description]
+                position_data = dict(zip(columns, row))
+
+                # 🔧 步驟2：查詢策略組信息（容錯處理）
+                group_id = position_data.get('group_id')
+                if group_id:
+                    # 首先嘗試按 group_id 查詢
+                    cursor.execute('''
+                        SELECT range_high, range_low, direction as group_direction
+                        FROM strategy_groups
+                        WHERE group_id = ? AND date = ?
+                        ORDER BY id DESC
+                        LIMIT 1
+                    ''', (group_id, date.today().isoformat()))
+
+                    group_row = cursor.fetchone()
+                    if group_row:
+                        # 成功找到策略組
+                        position_data['range_high'] = group_row[0]
+                        position_data['range_low'] = group_row[1]
+                        position_data['group_direction'] = group_row[2]
+                        position_data['date'] = date.today().isoformat()
+                    else:
+                        # 🔧 容錯：嘗試按 DB_ID 查詢（處理數據不一致問題）
+                        logger.warning(f"按group_id={group_id}找不到策略組，嘗試按DB_ID查詢")
+                        cursor.execute('''
+                            SELECT range_high, range_low, direction as group_direction, group_id as real_group_id
+                            FROM strategy_groups
+                            WHERE id = ? AND date = ?
+                            LIMIT 1
+                        ''', (group_id, date.today().isoformat()))
+
+                        fallback_row = cursor.fetchone()
+                        if fallback_row:
+                            # 找到了，說明是數據不一致問題
+                            position_data['range_high'] = fallback_row[0]
+                            position_data['range_low'] = fallback_row[1]
+                            position_data['group_direction'] = fallback_row[2]
+                            position_data['date'] = date.today().isoformat()
+                            logger.warning(f"部位{position_id}的group_id={group_id}實際是DB_ID，真實group_id={fallback_row[3]}")
+                        else:
+                            # 完全找不到策略組信息
+                            logger.warning(f"找不到部位{position_id}對應的策略組信息: group_id={group_id}, date={date.today().isoformat()}")
+                            # 使用默認值，不讓平倉失敗
+                            position_data['range_high'] = None
+                            position_data['range_low'] = None
+                            position_data['group_direction'] = position_data.get('direction')
+                            position_data['date'] = date.today().isoformat()
+
+                return position_data
 
         except Exception as e:
             logger.error(f"根據ID查詢部位失敗: {e}")

@@ -1,0 +1,161 @@
+{
+  "inspection_time": "2025-07-15T00:40:01.870884",
+  "summary": {
+    "total_checks": 15,
+    "passed_checks": 14,
+    "warnings": 1,
+    "issues": 0,
+    "critical_issues": 0,
+    "high_issues": 0
+  },
+  "test_results": {
+    "configuration": {
+      "lot_rule_config": {
+        "status": "PASSED"
+      },
+      "database_structure": {
+        "status": "PASSED",
+        "missing_fields": []
+      },
+      "exit_config": {
+        "status": "PASSED",
+        "issues": [
+          "第1口缺少保護倍數"
+        ]
+      }
+    },
+    "calculation": {
+      "long_calculation": {
+        "status": "PASSED",
+        "result": 19960.0
+      },
+      "short_calculation": {
+        "status": "PASSED",
+        "result": 22582.0
+      },
+      "edge_cases": {
+        "status": "PASSED",
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    "trigger": {
+      "risk_engine_logic": {
+        "status": "PASSED"
+      },
+      "trigger_conditions": {
+        "status": "PASSED"
+      },
+      "async_support": {
+        "status": "PASSED"
+      }
+    },
+    "execution": {
+      "unified_exit_manager": {
+        "status": "PASSED"
+      },
+      "database_operations": {
+        "status": "PASSED"
+      },
+      "state_management": {
+        "status": "PASSED",
+        "active_positions": 2,
+        "risk_states": 2
+      }
+    },
+    "simulation": {
+      "long_scenario": {
+        "status": "PASSED",
+        "protection_price": 19960.0
+      },
+      "short_scenario": {
+        "status": "PASSED",
+        "protection_price": 22582.0
+      },
+      "multi_lot_scenario": {
+        "status": "PASSED"
+      }
+    }
+  },
+  "passed_checks": [
+    {
+      "category": "CONFIG",
+      "description": "LotRule配置檢查通過",
+      "timestamp": "2025-07-15T00:39:53.567427"
+    },
+    {
+      "category": "CONFIG",
+      "description": "資料庫結構檢查通過",
+      "timestamp": "2025-07-15T00:39:54.489479"
+    },
+    {
+      "category": "CALCULATION",
+      "description": "多單保護性停損計算正確",
+      "timestamp": "2025-07-15T00:39:56.674213"
+    },
+    {
+      "category": "CALCULATION",
+      "description": "空單保護性停損計算正確",
+      "timestamp": "2025-07-15T00:39:56.674213"
+    },
+    {
+      "category": "CALCULATION",
+      "description": "邊界情況測試通過 (4/4)",
+      "timestamp": "2025-07-15T00:39:56.876187"
+    },
+    {
+      "category": "TRIGGER",
+      "description": "風險引擎方法檢查通過",
+      "timestamp": "2025-07-15T00:39:57.359753"
+    },
+    {
+      "category": "TRIGGER",
+      "description": "觸發條件邏輯正確",
+      "timestamp": "2025-07-15T00:39:57.621225"
+    },
+    {
+      "category": "TRIGGER",
+      "description": "異步保護性停損更新支援正常",
+      "timestamp": "2025-07-15T00:39:57.879387"
+    },
+    {
+      "category": "EXECUTION",
+      "description": "統一出場管理器方法完整",
+      "timestamp": "2025-07-15T00:39:58.942211"
+    },
+    {
+      "category": "EXECUTION",
+      "description": "資料庫操作方法完整",
+      "timestamp": "2025-07-15T00:39:59.061966"
+    },
+    {
+      "category": "EXECUTION",
+      "description": "狀態管理檢查通過 (活躍部位:2, 風險狀態:2)",
+      "timestamp": "2025-07-15T00:39:59.322359"
+    },
+    {
+      "category": "SIMULATION",
+      "description": "多單保護性停損模擬正確",
+      "timestamp": "2025-07-15T00:39:59.962401"
+    },
+    {
+      "category": "SIMULATION",
+      "description": "空單保護性停損模擬正確",
+      "timestamp": "2025-07-15T00:40:01.055133"
+    },
+    {
+      "category": "SIMULATION",
+      "description": "多口保護性停損模擬完成",
+      "timestamp": "2025-07-15T00:40:01.568410"
+    }
+  ],
+  "warnings": [
+    {
+      "category": "CONFIG",
+      "description": "平倉配置問題: 第1口缺少保護倍數",
+      "details": "",
+      "timestamp": "2025-07-15T00:39:56.346760"
+    }
+  ],
+  "issues": []
+}

@@ -1,0 +1,54 @@
+{
+  "timestamp": "2025-07-15T00:12:40.520809",
+  "summary": {
+    "total_stages": 6,
+    "passed": 3,
+    "failed": 3,
+    "errors": 0
+  },
+  "critical_issues": [],
+  "warnings": [
+    "可能缺少第一口特殊處理邏輯",
+    "cumulative_profit_protection_manager.py 可能缺少第一口平倉觸發邏輯",
+    "stop_loss_state_manager.py 可能缺少第一口平倉觸發邏輯",
+    "可能缺少保護性停損異步更新"
+  ],
+  "detailed_results": {
+    "parameters": {
+      "status": "FAILED",
+      "issues": [
+        "第1口出場規則保護倍數無效"
+      ],
+      "details": {}
+    },
+    "trigger_logic": {
+      "status": "FAILED",
+      "issues": [
+        "stop_loss_state_manager.py 缺少保護性停損更新方法"
+      ],
+      "details": {}
+    },
+    "calculation": {
+      "status": "FAILED",
+      "issues": [
+        "SHORT保護性停損價格不合理: 22582.0 > 22542.0"
+      ],
+      "details": {}
+    },
+    "execution": {
+      "status": "PASSED",
+      "issues": [],
+      "details": {}
+    },
+    "database": {
+      "status": "PASSED",
+      "issues": [],
+      "details": {}
+    },
+    "simulation": {
+      "status": "PASSED",
+      "issues": [],
+      "details": {}
+    }
+  }
+}

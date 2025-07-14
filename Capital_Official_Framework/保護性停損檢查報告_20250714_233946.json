@@ -1,0 +1,68 @@
+{
+  "timestamp": "2025-07-14T23:39:46.923714",
+  "summary": {
+    "total_stages": 6,
+    "passed": 1,
+    "failed": 5,
+    "errors": 0
+  },
+  "critical_issues": [],
+  "warnings": [
+    "部位1未啟用保護性停損",
+    "部位2未啟用保護性停損",
+    "可能缺少第一口特殊處理邏輯",
+    "cumulative_profit_protection_manager.py 可能缺少第一口平倉觸發邏輯",
+    "stop_loss_state_manager.py 可能缺少第一口平倉觸發邏輯",
+    "position_records 可能缺少: protective_stop_price",
+    "position_records 可能缺少: protective_stop_activated",
+    "position_records 可能缺少: first_lot_exit_profit",
+    "risk_management_states 可能缺少: protective_stop_price",
+    "risk_management_states 可能缺少: protective_stop_activated",
+    "可能缺少保護性停損狀態管理",
+    "可能缺少保護性停損異步更新"
+  ],
+  "detailed_results": {
+    "parameters": {
+      "status": "FAILED",
+      "issues": [
+        "部位1缺少保護性停損倍數",
+        "第1口出場規則保護倍數無效"
+      ],
+      "details": {}
+    },
+    "trigger_logic": {
+      "status": "FAILED",
+      "issues": [
+        "stop_loss_state_manager.py 缺少保護性停損更新方法"
+      ],
+      "details": {}
+    },
+    "calculation": {
+      "status": "FAILED",
+      "issues": [
+        "SHORT保護性停損價格不合理: 22582.0 > 22542.0"
+      ],
+      "details": {}
+    },
+    "execution": {
+      "status": "FAILED",
+      "issues": [
+        "統一出場管理器缺少保護性停損支援",
+        "缺少保護性停損執行方法"
+      ],
+      "details": {}
+    },
+    "database": {
+      "status": "FAILED",
+      "issues": [
+        "缺少保護性停損更新方法"
+      ],
+      "details": {}
+    },
+    "simulation": {
+      "status": "PASSED",
+      "issues": [],
+      "details": {}
+    }
+  }
+}

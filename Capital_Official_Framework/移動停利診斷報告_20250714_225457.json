@@ -1,0 +1,57 @@
+{
+  "timestamp": "2025-07-14T22:54:57.249461",
+  "summary": {
+    "total_stages": 6,
+    "passed": 3,
+    "failed": 0,
+    "errors": 3
+  },
+  "results": {
+    "stage1": {
+      "status": "ERROR",
+      "issues": [
+        "部位2: 移動停利啟動點數未設置",
+        "部位1: 移動停利啟動點數未設置"
+      ],
+      "details": {
+        "active_positions": 2
+      },
+      "error": "no such column: current_price"
+    },
+    "stage2": {
+      "status": "PASSED",
+      "issues": [],
+      "details": {}
+    },
+    "stage3": {
+      "status": "PASSED",
+      "issues": [],
+      "details": {
+        "activated_positions": 0
+      }
+    },
+    "stage4": {
+      "status": "ERROR",
+      "issues": [],
+      "details": {},
+      "error": "no such column: rms.current_price"
+    },
+    "stage5": {
+      "status": "PASSED",
+      "issues": [],
+      "details": {
+        "trailing_stop_exits": 0
+      }
+    },
+    "stage6": {
+      "status": "ERROR",
+      "issues": [],
+      "details": {},
+      "error": "no such column: current_price"
+    }
+  },
+  "all_issues": [
+    "[stage1] 部位2: 移動停利啟動點數未設置",
+    "[stage1] 部位1: 移動停利啟動點數未設置"
+  ]
+}

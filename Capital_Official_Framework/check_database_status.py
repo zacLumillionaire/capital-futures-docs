@@ -88,8 +88,7 @@ def check_database_status():
         cursor.execute("""
             SELECT COUNT(*) FROM risk_management_states rms
             JOIN position_records pr ON rms.position_id = pr.id
-            JOIN strategy_groups sg ON pr.group_id = sg.id
-            WHERE sg.date = ?
+            JOIN strategy_groups sg ON pr.group_id = sg.group_id AND sg.date = ?
         """, (today,))
         
         risk_count = cursor.fetchone()[0]

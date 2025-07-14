@@ -693,7 +693,8 @@ class RiskManagementEngine:
                             trailing_activated=True,
                             peak_price=current_price,
                             update_time=current_time,
-                            update_reason="移動停利啟動"
+                            update_category="移動停利啟動",
+                            update_message="移動停利啟動"
                         )
                     else:
                         # 🛡️ 同步更新（備用模式）
@@ -702,7 +703,8 @@ class RiskManagementEngine:
                             position_id=position_id,
                             trailing_activated=True,
                             update_time=current_time,
-                            update_reason="移動停利啟動"
+                            update_category="移動停利啟動",
+                            update_message="移動停利啟動"
                         )
 
                     # 🔧 修復：只記錄一次移動停利啟動LOG
@@ -868,7 +870,8 @@ class RiskManagementEngine:
                         position_id=position['id'],
                         peak_price=current_peak,
                         update_time=current_time,
-                        update_reason="價格更新"
+                        update_category="價格更新",
+                        update_message="峰值更新"
                     )
                 else:
                     # 🛡️ 同步更新模式（預設，確保零風險）
@@ -876,7 +879,8 @@ class RiskManagementEngine:
                         position_id=position['id'],
                         peak_price=current_peak,
                         update_time=current_time,
-                        update_reason="價格更新"
+                        update_category="價格更新",
+                        update_message="價格更新"
                     )
                 
         except Exception as e:
@@ -955,6 +959,12 @@ class RiskManagementEngine:
             self._log_debug(f"[RISK_ENGINE]   目標部位: {next_position['id']} 第{next_lot_id}口")
             self._log_debug(f"[RISK_ENGINE]   保護性停損倍數: {next_rule.protective_stop_multiplier}")
 
+            # 🔧 檢查是否啟用保護性停損
+            if not getattr(next_rule, 'use_protective_stop', True):
+                if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
+                    print(f"[RISK_ENGINE] ⚠️ 第{next_lot_id}口未啟用保護性停損")
+                return False
+
             if not next_rule.protective_stop_multiplier:
                 if hasattr(self, 'console_enabled') and getattr(self, 'console_enabled', True):
                     print(f"[RISK_ENGINE] ⚠️ 第{next_lot_id}口沒有設定保護性停損倍數")
@@ -994,6 +1004,9 @@ class RiskManagementEngine:
             if direction == 'LONG':
                 new_stop_loss = entry_price - stop_loss_amount
             else:  # SHORT
+                # 🔧 修復：SHORT部位保護性停損應該是加法
+                # 邏輯：SHORT部位止損在高點，保護性停損將止損點往更高價格移動
+                # 例如：進場22542，獲利20點，2倍保護 → 22542 + (20 × 2.0) = 22582
                 new_stop_loss = entry_price + stop_loss_amount
 
             # 🎯 修改：保護性停損計算詳情改為調試模式
@@ -1013,7 +1026,8 @@ class RiskManagementEngine:
                     current_stop_loss=new_stop_loss,
                     protection_activated=True,
                     update_time=current_time,
-                    update_reason="保護性停損更新"
+                    update_category="保護性停損更新",
+                    update_message="保護性停損更新"
                 )
             else:
                 # 🛡️ 同步更新（備用模式）
@@ -1023,7 +1037,8 @@ class RiskManagementEngine:
                     current_stop_loss=new_stop_loss,
                     protection_activated=True,
                     update_time=current_time,
-                    update_reason="保護性停損更新"
+                    update_category="保護性停損更新",
+                    update_message="保護性停損更新"
                 )
 
             # 🔍 DEBUG: 更新完成確認

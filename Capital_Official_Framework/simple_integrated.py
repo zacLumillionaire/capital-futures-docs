@@ -1496,6 +1496,9 @@ class SimpleIntegratedApp:
 
                                 # 🧹 初始化系統維護管理器（解決長時間運行的資源累積問題）
                                 self._setup_system_maintenance()
+
+                                # 🔧 初始化系統診斷機制
+                                self._setup_system_diagnostics()
                             else:
                                 print("⚠️ 異步峰值更新自動啟用失敗，將使用同步模式")
                         else:
@@ -1602,7 +1605,18 @@ class SimpleIntegratedApp:
                     description="清理24小時前的即時報價資料"
                 )
 
-            # 5. 統計信息重置（每天）
+            # 5. 平倉鎖定清理（每5分鐘）
+            if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
+                if hasattr(self.multi_group_position_manager, 'simplified_tracker'):
+                    global_exit_manager = self.multi_group_position_manager.simplified_tracker.global_exit_manager
+                    maintenance_manager.register_task(
+                        name="平倉鎖定清理",
+                        func=lambda: global_exit_manager.clear_expired_exits(300),  # 清除5分鐘前的鎖定
+                        interval_seconds=300,  # 5分鐘
+                        description="清除過期的平倉鎖定狀態"
+                    )
+
+            # 6. 統計信息重置（每天）
             maintenance_manager.register_task(
                 name="統計信息重置",
                 func=self._reset_daily_stats,
@@ -1619,6 +1633,428 @@ class SimpleIntegratedApp:
 
         except Exception as e:
             print(f"❌ 設置系統維護管理器失敗: {e}")
+
+    def _setup_system_diagnostics(self):
+        """🔧 設置系統診斷機制"""
+        try:
+            print("🔧 初始化系統診斷機制...")
+
+            # 檢查 psutil 可用性
+            try:
+                import psutil
+                psutil_available = True
+                print("   ✅ psutil模組已安裝，完整診斷功能可用")
+            except ImportError:
+                psutil_available = False
+                print("   ⚠️ psutil模組不可用，將使用簡化的系統監控")
+
+            # 導入診斷模組
+            diagnostic_modules_loaded = 0
+            total_modules = 3
+
+            # 1. 快速異步檢查
+            try:
+                from quick_async_check import quick_async_check
+                self.quick_async_check = lambda: quick_async_check(self)
+                diagnostic_modules_loaded += 1
+                print("   ✅ 快速異步檢查模組載入成功")
+            except ImportError as e:
+                print(f"   ⚠️ 快速異步檢查模組載入失敗: {e}")
+                self.quick_async_check = None
+
+            # 2. 完整診斷分析
+            try:
+                from async_failure_diagnostic import run_diagnostic_on_simple_integrated
+                self.run_full_diagnostic = lambda: run_diagnostic_on_simple_integrated(self)
+                diagnostic_modules_loaded += 1
+                print("   ✅ 完整診斷分析模組載入成功")
+            except ImportError as e:
+                print(f"   ⚠️ 完整診斷分析模組載入失敗: {e}")
+                self.run_full_diagnostic = None
+
+            # 3. 系統健康檢查
+            try:
+                from system_health_monitor import run_health_check_on_simple_integrated
+                self.run_health_check = lambda silent=False: run_health_check_on_simple_integrated(self, silent)
+                diagnostic_modules_loaded += 1
+                if psutil_available:
+                    print("   ✅ 系統健康檢查模組載入成功（完整功能）")
+                else:
+                    print("   ✅ 系統健康檢查模組載入成功（簡化功能）")
+            except ImportError as e:
+                print(f"   ⚠️ 系統健康檢查模組載入失敗: {e}")
+                self.run_health_check = None
+
+            # 總結診斷模組載入狀態
+            if diagnostic_modules_loaded == total_modules:
+                print("   ✅ 所有診斷模組載入成功")
+                print("   💡 可用診斷命令:")
+                print("      - self.quick_async_check() - 快速異步檢查")
+                print("      - self.run_full_diagnostic() - 完整診斷分析")
+                print("      - self.run_health_check() - 系統健康檢查")
+            elif diagnostic_modules_loaded > 0:
+                print(f"   ⚠️ 部分診斷模組載入成功 ({diagnostic_modules_loaded}/{total_modules})")
+                print("   💡 可用的診斷功能:")
+                if self.quick_async_check:
+                    print("      - self.quick_async_check() - 快速異步檢查")
+                if self.run_full_diagnostic:
+                    print("      - self.run_full_diagnostic() - 完整診斷分析")
+                if self.run_health_check:
+                    print("      - self.run_health_check() - 系統健康檢查")
+            else:
+                print("   ❌ 所有診斷模組載入失敗")
+                print("   💡 診斷功能將不可用")
+
+            # 設置定期健康檢查（可選）
+            if hasattr(self, 'run_health_check'):
+                try:
+                    # 每30分鐘進行一次健康檢查
+                    maintenance_manager = getattr(self, 'maintenance_manager', None)
+                    if maintenance_manager:
+                        maintenance_manager.register_task(
+                            name="系統健康檢查",
+                            func=self._periodic_health_check,
+                            interval_seconds=1800,  # 30分鐘
+                            description="定期系統健康檢查"
+                        )
+                        print("   ✅ 定期健康檢查已啟用 (30分鐘間隔)")
+                except Exception as e:
+                    print(f"   ⚠️ 定期健康檢查設置失敗: {e}")
+
+            # 設置運行時診斷信息顯示
+            self._setup_runtime_diagnostics()
+
+            print("✅ 系統診斷機制初始化完成")
+
+        except Exception as e:
+            print(f"❌ 設置系統診斷機制失敗: {e}")
+
+    def _setup_runtime_diagnostics(self):
+        """設置運行時診斷信息顯示"""
+        try:
+            # 初始化診斷統計
+            self.diagnostic_stats = {
+                'last_health_check': 0,
+                'health_check_interval': 300,  # 5分鐘
+                'last_quick_check': 0,
+                'quick_check_interval': 60,    # 1分鐘
+                'diagnostic_enabled': True
+            }
+
+            # 檢查 psutil 狀態並記錄
+            try:
+                import psutil
+                self.psutil_available = True
+                self.add_strategy_log("✅ [DIAGNOSTIC] psutil模組可用，完整診斷功能啟用")
+            except ImportError:
+                self.psutil_available = False
+                self.add_strategy_log("⚠️ [DIAGNOSTIC] psutil模組不可用，使用簡化診斷功能")
+
+        except Exception as e:
+            print(f"❌ 設置運行時診斷失敗: {e}")
+
+    def _periodic_health_check(self):
+        """定期健康檢查"""
+        try:
+            if hasattr(self, 'run_health_check'):
+                print("\n🏥 執行定期健康檢查...")
+                health_report = self.run_health_check()
+
+                # 檢查是否有關鍵問題
+                alerts = health_report.get('alerts', [])
+                critical_alerts = [a for a in alerts if a.get('level') == 'critical']
+
+                if critical_alerts:
+                    print(f"🚨 發現 {len(critical_alerts)} 個關鍵問題，建議立即檢查")
+
+                return health_report
+        except Exception as e:
+            print(f"❌ 定期健康檢查失敗: {e}")
+
+    def _show_runtime_diagnostics(self):
+        """顯示運行時診斷信息"""
+        try:
+            # 檢查是否啟用診斷
+            if not getattr(self, 'diagnostic_stats', {}).get('diagnostic_enabled', False):
+                return
+
+            current_time = time.time()
+
+            # 快速檢查 (每分鐘)
+            if (current_time - self.diagnostic_stats.get('last_quick_check', 0) >=
+                self.diagnostic_stats.get('quick_check_interval', 60)):
+
+                self.diagnostic_stats['last_quick_check'] = current_time
+                self._show_quick_diagnostic_status()
+
+            # 健康檢查 (每5分鐘)
+            if (current_time - self.diagnostic_stats.get('last_health_check', 0) >=
+                self.diagnostic_stats.get('health_check_interval', 300)):
+
+                self.diagnostic_stats['last_health_check'] = current_time
+                self._show_health_diagnostic_status()
+
+        except Exception as e:
+            # 靜默處理錯誤，避免影響主要功能
+            pass
+
+    def _show_quick_diagnostic_status(self):
+        """顯示快速診斷狀態"""
+        try:
+            timestamp = time.strftime("%H:%M:%S")
+
+            # 檢查 psutil 狀態
+            if hasattr(self, 'psutil_available'):
+                if self.psutil_available:
+                    print(f"🔧 [DIAGNOSTIC] {timestamp} - psutil模組正常，完整診斷功能可用")
+                else:
+                    print(f"⚠️ [DIAGNOSTIC] {timestamp} - psutil模組不可用，使用簡化診斷")
+
+            # 檢查診斷模組狀態
+            available_modules = []
+            if hasattr(self, 'quick_async_check') and self.quick_async_check:
+                available_modules.append("快速檢查")
+            if hasattr(self, 'run_full_diagnostic') and self.run_full_diagnostic:
+                available_modules.append("完整診斷")
+            if hasattr(self, 'run_health_check') and self.run_health_check:
+                available_modules.append("健康檢查")
+
+            if available_modules:
+                print(f"✅ [DIAGNOSTIC] {timestamp} - 可用模組: {', '.join(available_modules)}")
+            else:
+                print(f"❌ [DIAGNOSTIC] {timestamp} - 無可用診斷模組")
+
+        except Exception as e:
+            pass
+
+    def _show_health_diagnostic_status(self):
+        """顯示健康診斷狀態"""
+        try:
+            timestamp = time.strftime("%H:%M:%S")
+
+            # 執行簡化健康檢查
+            if hasattr(self, 'run_health_check') and self.run_health_check:
+                print(f"🏥 [DIAGNOSTIC] {timestamp} - 執行系統健康檢查...")
+
+                # 執行健康檢查但不顯示詳細輸出
+                try:
+                    # 使用靜默模式執行健康檢查
+                    health_report = self.run_health_check(silent=True)
+
+                    if isinstance(health_report, dict):
+                        score = health_report.get('overall_score', 0)
+                        alerts = health_report.get('alerts', [])
+
+                        if score >= 90:
+                            print(f"✅ [DIAGNOSTIC] {timestamp} - 系統健康狀態優秀 (分數: {score}/100)")
+                        elif score >= 70:
+                            print(f"⚠️ [DIAGNOSTIC] {timestamp} - 系統健康狀態良好 (分數: {score}/100)")
+                        else:
+                            print(f"❌ [DIAGNOSTIC] {timestamp} - 系統健康狀態需要關注 (分數: {score}/100)")
+
+                        if alerts:
+                            critical_count = len([a for a in alerts if a.get('level') == 'critical'])
+                            warning_count = len([a for a in alerts if a.get('level') == 'warning'])
+                            if critical_count > 0:
+                                print(f"🚨 [DIAGNOSTIC] {timestamp} - 發現 {critical_count} 個關鍵問題")
+                            if warning_count > 0:
+                                print(f"⚠️ [DIAGNOSTIC] {timestamp} - 發現 {warning_count} 個警告")
+                    else:
+                        print(f"✅ [DIAGNOSTIC] {timestamp} - 健康檢查執行完成")
+
+                except Exception as e:
+                    print(f"❌ [DIAGNOSTIC] {timestamp} - 健康檢查執行失敗: {e}")
+            else:
+                print(f"⚠️ [DIAGNOSTIC] {timestamp} - 健康檢查功能不可用")
+
+        except Exception as e:
+            pass
+
+    def run_quick_diagnostic(self):
+        """運行快速診斷"""
+        try:
+            print("\n🔍 執行快速診斷...")
+            if hasattr(self, 'quick_async_check') and self.quick_async_check:
+                results = self.quick_async_check()
+
+                # 顯示簡要結果
+                if isinstance(results, dict):
+                    passed_checks = sum(1 for v in results.values() if v)
+                    total_checks = len(results)
+
+                    if passed_checks == total_checks:
+                        print("✅ 快速診斷：系統狀態良好")
+                    else:
+                        print(f"⚠️ 快速診斷：{passed_checks}/{total_checks} 項檢查通過")
+                        print("💡 建議運行完整健康檢查以獲取詳細信息")
+                else:
+                    print("✅ 快速診斷執行完成")
+            else:
+                print("❌ 快速診斷功能不可用")
+                print("💡 可能原因：診斷模組載入失敗")
+                print("💡 建議：檢查模組依賴或使用其他診斷方法")
+        except Exception as e:
+            print(f"❌ 快速診斷失敗: {e}")
+
+    def run_system_health_check(self):
+        """運行系統健康檢查"""
+        try:
+            print("\n🏥 執行系統健康檢查...")
+            if hasattr(self, 'run_health_check') and self.run_health_check:
+                health_report = self.run_health_check()
+
+                # 顯示關鍵信息
+                if isinstance(health_report, dict):
+                    score = health_report.get('overall_score', 0)
+                    alerts = health_report.get('alerts', [])
+
+                    print(f"\n📊 健康檢查完成，總分: {score}/100")
+
+                    if alerts:
+                        critical_alerts = [a for a in alerts if a.get('level') == 'critical']
+                        warning_alerts = [a for a in alerts if a.get('level') == 'warning']
+
+                        if critical_alerts:
+                            print(f"🚨 發現 {len(critical_alerts)} 個關鍵問題")
+                        if warning_alerts:
+                            print(f"⚠️ 發現 {len(warning_alerts)} 個警告")
+                    else:
+                        print("✅ 未發現問題")
+
+                    return health_report
+                else:
+                    print("✅ 健康檢查執行完成")
+            else:
+                print("❌ 健康檢查功能不可用")
+                print("💡 可能原因：系統健康監控模組載入失敗")
+                print("💡 建議：安裝psutil模組或使用簡化診斷")
+
+                # 提供簡化的健康檢查
+                self._simple_health_check()
+        except Exception as e:
+            print(f"❌ 健康檢查失敗: {e}")
+
+    def _simple_health_check(self):
+        """簡化版健康檢查（不依賴外部模組）"""
+        try:
+            print("\n🔧 執行簡化健康檢查...")
+
+            health_score = 100
+            issues = []
+
+            # 1. 檢查異步更新器
+            if hasattr(self, 'async_updater') and self.async_updater:
+                if hasattr(self.async_updater, 'stats'):
+                    stats = self.async_updater.stats
+                    total_tasks = stats.get('total_tasks', 0)
+                    failed_tasks = stats.get('failed_tasks', 0)
+
+                    if total_tasks > 0:
+                        failure_rate = (failed_tasks / total_tasks) * 100
+                        print(f"   📊 AsyncUpdater失敗率: {failure_rate:.1f}%")
+
+                        if failure_rate > 10:
+                            health_score -= 20
+                            issues.append(f"AsyncUpdater失敗率過高: {failure_rate:.1f}%")
+                        elif failure_rate > 5:
+                            health_score -= 10
+                            issues.append(f"AsyncUpdater失敗率偏高: {failure_rate:.1f}%")
+                    else:
+                        print("   📊 AsyncUpdater: 無任務記錄")
+                else:
+                    print("   ⚠️ AsyncUpdater統計信息不可用")
+                    health_score -= 5
+            else:
+                print("   ❌ AsyncUpdater不存在")
+                health_score -= 15
+                issues.append("AsyncUpdater未初始化")
+
+            # 2. 檢查數據庫連接
+            try:
+                import sqlite3
+                conn = sqlite3.connect("multi_group_strategy.db", timeout=5.0)
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+                conn.close()
+                print("   ✅ 數據庫連接正常")
+            except Exception as e:
+                print(f"   ❌ 數據庫連接失敗: {e}")
+                health_score -= 25
+                issues.append("數據庫連接問題")
+
+            # 3. 檢查風險管理器
+            if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
+                print("   ✅ 風險管理器已初始化")
+            else:
+                print("   ❌ 風險管理器未初始化")
+                health_score -= 15
+                issues.append("風險管理器未初始化")
+
+            # 4. 檢查多組策略管理器
+            if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
+                print("   ✅ 多組策略管理器已初始化")
+            else:
+                print("   ❌ 多組策略管理器未初始化")
+                health_score -= 10
+                issues.append("多組策略管理器未初始化")
+
+            # 5. 總結
+            print(f"\n📊 簡化健康檢查結果:")
+            print(f"   - 健康分數: {health_score}/100")
+
+            if health_score >= 90:
+                print("   ✅ 系統狀態優秀")
+            elif health_score >= 70:
+                print("   ⚠️ 系統狀態良好，有輕微問題")
+            elif health_score >= 50:
+                print("   ⚠️ 系統狀態一般，需要關注")
+            else:
+                print("   ❌ 系統狀態較差，需要立即處理")
+
+            if issues:
+                print(f"   🔧 發現問題:")
+                for issue in issues:
+                    print(f"      - {issue}")
+
+            return {
+                'score': health_score,
+                'issues': issues,
+                'status': 'completed'
+            }
+
+        except Exception as e:
+            print(f"❌ 簡化健康檢查失敗: {e}")
+            return {'status': 'error', 'error': str(e)}
+
+    def run_full_diagnostic_analysis(self):
+        """運行完整診斷分析"""
+        try:
+            print("\n🔬 執行完整診斷分析...")
+            if hasattr(self, 'run_full_diagnostic'):
+                diagnostic_report = self.run_full_diagnostic()
+
+                # 顯示關鍵發現
+                recommendations = diagnostic_report.get('recommendations', [])
+
+                if recommendations:
+                    critical_recs = [r for r in recommendations if r.get('priority') == 'critical']
+                    high_recs = [r for r in recommendations if r.get('priority') == 'high']
+
+                    print(f"\n📋 診斷完成，發現 {len(recommendations)} 個建議")
+
+                    if critical_recs:
+                        print(f"🚨 關鍵問題: {len(critical_recs)} 個")
+                    if high_recs:
+                        print(f"⚠️ 高優先級問題: {len(high_recs)} 個")
+                else:
+                    print("✅ 診斷完成，未發現重大問題")
+
+                return diagnostic_report
+            else:
+                print("❌ 完整診斷功能不可用")
+        except Exception as e:
+            print(f"❌ 完整診斷失敗: {e}")
 
     def _reset_daily_stats(self):
         """重置每日統計信息"""
@@ -3025,6 +3461,18 @@ class SimpleIntegratedApp:
             # 重要事件：記錄到策略日誌
             self.add_strategy_log(f"🚀 {direction} 突破進場 @{price:.0f} 時間:{time_str}")
 
+            # 🔧 新增：清除可能存在的舊平倉鎖定狀態
+            try:
+                if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
+                    if hasattr(self.multi_group_position_manager, 'simplified_tracker'):
+                        global_exit_manager = self.multi_group_position_manager.simplified_tracker.global_exit_manager
+                        # 清除可能的舊鎖定（預防性清理）
+                        for position_id in ['136', '137', '138']:  # 根據日誌中的部位ID
+                            global_exit_manager.clear_exit(position_id)
+                        print("[ENTER_POSITION] 🧹 已清除舊的平倉鎖定狀態")
+            except Exception as clear_error:
+                print(f"[ENTER_POSITION] ⚠️ 清除舊鎖定失敗: {clear_error}")
+
             # 記錄部位資訊
             self.current_position = {
                 'direction': direction,
@@ -3528,6 +3976,15 @@ class SimpleIntegratedApp:
                                                command=self.toggle_monitoring)
         self.btn_toggle_monitoring.pack(side="left", padx=5)
 
+        # 🔧 系統診斷按鈕
+        self.btn_quick_diagnostic = ttk.Button(control_row, text="🔍 快速診斷",
+                                             command=self.run_quick_diagnostic)
+        self.btn_quick_diagnostic.pack(side="left", padx=5)
+
+        self.btn_health_check = ttk.Button(control_row, text="🏥 健康檢查",
+                                         command=self.run_system_health_check)
+        self.btn_health_check.pack(side="left", padx=5)
+
         # 開發模式說明
         ttk.Label(control_row, text="(開發模式)", foreground="orange").pack(side="left", padx=2)
 
@@ -3616,6 +4073,9 @@ class SimpleIntegratedApp:
 
                 # 🎯 策略狀態監控
                 self.monitor_strategy_status()
+
+                # 🔧 運行時診斷信息顯示
+                self._show_runtime_diagnostics()
 
             except Exception as e:
                 print(f"❌ [MONITOR] 狀態監控錯誤: {e}")
@@ -4746,8 +5206,11 @@ class SimpleIntegratedApp:
                         pnl=action['pnl']
                     )
 
-                    # 更新保護性停損
-                    if action['exit_reason'] == '移動停利':
+                    # 🔧 修復：任何獲利平倉都應該觸發保護性停損更新，不只是移動停利
+                    if action['pnl'] > 0:  # 只要有獲利就觸發保護性停損
+                        if self.console_enabled:
+                            print(f"[MULTI_GROUP] 🛡️ 觸發保護性停損更新: 部位{action['position_id']} 獲利{action['pnl']:.1f}點")
+
                         self.multi_group_risk_engine.update_protective_stop_loss(
                             action['position_id'],
                             action.get('group_id', 0)

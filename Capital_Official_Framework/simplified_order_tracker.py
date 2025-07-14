@@ -261,6 +261,26 @@ class GlobalExitManager:
         """獲取平倉狀態信息"""
         return self.exit_locks.get(position_id, {})
 
+    def clear_all_exits(self):
+        """清除所有平倉狀態 - 用於新交易週期開始時"""
+        cleared_count = len(self.exit_locks)
+        self.exit_locks.clear()
+        return cleared_count
+
+    def clear_expired_exits(self, max_age_seconds: float = 300.0):
+        """清除過期的平倉鎖定 - 防止鎖定狀態累積"""
+        current_time = time.time()
+        expired_keys = []
+
+        for position_id, exit_info in self.exit_locks.items():
+            if current_time - exit_info['timestamp'] > max_age_seconds:
+                expired_keys.append(position_id)
+
+        for key in expired_keys:
+            self.exit_locks.pop(key, None)
+
+        return len(expired_keys)
+
 # 導入FIFO匹配器以保持一致性
 try:
     from fifo_order_matcher import FIFOOrderMatcher, OrderInfo as FIFOOrderInfo

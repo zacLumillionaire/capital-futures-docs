@@ -234,16 +234,18 @@ class AsyncDatabaseUpdater:
             if self.console_enabled:
                 print(f"[ASYNC_DB] ⚠️ 隊列已滿，跳過部位{position_id}平倉異步更新")
     
-    def schedule_risk_state_creation(self, position_id: int, peak_price: float, 
-                                   current_time: str, update_reason: str = "異步初始化"):
+    def schedule_risk_state_creation(self, position_id: int, peak_price: float,
+                                   current_time: str, update_category: str = "初始化",
+                                   update_message: str = "異步初始化"):
         """
         排程風險管理狀態創建（非阻塞）
-        
+
         Args:
             position_id: 部位ID
             peak_price: 峰值價格
             current_time: 當前時間
-            update_reason: 更新原因
+            update_category: 更新分類
+            update_message: 更新詳細訊息
         """
         start_time = time.time()
         
@@ -253,11 +255,12 @@ class AsyncDatabaseUpdater:
                 'position_id': position_id,
                 'peak_price': peak_price,
                 'current_time': current_time,
-                'update_reason': update_reason,
+                'update_category': update_category,
+                'update_message': update_message,
                 'updated_at': start_time
             }
             self.stats['cache_hits'] += 1
-        
+
         # 📝 排程資料庫更新
         task = UpdateTask(
             task_type='risk_state',
@@ -265,7 +268,8 @@ class AsyncDatabaseUpdater:
             data={
                 'peak_price': peak_price,
                 'current_time': current_time,
-                'update_reason': update_reason
+                'update_category': update_category,
+                'update_message': update_message
             },
             timestamp=start_time
         )
@@ -283,7 +287,8 @@ class AsyncDatabaseUpdater:
             logger.warning(f"更新隊列已滿，跳過部位{position_id}的風險狀態異步更新")
 
     def schedule_peak_update(self, position_id: int, peak_price: float,
-                           update_time: str, update_reason: str = "峰值更新"):
+                           update_time: str, update_category: str = "價格更新",
+                           update_message: str = "峰值更新"):
         """
         🚀 零風險峰值更新排程（可選功能，預設不啟用）
 
@@ -291,7 +296,8 @@ class AsyncDatabaseUpdater:
             position_id: 部位ID
             peak_price: 新峰值價格
             update_time: 更新時間
-            update_reason: 更新原因
+            update_category: 更新分類
+            update_message: 更新詳細訊息
         """
         start_time = time.time()
 
@@ -301,7 +307,8 @@ class AsyncDatabaseUpdater:
                 'position_id': position_id,
                 'peak_price': peak_price,
                 'update_time': update_time,
-                'update_reason': update_reason,
+                'update_category': update_category,
+                'update_message': update_message,
                 'updated_at': start_time
             }
             self.stats['cache_hits'] += 1
@@ -313,7 +320,8 @@ class AsyncDatabaseUpdater:
             data={
                 'peak_price': peak_price,
                 'update_time': update_time,
-                'update_reason': update_reason
+                'update_category': update_category,
+                'update_message': update_message
             },
             timestamp=start_time
         )
@@ -338,7 +346,8 @@ class AsyncDatabaseUpdater:
 
     def schedule_trailing_activation_update(self, position_id: int, trailing_activated: bool,
                                           peak_price: float, update_time: str,
-                                          update_reason: str = "移動停利啟動"):
+                                          update_category: str = "移動停利啟動",
+                                          update_message: str = "移動停利啟動"):
         """
         🚀 排程移動停利啟動更新（非阻塞，解決延遲問題）
 
@@ -347,7 +356,8 @@ class AsyncDatabaseUpdater:
             trailing_activated: 移動停利啟動狀態
             peak_price: 峰值價格
             update_time: 更新時間
-            update_reason: 更新原因
+            update_category: 更新分類
+            update_message: 更新詳細訊息
         """
         start_time = time.time()
 
@@ -362,7 +372,8 @@ class AsyncDatabaseUpdater:
                 'trailing_activated': trailing_activated,
                 'peak_price': peak_price,
                 'update_time': update_time,
-                'update_reason': update_reason,
+                'update_category': update_category,
+                'update_message': update_message,
                 'updated_at': start_time
             }
 
@@ -371,7 +382,8 @@ class AsyncDatabaseUpdater:
                 'position_id': position_id,
                 'peak_price': peak_price,
                 'update_time': update_time,
-                'update_reason': update_reason,
+                'update_category': update_category,
+                'update_message': update_message,
                 'updated_at': start_time
             }
 
@@ -385,7 +397,8 @@ class AsyncDatabaseUpdater:
                 'trailing_activated': trailing_activated,
                 'peak_price': peak_price,
                 'update_time': update_time,
-                'update_reason': update_reason
+                'update_category': update_category,
+                'update_message': update_message
             },
             timestamp=start_time
         )
@@ -409,7 +422,8 @@ class AsyncDatabaseUpdater:
 
     def schedule_protection_update(self, position_id: int, current_stop_loss: float,
                                  protection_activated: bool, update_time: str,
-                                 update_reason: str = "保護性停損更新"):
+                                 update_category: str = "保護性停損更新",
+                                 update_message: str = "保護性停損更新"):
         """
         🚀 排程保護性停損更新（非阻塞，解決延遲問題）
 
@@ -418,7 +432,8 @@ class AsyncDatabaseUpdater:
             current_stop_loss: 新停損價格
             protection_activated: 保護性停損啟動狀態
             update_time: 更新時間
-            update_reason: 更新原因
+            update_category: 更新分類
+            update_message: 更新詳細訊息
         """
         start_time = time.time()
 
@@ -433,7 +448,8 @@ class AsyncDatabaseUpdater:
                 'current_stop_loss': current_stop_loss,
                 'protection_activated': protection_activated,
                 'update_time': update_time,
-                'update_reason': update_reason,
+                'update_category': update_category,
+                'update_message': update_message,
                 'updated_at': start_time
             }
 
@@ -447,7 +463,8 @@ class AsyncDatabaseUpdater:
                 'current_stop_loss': current_stop_loss,
                 'protection_activated': protection_activated,
                 'update_time': update_time,
-                'update_reason': update_reason
+                'update_category': update_category,
+                'update_message': update_message
             },
             timestamp=start_time
         )
@@ -646,7 +663,8 @@ class AsyncDatabaseUpdater:
                         position_id=task.position_id,
                         peak_price=task.data['peak_price'],
                         current_time=task.data['current_time'],
-                        update_reason=task.data['update_reason']
+                        update_category=task.data['update_category'],
+                        update_message=task.data['update_message']
                     )
                 except Exception as create_error:
                     # 如果創建失敗（可能是重複），嘗試更新
@@ -656,7 +674,8 @@ class AsyncDatabaseUpdater:
                                 position_id=task.position_id,
                                 peak_price=task.data['peak_price'],
                                 update_time=task.data['current_time'],
-                                update_reason=f"異步更新-{task.data['update_reason']}"
+                                update_category=task.data['update_category'],
+                                update_message=f"異步更新-{task.data['update_message']}"
                             )
                             if self.console_enabled:
                                 print(f"[ASYNC_DB] 🔄 風險狀態已存在，改為更新: 部位{task.position_id}")
@@ -676,7 +695,8 @@ class AsyncDatabaseUpdater:
                     position_id=task.position_id,
                     peak_price=task.data['peak_price'],
                     update_time=task.data['update_time'],
-                    update_reason=task.data['update_reason']
+                    update_category=task.data['update_category'],
+                    update_message=task.data['update_message']
                 )
 
                 # 🔇 關閉峰值更新完成日誌（避免過多輸出）
@@ -690,7 +710,8 @@ class AsyncDatabaseUpdater:
                     trailing_activated=task.data['trailing_activated'],
                     peak_price=task.data['peak_price'],
                     update_time=task.data['update_time'],
-                    update_reason=task.data['update_reason']
+                    update_category=task.data['update_category'],
+                    update_message=task.data['update_message']
                 )
 
                 if self.console_enabled and success:
@@ -703,7 +724,8 @@ class AsyncDatabaseUpdater:
                     current_stop_loss=task.data['current_stop_loss'],
                     protection_activated=task.data['protection_activated'],
                     update_time=task.data['update_time'],
-                    update_reason=task.data['update_reason']
+                    update_category=task.data['update_category'],
+                    update_message=task.data['update_message']
                 )
 
                 if self.console_enabled and success:

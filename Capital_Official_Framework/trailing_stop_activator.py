@@ -109,8 +109,8 @@ class TrailingStopActivator:
                 cursor.execute('''
                     SELECT pr.*, sg.range_high, sg.range_low, sg.direction as group_direction
                     FROM position_records pr
-                    JOIN strategy_groups sg ON pr.group_id = sg.id
-                    WHERE pr.status = 'ACTIVE' 
+                    JOIN strategy_groups sg ON pr.group_id = sg.group_id AND sg.date = date('now', 'localtime')
+                    WHERE pr.status = 'ACTIVE'
                       AND pr.trailing_activated = FALSE
                       AND pr.is_initial_stop = TRUE
                       AND pr.trailing_activation_points IS NOT NULL

@@ -367,7 +367,21 @@ class OptimizedRiskManager:
                 if self.console_enabled:
                     print(f"[OPTIMIZED_RISK] 🔒 停損被全局管理器阻止: 部位{position_id}")
                     print(f"[OPTIMIZED_RISK]   已有平倉: {existing_info.get('trigger_source', 'unknown')}")
-                return False
+
+                # 🔧 新增：檢查是否為過期鎖定，如果是則強制清除並重試
+                current_time = time.time()
+                lock_time = existing_info.get('timestamp', 0)
+                if current_time - lock_time > 10.0:  # 如果鎖定超過10秒，視為過期
+                    if self.console_enabled:
+                        print(f"[OPTIMIZED_RISK] 🧹 檢測到過期鎖定({current_time - lock_time:.1f}秒)，強制清除並重試")
+                    self.global_exit_manager.clear_exit(str(position_id))
+                    # 重新嘗試標記
+                    if not self.global_exit_manager.mark_exit(str(position_id), trigger_source, "initial_stop_loss"):
+                        if self.console_enabled:
+                            print(f"[OPTIMIZED_RISK] ❌ 清除後仍無法標記平倉: 部位{position_id}")
+                        return False
+                else:
+                    return False
 
             # 創建停損觸發信息
             from stop_loss_monitor import StopLossTrigger

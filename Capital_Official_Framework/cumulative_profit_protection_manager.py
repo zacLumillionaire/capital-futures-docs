@@ -25,7 +25,8 @@ class ProtectionUpdate:
     new_stop_loss: float
     cumulative_profit: float
     protection_multiplier: float
-    update_reason: str
+    update_category: str
+    update_message: str
     update_time: str
 
 class CumulativeProfitProtectionManager:
@@ -218,8 +219,9 @@ class CumulativeProfitProtectionManager:
             )
             
             if should_update:
-                update_reason = f"累積獲利{cumulative_profit:.1f}點 × {protection_multiplier}倍保護"
-                
+                update_category = "保護性停損更新"
+                update_message = f"累積獲利{cumulative_profit:.1f}點 × {protection_multiplier}倍保護"
+
                 if self.console_enabled:
                     print(f"[PROTECTION] 🛡️ 保護性停損更新:")
                     print(f"[PROTECTION]   部位ID: {position_id} (第{lot_id}口)")
@@ -230,7 +232,7 @@ class CumulativeProfitProtectionManager:
                     print(f"[PROTECTION]   累積獲利: {cumulative_profit:.1f} 點")
                     print(f"[PROTECTION]   保護倍數: {protection_multiplier}倍")
                     print(f"[PROTECTION]   改善幅度: {abs(new_stop_loss - current_stop_loss):.1f} 點")
-                
+
                 return ProtectionUpdate(
                     position_id=position_id,
                     group_id=group_id,
@@ -240,7 +242,8 @@ class CumulativeProfitProtectionManager:
                     new_stop_loss=new_stop_loss,
                     cumulative_profit=cumulative_profit,
                     protection_multiplier=protection_multiplier,
-                    update_reason=update_reason,
+                    update_category=update_category,
+                    update_message=update_message,
                     update_time=datetime.now().strftime('%H:%M:%S')
                 )
             

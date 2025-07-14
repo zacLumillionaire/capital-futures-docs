@@ -207,7 +207,7 @@ class MultiGroupPositionManager:
             for lot_rule in group_config.lot_rules:
                 # 1. 先創建部位記錄（狀態為PENDING）
                 position_id = self.db_manager.create_position_record(
-                    group_id=group_db_id,
+                    group_id=group_info['group_id'],  # 🔧 修復：使用邏輯group_id而非DB_ID
                     lot_id=lot_rule.lot_id,
                     direction=group_info['direction'],
                     entry_time=actual_time,
@@ -622,7 +622,8 @@ class MultiGroupPositionManager:
                         position_id=position_id,
                         peak_price=order_info.fill_price,
                         current_time=fill_time_str,
-                        update_reason="異步成交初始化"
+                        update_category="成交初始化",
+                        update_message="異步成交初始化"
                     )
 
                     self.logger.info(f"🚀 部位{position_id}異步成交確認已排程: @{order_info.fill_price}")
@@ -641,7 +642,7 @@ class MultiGroupPositionManager:
                             position_id=position_id,
                             peak_price=order_info.fill_price,
                             current_time=order_info.fill_time.strftime('%H:%M:%S') if order_info.fill_time else '',
-                            update_reason="同步成交初始化"
+                            update_reason="成交初始化"
                         )
 
                         self.logger.info(f"✅ 部位{position_id}成交確認: @{order_info.fill_price}")
@@ -898,12 +899,13 @@ class MultiGroupPositionManager:
 
                                     try:
                                         # 🎯 立即排程風險狀態創建（非阻塞）
-                                        # 🔧 修復：使用符合資料庫約束的 update_reason
+                                        # 🔧 修復：使用符合資料庫約束的 update_category 和 update_message
                                         self.async_updater.schedule_risk_state_creation(
                                             position_id=position_id,
                                             peak_price=price,
                                             current_time=fill_time_str,
-                                            update_reason="成交初始化"
+                                            update_category="成交初始化",
+                                            update_message="同步成交初始化"
                                         )
                                     except Exception as e2:
                                         async_success_2 = False

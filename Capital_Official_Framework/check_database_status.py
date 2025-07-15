@@ -31,9 +31,9 @@ def check_database_status():
         
         # 查詢今天的策略組
         cursor.execute("""
-            SELECT id, date, group_id, direction, entry_signal_time, 
+            SELECT id AS group_pk, date, group_id AS logical_group_id, direction, entry_signal_time,
                    range_high, range_low, total_lots, status, created_at
-            FROM strategy_groups 
+            FROM strategy_groups
             WHERE date = ?
             ORDER BY group_id
         """, (today,))
@@ -46,9 +46,9 @@ def check_database_status():
             print("ID | 組別 | 方向 | 信號時間 | 區間高 | 區間低 | 口數 | 狀態 | 創建時間")
             print("-" * 80)
             
-            for group in groups:
-                print(f"{group[0]:2d} | {group[2]:4d} | {group[3]:4s} | {group[4]:8s} | "
-                      f"{group[5]:6.0f} | {group[6]:6.0f} | {group[7]:4d} | {group[8]:8s} | {group[9]}")
+            for group_record in groups:
+                print(f"{group_record[0]:2d} | {group_record[2]:4d} | {group_record[3]:4s} | {group_record[4]:8s} | "
+                      f"{group_record[5]:6.0f} | {group_record[6]:6.0f} | {group_record[7]:4d} | {group_record[8]:8s} | {group_record[9]}")
         else:
             print(f"\n✅ 今天沒有策略組記錄")
         
@@ -76,7 +76,7 @@ def check_database_status():
         
         # 檢查部位記錄
         cursor.execute("""
-            SELECT COUNT(*) FROM position_records pr
+            SELECT COUNT(*) AS position_count FROM position_records pr
             JOIN strategy_groups sg ON pr.group_id = sg.id
             WHERE sg.date = ?
         """, (today,))
@@ -86,7 +86,7 @@ def check_database_status():
         
         # 檢查風險管理狀態
         cursor.execute("""
-            SELECT COUNT(*) FROM risk_management_states rms
+            SELECT COUNT(*) AS risk_count FROM risk_management_states rms
             JOIN position_records pr ON rms.position_id = pr.id
             JOIN strategy_groups sg ON pr.group_id = sg.group_id AND sg.date = ?
         """, (today,))
@@ -121,7 +121,7 @@ def clean_today_records():
         cursor = conn.cursor()
         
         # 先查詢要刪除的記錄
-        cursor.execute("SELECT COUNT(*) FROM strategy_groups WHERE date = ?", (today,))
+        cursor.execute("SELECT COUNT(*) AS group_count FROM strategy_groups WHERE date = ?", (today,))
         count = cursor.fetchone()[0]
         
         if count == 0:
@@ -134,18 +134,18 @@ def clean_today_records():
         if confirm == 'YES':
             # 刪除相關記錄（按外鍵順序）
             cursor.execute("""
-                DELETE FROM risk_management_states 
+                DELETE FROM risk_management_states
                 WHERE position_id IN (
-                    SELECT pr.id FROM position_records pr
+                    SELECT pr.id AS position_pk FROM position_records pr
                     JOIN strategy_groups sg ON pr.group_id = sg.id
                     WHERE sg.date = ?
                 )
             """, (today,))
-            
+
             cursor.execute("""
-                DELETE FROM position_records 
+                DELETE FROM position_records
                 WHERE group_id IN (
-                    SELECT id FROM strategy_groups WHERE date = ?
+                    SELECT id AS group_pk FROM strategy_groups WHERE date = ?
                 )
             """, (today,))
             

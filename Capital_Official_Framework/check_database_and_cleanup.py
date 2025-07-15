@@ -49,8 +49,8 @@ def check_database_status():
         
         # 檢查活躍部位詳細信息
         cursor.execute('''
-            SELECT pr.id, pr.group_id, pr.lot_id, pr.direction, pr.entry_price, 
-                   pr.status, pr.order_status, sg.group_id as original_group_id,
+            SELECT pr.id AS position_pk, pr.group_id AS group_fk, pr.lot_id, pr.direction, pr.entry_price,
+                   pr.status, pr.order_status, sg.group_id as logical_group_id,
                    sg.date, pr.created_at
             FROM position_records pr
             JOIN strategy_groups sg ON pr.group_id = sg.id
@@ -63,7 +63,7 @@ def check_database_status():
         if active_positions:
             print(f"\n🔥 活躍部位詳細信息 ({len(active_positions)} 個):")
             for pos in active_positions:
-                print(f"  - 部位{pos['id']}: 組{pos['original_group_id']}, {pos['direction']}, "
+                print(f"  - 部位{pos['position_pk']}: 組{pos['logical_group_id']}, {pos['direction']}, "
                       f"@{pos['entry_price']}, 狀態:{pos['order_status']}, 日期:{pos['date']}")
         else:
             print(f"\n✅ 沒有活躍部位")
@@ -131,7 +131,7 @@ def cleanup_active_positions(active_positions):
                         pnl_amount = 0,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
-                ''', (pos['id'],))
+                ''', (pos['position_pk'],))
             
             print(f"✅ 已將 {len(active_positions)} 個部位標記為已出場")
             
@@ -145,14 +145,14 @@ def cleanup_active_positions(active_positions):
                         exit_reason = '測試數據清理',
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
-                ''', (pos['id'],))
+                ''', (pos['position_pk'],))
             
             print(f"✅ 已將 {len(active_positions)} 個部位標記為失敗")
             
         elif method == "3":
             # 直接刪除
             for pos in active_positions:
-                cursor.execute('DELETE FROM position_records WHERE id = ?', (pos['id'],))
+                cursor.execute('DELETE FROM position_records WHERE id = ?', (pos['position_pk'],))
             
             print(f"✅ 已刪除 {len(active_positions)} 個部位記錄")
             
@@ -163,9 +163,9 @@ def cleanup_active_positions(active_positions):
         
         # 清理孤立的風險管理狀態
         cursor.execute('''
-            DELETE FROM risk_management_states 
+            DELETE FROM risk_management_states
             WHERE position_id NOT IN (
-                SELECT id FROM position_records WHERE status = 'ACTIVE'
+                SELECT id AS position_pk FROM position_records WHERE status = 'ACTIVE'
             )
         ''')
         

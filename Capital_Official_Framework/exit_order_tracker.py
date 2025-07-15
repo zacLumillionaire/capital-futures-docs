@@ -284,12 +284,12 @@ class ExitOrderTracker:
             return "TM0000"
         return product.upper().strip()
     
-    def _update_position_exit_async(self, position_id: int, fill_report: ExitFillReport, exit_order: ExitOrderInfo):
+    def _update_position_exit_async(self, position_pk: int, fill_report: ExitFillReport, exit_order: ExitOrderInfo):
         """
         異步更新部位平倉狀態 - 🔧 新增：參考建倉異步更新
-        
+
         Args:
-            position_id: 部位ID
+            position_pk: 部位主鍵ID
             fill_report: 成交回報
             exit_order: 平倉訂單信息
         """
@@ -299,7 +299,7 @@ class ExitOrderTracker:
             
             # 異步更新部位狀態
             self.async_updater.schedule_position_exit_update(
-                position_id=position_id,
+                position_id=position_pk,  # 保持與async_updater參數一致
                 exit_price=fill_report.fill_price,
                 exit_time=fill_report.fill_time,
                 exit_reason='MARKET_EXIT',
@@ -308,7 +308,7 @@ class ExitOrderTracker:
             )
             
             if self.console_enabled:
-                print(f"[EXIT_TRACKER] 🚀 異步平倉更新已排程: 部位{position_id} @{fill_report.fill_price:.0f}")
+                print(f"[EXIT_TRACKER] 🚀 異步平倉更新已排程: 部位{position_pk} @{fill_report.fill_price:.0f}")
                 
         except Exception as e:
             self.logger.error(f"異步更新部位平倉狀態失敗: {e}")

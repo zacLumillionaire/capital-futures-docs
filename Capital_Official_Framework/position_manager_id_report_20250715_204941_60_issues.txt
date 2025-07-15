@@ -1,0 +1,74 @@
+=== multi_group_position_manager.py ID一致性檢測報告 ===
+
+🔍 [模糊變數] (58 個問題):
+  - L_132 (函式: _get_next_available_group_ids) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_132 (函式: _get_next_available_group_ids) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_167 (函式: execute_group_entry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_168 (函式: execute_group_entry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_170 (函式: execute_group_entry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_427 (函式: reset_daily_state) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_428 (函式: reset_daily_state) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_429 (函式: reset_daily_state) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_430 (函式: reset_daily_state) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_677 (函式: _on_simplified_retry_simple) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_697 (函式: _execute_single_retry_for_group) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_700 (函式: _execute_single_retry_for_group) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_710 (函式: _execute_single_retry_for_group) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_714 (函式: _execute_single_retry_for_group) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_726 (函式: _execute_single_retry_for_group) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_729 (函式: _execute_single_retry_for_group) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_731 (函式: _execute_single_retry_for_group) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_744 (函式: _execute_single_retry_for_group) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_746 (函式: _execute_single_retry_for_group) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_749 (函式: _execute_single_retry_for_group) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_754 (函式: _execute_single_retry_for_group) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_769 (函式: _get_group_info_for_retry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_807 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_812 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_816 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_825 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_826 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_827 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_847 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_863 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_866 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_870 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_876 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_921 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_921 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_955 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_955 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_969 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_971 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_981 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_983 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1091 (函式: _execute_group_retry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1094 (函式: _execute_group_retry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1106 (函式: _execute_group_retry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1111 (函式: _execute_group_retry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1123 (函式: _execute_group_retry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1126 (函式: _execute_group_retry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1128 (函式: _execute_group_retry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1130 (函式: _execute_group_retry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1135 (函式: _execute_group_retry) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1152 (函式: _get_group_info_by_id) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1380 (函式: _get_position_pk_by_order_id) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1381 (函式: _get_position_pk_by_order_id) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1382 (函式: _get_position_pk_by_order_id) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1399 (函式: monitor_failed_positions) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1400 (函式: monitor_failed_positions) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1401 (函式: monitor_failed_positions) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+  - L_1402 (函式: monitor_failed_positions) (類: MultiGroupPositionManager): 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+
+🔍 [SQL條件模糊] (2 個問題):
+  - L_835 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): WHERE子句使用了模糊的ID條件。建議使用更明確的欄位名稱
+  - L_850 (函式: _update_group_positions_on_fill) (類: MultiGroupPositionManager): WHERE子句使用了模糊的ID條件。建議使用更明確的欄位名稱
+
+📊 總計發現 60 個潛在問題
+
+💡 修復建議:
+1. 優先處理函式簽名模糊問題，因為這會影響API設計
+2. 其次處理模糊變數，確保代碼可讀性
+3. 最後處理SQL查詢和字典鍵問題
+4. 建議使用: group_pk, logical_group_id, position_pk, position_logical_id
+

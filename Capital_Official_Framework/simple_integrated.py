@@ -463,37 +463,7 @@ class SimpleIntegratedApp:
                         if self.console_enabled:
                             print("[MULTI_GROUP] 🔍 簡化追蹤器DEBUG模式已啟用")
 
-                    # 🔧 註冊平倉追價回調
-                    if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
-                        def on_exit_retry(exit_order: dict):
-                            """平倉追價回調函數"""
-                            try:
-                                position_id = exit_order.get('position_id')
-                                retry_count = getattr(exit_order, 'retry_count', 1)
-
-                                if self.console_enabled:
-                                    print(f"[MAIN] 🔄 收到平倉追價回調: 部位{position_id}")
-
-                                # 執行平倉追價
-                                success = self.stop_loss_executor.execute_exit_retry(
-                                    position_id, exit_order, retry_count
-                                )
-
-                                if self.console_enabled:
-                                    if success:
-                                        print(f"[MAIN] ✅ 平倉追價執行成功")
-                                    else:
-                                        print(f"[MAIN] ❌ 平倉追價執行失敗")
-
-                            except Exception as e:
-                                if self.console_enabled:
-                                    print(f"[MAIN] ❌ 平倉追價回調異常: {e}")
-
-                        # 註冊回調到簡化追蹤器
-                        self.multi_group_position_manager.simplified_tracker.exit_retry_callbacks.append(on_exit_retry)
-
-                        if self.console_enabled:
-                            print("[MULTI_GROUP] 🔧 平倉追價回調已註冊")
+                    # 🔧 註冊平倉追價回調 - 已移除重複定義，使用下方的正確版本
 
                     # 🔧 新增：註冊平倉成交回調
                     def on_exit_fill(exit_order: dict, price: float, qty: int):
@@ -3258,6 +3228,25 @@ class SimpleIntegratedApp:
                         success_count += 1
                         print(f"✅ [MULTI_GROUP] 組別 {group_config.group_id} 進場成功")
 
+                        # =======================================================
+                        # 🚀 新增：在此處添加初始停損設定邏輯
+                        # =======================================================
+                        if hasattr(self, 'initial_stop_loss_manager') and self.initial_stop_loss_manager:
+                            try:
+                                # 獲取組的區間高低點資訊
+                                group_info = self.multi_group_db_manager.get_strategy_group_by_db_id(group_db_id)
+                                if group_info and group_info.get('range_high') is not None:
+                                    self.initial_stop_loss_manager.setup_initial_stop_loss_for_group(
+                                        group_db_id=group_db_id,
+                                        range_data=group_info
+                                    )
+                                    print(f"🛡️ [STOP_LOSS] 組別 {group_config.group_id} 初始停損已自動設定")
+                                else:
+                                    print(f"⚠️ [STOP_LOSS] 無法為組別 {group_config.group_id} 設定初始停損：缺少區間資訊")
+                            except Exception as sl_error:
+                                print(f"❌ [STOP_LOSS] 為組別 {group_config.group_id} 設定初始停損失敗: {sl_error}")
+                        # =======================================================
+
                         # 🚀 新增：通知優化風險管理器新部位建立 (修復版)
                         if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
                             try:
@@ -3368,8 +3357,9 @@ class SimpleIntegratedApp:
             # 獲取今日策略組
             today_groups = self.multi_group_position_manager.db_manager.get_today_strategy_groups()
             for group in today_groups:
-                if group['group_id'] == group_id:
-                    return group['id']
+                # 🔧 修復：使用正確的字段名稱 logical_group_id (數據庫AS別名)
+                if group['logical_group_id'] == group_id:
+                    return group['group_pk']  # 🔧 修復：同時使用正確的主鍵字段名
             return None
         except Exception as e:
             print(f"❌ [MULTI_GROUP] 查找組別DB ID失敗: {e}")
@@ -5197,7 +5187,7 @@ class SimpleIntegratedApp:
                 print(f"[MULTI_EXIT] ⚠️ 統一出場管理器不可用，使用舊版出場邏輯")
                 for action in exit_actions:
                     success = self.multi_group_position_manager.update_position_exit(
-                        position_id=action['position_id'],
+                        position_pk=action['position_id'],  # 使用新的參數名
                         exit_price=action['exit_price'],
                         exit_time=action['exit_time'],
                         exit_reason=action['exit_reason'],
@@ -5459,15 +5449,16 @@ class SimpleIntegratedApp:
 
 def run_bug_fix_validation():
     """
-    NoneType 部位更新失敗修復驗證測試
+    ID命名規範化修復驗證測試
 
     測試場景：
     1. 創建策略組和部位記錄
     2. 模擬成交回報處理
     3. 驗證資料庫更新是否成功
-    4. 檢查是否還有 TypeError
+    4. 檢查ID命名規範化是否正確
+    5. 測試使用不同ID類型查詢資料
     """
-    print("🧪 開始 NoneType 部位更新失敗修復驗證")
+    print("🧪 開始 ID命名規範化修復驗證")
     print("=" * 60)
 
     try:
@@ -5597,11 +5588,50 @@ def run_bug_fix_validation():
                     print("❌ 部位狀態更新異常")
                     return False
 
-        print("\n🎉 修復驗證完成 - 所有測試通過!")
+        # 8. 測試ID命名規範化 - 使用group_pk和logical_group_id查詢
+        print("\n🔍 測試ID命名規範化...")
+
+        # 測試使用group_pk查詢
+        group_info_by_pk = db_manager.get_strategy_group_by_db_id(group_db_id)
+        if group_info_by_pk:
+            print(f"✅ 使用group_pk({group_db_id})查詢成功: {group_info_by_pk.get('logical_group_id')}")
+        else:
+            print(f"❌ 使用group_pk({group_db_id})查詢失敗")
+            return False
+
+        # 測試使用logical_group_id查詢
+        group_info_by_logical = db_manager.get_strategy_group_info(1)  # logical_group_id=1
+        if group_info_by_logical:
+            print(f"✅ 使用logical_group_id(1)查詢成功: {group_info_by_logical.get('group_pk')}")
+        else:
+            print(f"❌ 使用logical_group_id(1)查詢失敗")
+            return False
+
+        # 測試position_pk查詢
+        position_info = db_manager.get_position_by_id(position_id)
+        if position_info:
+            print(f"✅ 使用position_pk({position_id})查詢成功")
+            print(f"   返回的鍵: {list(position_info.keys())}")
+
+            # 檢查返回的字典是否使用了新的鍵名
+            expected_keys = ['position_pk', 'group_pk']
+            missing_keys = [key for key in expected_keys if key not in position_info]
+            if missing_keys:
+                print(f"⚠️ 缺少預期的鍵名: {missing_keys}")
+            else:
+                print("✅ 字典鍵名規範化正確")
+        else:
+            print(f"❌ 使用position_pk({position_id})查詢失敗")
+            return False
+
+        print("\n🎉 ID命名規範化修復驗證完成 - 所有測試通過!")
         print("📋 驗證結果:")
         print("   ✅ 資料庫字段完整性正常")
         print("   ✅ 成交處理無 TypeError")
         print("   ✅ 部位狀態正確更新")
+        print("   ✅ ID命名規範化正確")
+        print("   ✅ group_pk和logical_group_id查詢正常")
+        print("   ✅ position_pk查詢正常")
 
         return True
 

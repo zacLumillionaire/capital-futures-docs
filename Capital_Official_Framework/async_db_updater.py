@@ -838,7 +838,7 @@ class AsyncDatabaseUpdater:
             if hasattr(self.db_manager, 'update_position_exit_status'):
                 # 使用專用的平倉更新方法
                 success = self.db_manager.update_position_exit_status(
-                    position_id=task.position_id,
+                    position_id=task.position_id,  # 保持與db_manager參數一致
                     exit_price=task.data['exit_price'],
                     exit_time=task.data['exit_time'],
                     exit_reason=task.data['exit_reason'],
@@ -990,7 +990,7 @@ class AsyncDatabaseUpdater:
 
                 # 檢查是否存在移動停利記錄
                 cursor.execute('''
-                    SELECT id FROM trailing_stop_records
+                    SELECT id AS record_pk FROM trailing_stop_records
                     WHERE position_id = ? AND status = 'ACTIVE'
                 ''', (position_id,))
 

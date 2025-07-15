@@ -1,0 +1,129 @@
+--- ID Consistency Verification Report ---
+
+Scanning file: C:\Users\zacip\OneDrive\文件\my-capital-project\capital-futures-docs\Capital_Official_Framework\multi_group_position_manager.py
+  [SQL條件模糊] (2 issues):
+    - L_835: WHERE子句使用了模糊的ID條件。建議使用更明確的欄位名稱
+    - L_850: WHERE子句使用了模糊的ID條件。建議使用更明確的欄位名稱
+  [模糊變數] (113 issues):
+    - L_132: 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_132: 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_167: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_168: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_170: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_209: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_230: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_236: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_237: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_239: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_243: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_247: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_249: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_427: 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_428: 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_429: 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_430: 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_605: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_606: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_614: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_622: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_629: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_633: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_642: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_648: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_677: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_697: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_700: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_710: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_714: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_726: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_729: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_731: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_744: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_746: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_749: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_754: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_769: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_807: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_812: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_816: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_825: 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_826: 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_827: 發現潛在的模糊變數 'group'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_847: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_863: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_866: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_870: 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_876: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_876: 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_891: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_898: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_904: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_912: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_921: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_921: 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_921: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_925: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_928: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_932: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_938: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_947: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_955: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_955: 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_955: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_961: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_964: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_969: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_971: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_981: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_983: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1013: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1017: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1025: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1029: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1091: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1094: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1106: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1111: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1123: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1126: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1128: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1130: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1135: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1152: 發現潛在的模糊變數 'group_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1304: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1305: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1307: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1311: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1315: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1321: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1324: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1375: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1377: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1380: 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1381: 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1382: 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1399: 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1400: 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1401: 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1402: 發現潛在的模糊變數 'position'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1433: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1450: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1455: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1457: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1704: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1706: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1712: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1718: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1727: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1736: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1741: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+    - L_1743: 發現潛在的模糊變數 'position_id'。建議使用更明確的名稱，如 group_pk, logical_group_id, position_pk, position_logical_id
+
+Found 115 potential issues across 1 files.
+
+📋 Recommendations:
+1. 重構前運行：執行此腳本獲取「問題清單」，作為重構的目標
+2. 重構後運行：再次執行腳本，如果報告為空則證明重構成功且完整
+3. 優先處理：函式簽名模糊 > 模糊變數 > SQL查詢不規範 > 模糊字典鍵
+4. 建議命名：使用 group_pk, logical_group_id, position_pk, position_logical_id
+

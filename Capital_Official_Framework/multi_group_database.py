@@ -402,7 +402,7 @@ class MultiGroupDatabaseManager:
                 if not group_exists:
                     # 檢查是否錯誤傳入了DB_ID
                     cursor.execute('''
-                        SELECT group_id FROM strategy_groups
+                        SELECT id AS group_pk, group_id AS logical_group_id FROM strategy_groups
                         WHERE id = ? AND date = ?
                     ''', (group_id, today))
 
@@ -613,15 +613,22 @@ class MultiGroupDatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT p.*, r.peak_price, r.current_stop_loss, r.trailing_activated, r.protection_activated,
+                    SELECT p.id AS position_pk, p.group_id AS group_pk, p.lot_id, p.direction, p.entry_price,
+                           p.entry_time, p.exit_price, p.exit_time, p.exit_reason, p.pnl, p.pnl_amount,
+                           p.rule_config, p.status, p.order_id, p.api_seq_no, p.order_status, p.retry_count,
+                           p.original_price, p.max_slippage_points, p.last_retry_time, p.retry_reason,
+                           p.created_at, p.updated_at,
+                           r.peak_price, r.current_stop_loss, r.trailing_activated, r.protection_activated,
                            sg.range_high, sg.range_low, sg.direction
                     FROM position_records p
                     LEFT JOIN risk_management_states r ON p.id = r.position_id
                     LEFT JOIN (
-                        SELECT * FROM strategy_groups
+                        SELECT id AS group_pk, group_id AS logical_group_id, date, direction, entry_signal_time,
+                               range_high, range_low, total_lots, status, created_at
+                        FROM strategy_groups
                         WHERE date = ?
                         ORDER BY id DESC
-                    ) sg ON p.group_id = sg.group_id
+                    ) sg ON p.group_id = sg.group_pk
                     WHERE p.group_id = ? AND p.status = 'ACTIVE'
                     ORDER BY p.lot_id
                 ''', (date.today().isoformat(), group_id))
@@ -644,15 +651,22 @@ class MultiGroupDatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT p.*, r.peak_price, r.current_stop_loss, r.trailing_activated, r.protection_activated,
+                    SELECT p.id AS position_pk, p.group_id AS group_pk, p.lot_id, p.direction, p.entry_price,
+                           p.entry_time, p.exit_price, p.exit_time, p.exit_reason, p.pnl, p.pnl_amount,
+                           p.rule_config, p.status, p.order_id, p.api_seq_no, p.order_status, p.retry_count,
+                           p.original_price, p.max_slippage_points, p.last_retry_time, p.retry_reason,
+                           p.created_at, p.updated_at,
+                           r.peak_price, r.current_stop_loss, r.trailing_activated, r.protection_activated,
                            sg.range_high, sg.range_low
                     FROM position_records p
                     LEFT JOIN risk_management_states r ON p.id = r.position_id
                     LEFT JOIN (
-                        SELECT * FROM strategy_groups
+                        SELECT id AS group_pk, group_id AS logical_group_id, date, direction, entry_signal_time,
+                               range_high, range_low, total_lots, status, created_at
+                        FROM strategy_groups
                         WHERE date = ?
                         ORDER BY id DESC
-                    ) sg ON p.group_id = sg.group_id
+                    ) sg ON p.group_id = sg.group_pk
                     WHERE p.status = 'ACTIVE'
                     ORDER BY p.group_id, p.lot_id
                 ''', (date.today().isoformat(),))
@@ -671,7 +685,9 @@ class MultiGroupDatabaseManager:
                 cursor = conn.cursor()
                 # 🔧 修復：查詢條件改為 group_id，並限制為今日記錄
                 cursor.execute('''
-                    SELECT * FROM strategy_groups
+                    SELECT id AS group_pk, group_id AS logical_group_id, date, direction, entry_signal_time,
+                           range_high, range_low, total_lots, status, created_at
+                    FROM strategy_groups
                     WHERE group_id = ? AND date = ?
                     ORDER BY id DESC LIMIT 1
                 ''', (group_id, date.today().isoformat()))
@@ -689,7 +705,9 @@ class MultiGroupDatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT * FROM strategy_groups
+                    SELECT id AS group_pk, group_id AS logical_group_id, date, direction, entry_signal_time,
+                           range_high, range_low, total_lots, status, created_at
+                    FROM strategy_groups
                     WHERE id = ?
                 ''', (db_id,))
 
@@ -790,7 +808,9 @@ class MultiGroupDatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT * FROM strategy_groups
+                    SELECT id AS group_pk, group_id AS logical_group_id, date, direction, entry_signal_time,
+                           range_high, range_low, total_lots, status, created_at
+                    FROM strategy_groups
                     WHERE date = ? AND status = 'WAITING'
                     ORDER BY group_id
                 ''', (date_str,))
@@ -811,7 +831,9 @@ class MultiGroupDatabaseManager:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT * FROM strategy_groups
+                    SELECT id AS group_pk, group_id AS logical_group_id, date, direction, entry_signal_time,
+                           range_high, range_low, total_lots, status, created_at
+                    FROM strategy_groups
                     WHERE date = ?
                     ORDER BY group_id
                 ''', (date_str,))
@@ -946,7 +968,11 @@ class MultiGroupDatabaseManager:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT * FROM position_records WHERE order_id = ?
+                    SELECT id AS position_pk, group_id AS group_pk, lot_id, direction, entry_price, entry_time,
+                           exit_price, exit_time, exit_reason, pnl, pnl_amount, rule_config, status, order_id,
+                           api_seq_no, order_status, retry_count, original_price, max_slippage_points,
+                           last_retry_time, retry_reason, created_at, updated_at
+                    FROM position_records WHERE order_id = ?
                 ''', (order_id,))
                 row = cursor.fetchone()
                 return dict(row) if row else None
@@ -1068,7 +1094,7 @@ class MultiGroupDatabaseManager:
                 conn.commit()
 
                 # 取得更新後的重試次數
-                cursor.execute('SELECT retry_count FROM position_records WHERE id = ?', (position_id,))
+                cursor.execute('SELECT retry_count AS retry_count_value FROM position_records WHERE id = ?', (position_id,))
                 row = cursor.fetchone()
                 retry_count = row[0] if row else 0
 
@@ -1103,7 +1129,11 @@ class MultiGroupDatabaseManager:
 
                 # 🔧 步驟1：查詢部位基本信息
                 cursor.execute('''
-                    SELECT * FROM position_records WHERE id = ?
+                    SELECT id AS position_pk, group_id AS group_pk, lot_id, direction, entry_price, entry_time,
+                           exit_price, exit_time, exit_reason, pnl, pnl_amount, rule_config, status, order_id,
+                           api_seq_no, order_status, retry_count, original_price, max_slippage_points,
+                           last_retry_time, retry_reason, created_at, updated_at
+                    FROM position_records WHERE id = ?
                 ''', (position_id,))
 
                 row = cursor.fetchone()
@@ -1115,7 +1145,7 @@ class MultiGroupDatabaseManager:
                 position_data = dict(zip(columns, row))
 
                 # 🔧 步驟2：查詢策略組信息（容錯處理）
-                group_id = position_data.get('group_id')
+                group_id = position_data.get('group_pk')
                 if group_id:
                     # 首先嘗試按 group_id 查詢
                     cursor.execute('''

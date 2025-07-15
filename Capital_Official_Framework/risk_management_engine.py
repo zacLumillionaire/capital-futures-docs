@@ -418,6 +418,7 @@ class RiskManagementEngine:
                     pnl = self._calculate_pnl(position, current_price)
                     exit_actions.append({
                         'position_id': position['id'],
+                        'group_id': position['group_id'],
                         'exit_price': current_price,
                         'exit_time': current_time,
                         'exit_reason': '初始停損',
@@ -434,6 +435,7 @@ class RiskManagementEngine:
                     pnl = self._calculate_pnl(position, current_price)
                     exit_actions.append({
                         'position_id': position['id'],
+                        'group_id': position['group_id'],
                         'exit_price': position['current_stop_loss'],
                         'exit_time': current_time,
                         'exit_reason': '保護性停損',
@@ -769,6 +771,7 @@ class RiskManagementEngine:
 
                         return {
                             'position_id': position['id'],
+                            'group_id': position['group_id'],
                             'exit_price': stop_price,
                             'exit_time': current_time,
                             'exit_reason': '移動停利',
@@ -784,6 +787,7 @@ class RiskManagementEngine:
 
                         return {
                             'position_id': position['id'],
+                            'group_id': position['group_id'],
                             'exit_price': stop_price,
                             'exit_time': current_time,
                             'exit_reason': '移動停利',

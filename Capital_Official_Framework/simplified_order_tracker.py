@@ -1715,15 +1715,28 @@ class SimplifiedOrderTracker:
                 print(f"[SIMPLIFIED_TRACKER] ❌ 觸發平倉成交回調失敗: {e}")
 
     def _trigger_exit_retry_callbacks(self, exit_order):
-        """觸發平倉追價回調"""
+        """觸發平倉追價回調 - 🔧 修復：傳遞正確的參數"""
         try:
             position_id = exit_order['position_id']
 
             for callback in self.exit_retry_callbacks:
-                callback(position_id, exit_order)
+                # 🔧 修復：從 exit_group 獲取正確的重試次數
+                exit_group = self.exit_groups.get(position_id)
+                if exit_group:
+                    current_lot_index = exit_group.get_current_lot_index()
+                    # 確保 individual_retry_counts 是一個字典
+                    if isinstance(exit_group.individual_retry_counts, dict):
+                        retry_count = exit_group.individual_retry_counts.get(current_lot_index, 0)
+                    else:
+                        # 如果不是字典（例如舊數據），提供一個備用值
+                        retry_count = 1
+                else:
+                    retry_count = 1  # 備用值
+
+                callback(exit_order, retry_count)  # ✅ 正確：傳遞 (exit_order, retry_count)
 
             if self.console_enabled:
-                print(f"[SIMPLIFIED_TRACKER] 🔄 觸發平倉追價: 部位{position_id}")
+                print(f"[SIMPLIFIED_TRACKER] 🔄 觸發平倉追價: 部位{position_id} 重試次數{retry_count}")
 
         except Exception as e:
             if self.console_enabled:

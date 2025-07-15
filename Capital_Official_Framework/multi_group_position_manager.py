@@ -42,7 +42,7 @@ class MultiGroupPositionManager:
         self.order_tracker = order_tracker  # UnifiedOrderTracker (舊版，保留相容性)
         self.simplified_tracker = simplified_tracker or SimplifiedOrderTracker()  # 簡化追蹤器(舊版)
         self.total_lot_manager = total_lot_manager or TotalLotManager()  # 🔧 新版總量追蹤管理器
-        self.position_order_mapping = {}    # {position_id: order_id}
+        self.position_order_mapping = {}    # {position_pk: order_id}
 
         # 🔧 新增：追價機制相關屬性
         self.retry_lock = threading.Lock()  # 重試操作鎖
@@ -127,9 +127,9 @@ class MultiGroupPositionManager:
     def _get_next_available_group_ids(self, num_groups: int) -> List[int]:
         """取得下一批可用的 group_id"""
         try:
-            # 查詢今天已存在的 group_id
+            # 查詢今天已存在的 logical_group_id
             today_groups = self.db_manager.get_today_strategy_groups()
-            existing_group_ids = [group['group_id'] for group in today_groups]
+            existing_group_ids = [strategy_group['logical_group_id'] for strategy_group in today_groups]
 
             if not existing_group_ids:
                 # 今天沒有組，從1開始
@@ -163,22 +163,22 @@ class MultiGroupPositionManager:
                 self.logger.error(f"找不到組資訊: DB_ID={group_db_id}")
                 return False
 
-            # 再用group_id查詢完整信息（包含JOIN的數據）
-            group_id = group_basic_info['group_id']
-            group_info = self.db_manager.get_strategy_group_info(group_id)
+            # 再用logical_group_id查詢完整信息（包含JOIN的數據）
+            logical_group_id = group_basic_info['logical_group_id']
+            group_info = self.db_manager.get_strategy_group_info(logical_group_id)
             if not group_info:
-                self.logger.error(f"找不到組完整資訊: group_id={group_id}, DB_ID={group_db_id}")
+                self.logger.error(f"找不到組完整資訊: logical_group_id={logical_group_id}, DB_ID={group_db_id}")
                 return False
 
-            group_config = self.strategy_config.get_group_by_id(group_info['group_id'])
+            group_config = self.strategy_config.get_group_by_id(group_info['logical_group_id'])
             if not group_config or group_config.status != GroupStatus.WAITING:
-                self.logger.warning(f"組 {group_info['group_id']} 不在等待狀態")
+                self.logger.warning(f"組 {group_info['logical_group_id']} 不在等待狀態")
                 return False
 
-            self.logger.info(f"🚀 執行組 {group_info['group_id']} 進場: {group_info['total_lots']}口 @ {actual_price}")
+            self.logger.info(f"🚀 執行組 {group_info['logical_group_id']} 進場: {group_info['total_lots']}口 @ {actual_price}")
 
             # 🔧 新增：創建總量追蹤器
-            strategy_id = f"strategy_{group_info['group_id']}_{int(time.time())}"
+            strategy_id = f"strategy_{group_info['logical_group_id']}_{int(time.time())}"
             if self.total_lot_manager:
                 success = self.total_lot_manager.create_strategy_tracker(
                     strategy_id=strategy_id,
@@ -193,7 +193,7 @@ class MultiGroupPositionManager:
             # 🔧 保留：註冊策略組到簡化追蹤器 (向後相容)
             if self.simplified_tracker:
                 self.simplified_tracker.register_strategy_group(
-                    group_id=group_info['group_id'],
+                    group_id=group_info['logical_group_id'],
                     total_lots=group_info['total_lots'],
                     direction=group_info['direction'],
                     target_price=actual_price,
@@ -201,13 +201,13 @@ class MultiGroupPositionManager:
                 )
 
             # 🔧 修復：先創建PENDING部位記錄，再執行下單
-            position_ids = []
-            order_mappings = {}  # {position_id: order_id}
+            position_pks = []
+            order_mappings = {}  # {position_pk: order_id}
 
             for lot_rule in group_config.lot_rules:
                 # 1. 先創建部位記錄（狀態為PENDING）
-                position_id = self.db_manager.create_position_record(
-                    group_id=group_info['group_id'],  # 🔧 修復：使用邏輯group_id而非DB_ID
+                position_pk = self.db_manager.create_position_record(
+                    group_id=group_info['logical_group_id'],  # 🔧 修復：使用邏輯group_id而非DB_ID
                     lot_id=lot_rule.lot_id,
                     direction=group_info['direction'],
                     entry_time=actual_time,
@@ -227,26 +227,26 @@ class MultiGroupPositionManager:
 
                     # 更新訂單資訊
                     self.db_manager.update_position_order_info(
-                        position_id=position_id,
+                        position_id=position_pk,
                         order_id=order_id,
                         api_seq_no=str(api_seq_no)
                     )
 
                     # 建立映射關係
-                    order_mappings[position_id] = order_id
-                    self.position_order_mapping[position_id] = order_id
+                    order_mappings[position_pk] = order_id
+                    self.position_order_mapping[position_pk] = order_id
 
-                    self.logger.info(f"✅ 第{lot_rule.lot_id}口下單成功: ID={position_id}, 訂單={order_id}")
+                    self.logger.info(f"✅ 第{lot_rule.lot_id}口下單成功: ID={position_pk}, 訂單={order_id}")
                 else:
                     # 下單失敗，立即標記為失敗
                     self.db_manager.mark_position_failed(
-                        position_id=position_id,
+                        position_id=position_pk,
                         failure_reason='下單失敗',
                         order_status='REJECTED'
                     )
-                    self.logger.error(f"❌ 第{lot_rule.lot_id}口下單失敗: ID={position_id}")
+                    self.logger.error(f"❌ 第{lot_rule.lot_id}口下單失敗: ID={position_pk}")
 
-                position_ids.append(position_id)
+                position_pks.append(position_pk)
 
             # 4. 設置成交確認回調（如果有成功的訂單）
             if order_mappings:
@@ -264,13 +264,13 @@ class MultiGroupPositionManager:
                 # 記錄到活躍組管理
                 self.active_groups[group_db_id] = {
                     'config': group_config,
-                    'position_ids': position_ids,
+                    'position_pks': position_pks,
                     'entry_price': actual_price,
                     'entry_time': actual_time,
                     'direction': group_info['direction']
                 }
 
-                self.logger.info(f"✅ 組 {group_info['group_id']} 進場完成: {len(order_mappings)}/{len(position_ids)}口成功")
+                self.logger.info(f"✅ 組 {group_info['logical_group_id']} 進場完成: {len(order_mappings)}/{len(position_pks)}口成功")
 
                 # 🔧 新增：更新總量追蹤器的已送出口數
                 if self.total_lot_manager and 'strategy_id' in locals():
@@ -286,13 +286,13 @@ class MultiGroupPositionManager:
                 if self.simplified_tracker:
                     try:
                         self.simplified_tracker.update_submitted_lots(
-                            group_id=group_info['group_id'],
+                            group_id=group_info['logical_group_id'],
                             lots=len(order_mappings)
                         )
                     except Exception as e:
                         self.logger.error(f"更新簡化追蹤器已送出口數失敗: {e}")
             else:
-                self.logger.error(f"❌ 組 {group_info['group_id']} 進場失敗: 所有訂單都失敗")
+                self.logger.error(f"❌ 組 {group_info['logical_group_id']} 進場失敗: 所有訂單都失敗")
                 return False
 
             return True
@@ -306,7 +306,7 @@ class MultiGroupPositionManager:
         try:
             waiting_groups = self.db_manager.get_today_waiting_groups()
             if waiting_groups:
-                return waiting_groups[0]['id']  # 返回第一個等待的組
+                return waiting_groups[0]['group_pk']  # 返回第一個等待的組
             return None
         except Exception as e:
             self.logger.error(f"查詢可用組失敗: {e}")
@@ -328,22 +328,22 @@ class MultiGroupPositionManager:
             self.logger.error(f"查詢組活躍部位失敗: {e}")
             return []
     
-    def update_position_exit(self, position_id: int, exit_price: float, 
+    def update_position_exit(self, position_pk: int, exit_price: float,
                            exit_time: str, exit_reason: str, pnl: float) -> bool:
         """更新部位出場"""
         try:
             self.db_manager.update_position_exit(
-                position_id=position_id,
+                position_id=position_pk,  # 保持與資料庫管理器參數一致
                 exit_price=exit_price,
                 exit_time=exit_time,
                 exit_reason=exit_reason,
                 pnl=pnl
             )
             
-            self.logger.info(f"部位 {position_id} 出場: {exit_reason}, 損益={pnl:.1f}點")
-            
+            self.logger.info(f"部位 {position_pk} 出場: {exit_reason}, 損益={pnl:.1f}點")
+
             # 檢查組是否全部出場
-            self._check_group_completion(position_id)
+            self._check_group_completion(position_pk)
             
             return True
             
@@ -351,7 +351,7 @@ class MultiGroupPositionManager:
             self.logger.error(f"更新部位出場失敗: {e}")
             return False
     
-    def _check_group_completion(self, position_id: int):
+    def _check_group_completion(self, position_pk: int):
         """檢查組是否全部出場完成"""
         try:
             # 通過部位ID找到組ID
@@ -359,8 +359,8 @@ class MultiGroupPositionManager:
             group_db_id = None
             
             for pos in all_positions:
-                if pos['id'] == position_id:
-                    group_db_id = pos['group_id']
+                if pos['position_pk'] == position_pk:
+                    group_db_id = pos['group_pk']
                     break
             
             if group_db_id:
@@ -601,9 +601,9 @@ class MultiGroupPositionManager:
     def _on_order_filled(self, order_info):
         """訂單成交回調"""
         try:
-            # 根據訂單ID找到對應的部位ID
-            position_id = self._get_position_id_by_order_id(order_info.order_id)
-            if position_id:
+            # 根據訂單ID找到對應的部位主鍵ID
+            position_pk = self._get_position_pk_by_order_id(order_info.order_id)
+            if position_pk:
                 # 🚀 異步確認部位成交（解決建倉延遲問題）
                 if self.async_update_enabled and self.async_updater:
                     # 🚀 異步更新（非阻塞）
@@ -611,7 +611,7 @@ class MultiGroupPositionManager:
 
                     # 異步確認成交
                     self.async_updater.schedule_position_fill_update(
-                        position_id=position_id,
+                        position_id=position_pk,
                         fill_price=order_info.fill_price,
                         fill_time=fill_time_str,
                         order_status='FILLED'
@@ -619,18 +619,18 @@ class MultiGroupPositionManager:
 
                     # 異步初始化風險管理狀態
                     self.async_updater.schedule_risk_state_creation(
-                        position_id=position_id,
+                        position_id=position_pk,
                         peak_price=order_info.fill_price,
                         current_time=fill_time_str,
                         update_category="成交初始化",
                         update_message="異步成交初始化"
                     )
 
-                    self.logger.info(f"🚀 部位{position_id}異步成交確認已排程: @{order_info.fill_price}")
+                    self.logger.info(f"🚀 部位{position_pk}異步成交確認已排程: @{order_info.fill_price}")
                 else:
                     # 🛡️ 同步更新（備用模式）
                     success = self.db_manager.confirm_position_filled(
-                        position_id=position_id,
+                        position_id=position_pk,
                         actual_fill_price=order_info.fill_price,
                         fill_time=order_info.fill_time.strftime('%H:%M:%S') if order_info.fill_time else '',
                         order_status='FILLED'
@@ -639,38 +639,38 @@ class MultiGroupPositionManager:
                     if success:
                         # 初始化風險管理狀態（成交後才初始化）
                         self.db_manager.create_risk_management_state(
-                            position_id=position_id,
+                            position_id=position_pk,
                             peak_price=order_info.fill_price,
                             current_time=order_info.fill_time.strftime('%H:%M:%S') if order_info.fill_time else '',
                             update_reason="成交初始化"
                         )
 
-                        self.logger.info(f"✅ 部位{position_id}成交確認: @{order_info.fill_price}")
+                        self.logger.info(f"✅ 部位{position_pk}成交確認: @{order_info.fill_price}")
 
         except Exception as e:
             self.logger.error(f"處理成交回調失敗: {e}")
 
-    def _on_simplified_fill(self, group_id: int, price: float, qty: int,
+    def _on_simplified_fill(self, logical_group_id: int, price: float, qty: int,
                           filled_lots: int, total_lots: int):
         """簡化追蹤器成交回調"""
         try:
             # 更新資料庫中該組的部位狀態
-            self._update_group_positions_on_fill(group_id, price, qty, filled_lots, total_lots)
+            self._update_group_positions_on_fill(logical_group_id, price, qty, filled_lots, total_lots)
 
-            self.logger.info(f"✅ [簡化追蹤] 組{group_id}成交: {qty}口 @{price}, "
+            self.logger.info(f"✅ [簡化追蹤] 組{logical_group_id}成交: {qty}口 @{price}, "
                            f"進度: {filled_lots}/{total_lots}")
 
             # 如果組完全成交，觸發完成處理
             if filled_lots >= total_lots:
-                self._on_group_complete(group_id)
+                self._on_group_complete(logical_group_id)
 
         except Exception as e:
             self.logger.error(f"處理簡化成交回調失敗: {e}")
 
-    def _on_simplified_retry_simple(self, group_id: int, qty: int, price: float, retry_count: int):
+    def _on_simplified_retry_simple(self, logical_group_id: int, qty: int, price: float, retry_count: int):
         """簡化版追價回調 - 避免重複下單"""
         try:
-            self.logger.info(f"🔄 [簡化追蹤] 組{group_id}觸發追價: {qty}口 @{price}, "
+            self.logger.info(f"🔄 [簡化追蹤] 組{logical_group_id}觸發追價: {qty}口 @{price}, "
                            f"第{retry_count}次重試")
 
             # 🔧 簡化版：只執行單一追價，不重複
@@ -679,13 +679,13 @@ class MultiGroupPositionManager:
         except Exception as e:
             self.logger.error(f"處理簡化追價回調失敗: {e}")
 
-    def _execute_single_retry_for_group(self, group_id: int, qty: int, retry_count: int):
+    def _execute_single_retry_for_group(self, logical_group_id: int, qty: int, retry_count: int):
         """為特定組執行單一追價 - 避免重複下單"""
         try:
             # 獲取組信息
-            group_info = self._get_group_info_for_retry(group_id)
+            group_info = self._get_group_info_for_retry(logical_group_id)
             if not group_info:
-                self.logger.error(f"無法獲取組{group_id}信息")
+                self.logger.error(f"無法獲取組{logical_group_id}信息")
                 return
 
             direction = group_info.get('direction')
@@ -753,16 +753,16 @@ class MultiGroupPositionManager:
         except Exception as e:
             self.logger.error(f"執行組{group_id}單一追價失敗: {e}")
 
-    def _get_group_info_for_retry(self, group_id: int) -> Optional[Dict]:
+    def _get_group_info_for_retry(self, logical_group_id: int) -> Optional[Dict]:
         """獲取組信息用於追價"""
         try:
             # 🔧 修復：使用正確的資料庫方法名稱
-            group_data = self.db_manager.get_strategy_group_info(group_id)
+            group_data = self.db_manager.get_strategy_group_info(logical_group_id)
             if group_data:
                 return {
                     'direction': group_data['direction'],  # 使用字典鍵
                     'target_price': group_data.get('range_high', 0),  # 使用range_high作為目標價
-                    'group_id': group_id
+                    'logical_group_id': logical_group_id
                 }
             return None
         except Exception as e:
@@ -796,24 +796,24 @@ class MultiGroupPositionManager:
             self.logger.error(f"計算追價價格失敗: {e}")
             return None
 
-    def _update_group_positions_on_fill(self, group_id: int, price: float, qty: int,
+    def _update_group_positions_on_fill(self, logical_group_id: int, price: float, qty: int,
                                       filled_lots: int, total_lots: int):
         """更新組內部位的成交狀態"""
         try:
-            self.logger.info(f"📊 [簡化追蹤] 組{group_id}成交統計更新: "
+            self.logger.info(f"📊 [簡化追蹤] 組{logical_group_id}成交統計更新: "
                            f"{qty}口 @{price}, 總進度: {filled_lots}/{total_lots}")
 
             # 🔧 新增：防重複處理檢查
-            processing_key = f"{group_id}_{price}_{qty}_{filled_lots}"
+            processing_key = f"{logical_group_id}_{price}_{qty}_{filled_lots}"
             if not hasattr(self, '_processing_fills'):
                 self._processing_fills = set()
 
             if processing_key in self._processing_fills:
-                self.logger.warning(f"⚠️ [簡化追蹤] 組{group_id}重複處理檢測，跳過: {processing_key}")
+                self.logger.warning(f"⚠️ [簡化追蹤] 組{logical_group_id}重複處理檢測，跳過: {processing_key}")
                 return
 
             self._processing_fills.add(processing_key)
-            self.logger.info(f"🔍 [簡化追蹤] 組{group_id}開始處理: {processing_key}")
+            self.logger.info(f"🔍 [簡化追蹤] 組{logical_group_id}開始處理: {processing_key}")
 
             # 🔧 修復：實際更新資料庫部位狀態
             # 查找該組的PENDING部位並按FIFO順序確認成交
@@ -822,9 +822,9 @@ class MultiGroupPositionManager:
                 all_groups = self.db_manager.get_today_strategy_groups()
                 group_db_id = None
 
-                for group in all_groups:
-                    if group['group_id'] == group_id:
-                        group_db_id = group['id']
+                for strategy_group in all_groups:
+                    if strategy_group['logical_group_id'] == logical_group_id:
+                        group_db_id = strategy_group['group_pk']
                         break
 
                 if group_db_id:
@@ -833,7 +833,7 @@ class MultiGroupPositionManager:
                         cursor = conn.cursor()
                         # 🔧 修復：查詢order_status='PENDING'而不是status='PENDING'
                         cursor.execute('''
-                            SELECT id, lot_id, status, order_status
+                            SELECT id AS position_pk, group_id AS group_pk, lot_id, status, order_status
                             FROM position_records
                             WHERE group_id = ? AND order_status = 'PENDING'
                             ORDER BY lot_id
@@ -860,20 +860,20 @@ class MultiGroupPositionManager:
 
                             if filled_count >= total_count and total_count > 0:
                                 # 所有部位已成交，這是正常情況
-                                self.logger.info(f"✅ [簡化追蹤] 組{group_id} 所有部位已成交 ({filled_count}/{total_count})，跳過重複處理")
+                                self.logger.info(f"✅ [簡化追蹤] 組{logical_group_id} 所有部位已成交 ({filled_count}/{total_count})，跳過重複處理")
                                 return  # 直接返回，避免無意義警告
                             else:
-                                self.logger.info(f"🔍 [簡化追蹤] 組{group_id}(DB_ID:{group_db_id}) 無PENDING部位 (已成交:{filled_count}/{total_count})")
+                                self.logger.info(f"🔍 [簡化追蹤] 組{logical_group_id}(DB_ID:{group_db_id}) 無PENDING部位 (已成交:{filled_count}/{total_count})")
 
                         # 🔧 修復：確認成交，每次處理qty個部位
                         confirmed_count = 0
-                        for position in pending_positions:
+                        for position_record in pending_positions:
                             if confirmed_count >= qty:
                                 break  # 只處理本次成交的數量
 
                             # ⏰ 記錄開始時間用於性能追蹤
                             start_time = time.time()
-                            position_id = position[0]
+                            position_pk = position_record[0]
                             fill_time_str = datetime.now().strftime('%H:%M:%S')
 
                             # 🚀 延遲更新方案：優先使用異步更新（如果啟用）
@@ -888,20 +888,20 @@ class MultiGroupPositionManager:
 
                                     try:
                                         self.async_updater.schedule_position_fill_update(
-                                            position_id=position_id,
+                                            position_id=position_pk,
                                             fill_price=price,
                                             fill_time=fill_time_str,
                                             order_status='FILLED'
                                         )
                                     except Exception as e1:
                                         async_success_1 = False
-                                        self.logger.warning(f"⚠️ [異步更新] 部位{position_id}成交更新排程失敗: {e1}")
+                                        self.logger.warning(f"⚠️ [異步更新] 部位{position_pk}成交更新排程失敗: {e1}")
 
                                     try:
                                         # 🎯 立即排程風險狀態創建（非阻塞）
                                         # 🔧 修復：使用符合資料庫約束的 update_category 和 update_message
                                         self.async_updater.schedule_risk_state_creation(
-                                            position_id=position_id,
+                                            position_id=position_pk,
                                             peak_price=price,
                                             current_time=fill_time_str,
                                             update_category="成交初始化",
@@ -909,7 +909,7 @@ class MultiGroupPositionManager:
                                         )
                                     except Exception as e2:
                                         async_success_2 = False
-                                        self.logger.warning(f"⚠️ [異步更新] 部位{position_id}風險狀態排程失敗: {e2}")
+                                        self.logger.warning(f"⚠️ [異步更新] 部位{position_pk}風險狀態排程失敗: {e2}")
 
                                     # 📊 記錄異步更新性能
                                     async_elapsed = (time.time() - start_time) * 1000
@@ -918,24 +918,24 @@ class MultiGroupPositionManager:
                                     if async_success_1 and async_success_2:
                                         # 🔧 新增：註冊到統一移動停利計算器（如果啟用）
                                         self._register_position_to_trailing_calculator(
-                                            position_id, position, price, group_id
+                                            position_pk, position, price, group_id
                                         )
 
                                         confirmed_count += 1
-                                        self.logger.info(f"🚀 [異步更新] 部位{position_id}成交確認 @{price} (耗時:{async_elapsed:.1f}ms)")
+                                        self.logger.info(f"🚀 [異步更新] 部位{position_pk}成交確認 @{price} (耗時:{async_elapsed:.1f}ms)")
                                         continue  # 跳過同步更新
                                     else:
-                                        self.logger.warning(f"⚠️ [異步更新] 部位{position_id}部分失敗，回退到同步更新")
+                                        self.logger.warning(f"⚠️ [異步更新] 部位{position_pk}部分失敗，回退到同步更新")
                                         # 繼續執行同步更新作為備份
 
                                 except Exception as async_error:
-                                    self.logger.warning(f"⚠️ [異步更新] 部位{position_id}異步更新失敗: {async_error}，回退到同步更新")
+                                    self.logger.warning(f"⚠️ [異步更新] 部位{position_pk}異步更新失敗: {async_error}，回退到同步更新")
                                     # 繼續執行同步更新作為備份
 
                             # 🛡️ 備份方案：同步更新（保留原有邏輯）
                             sync_start_time = time.time()
                             success = self.db_manager.confirm_position_filled(
-                                position_id=position_id,
+                                position_id=position_pk,
                                 actual_fill_price=price,
                                 fill_time=fill_time_str,
                                 order_status='FILLED'
@@ -944,7 +944,7 @@ class MultiGroupPositionManager:
                             if success:
                                 # 初始化風險管理狀態
                                 self.db_manager.create_risk_management_state(
-                                    position_id=position_id,
+                                    position_id=position_pk,
                                     peak_price=price,
                                     current_time=fill_time_str,
                                     update_reason="成交初始化"
@@ -952,16 +952,16 @@ class MultiGroupPositionManager:
 
                                 # 🔧 新增：註冊到統一移動停利計算器（如果啟用）
                                 self._register_position_to_trailing_calculator(
-                                    position_id, position, price, group_id
+                                    position_pk, position, price, group_id
                                 )
 
                                 # 📊 記錄同步更新性能
                                 sync_elapsed = (time.time() - sync_start_time) * 1000
                                 confirmed_count += 1
-                                self.logger.info(f"✅ [同步更新] 部位{position_id}成交確認 @{price} (耗時:{sync_elapsed:.1f}ms)")
+                                self.logger.info(f"✅ [同步更新] 部位{position_pk}成交確認 @{price} (耗時:{sync_elapsed:.1f}ms)")
                             else:
                                 sync_elapsed = (time.time() - sync_start_time) * 1000
-                                self.logger.error(f"❌ [同步更新] 部位{position_id}成交確認失敗 (耗時:{sync_elapsed:.1f}ms)")
+                                self.logger.error(f"❌ [同步更新] 部位{position_pk}成交確認失敗 (耗時:{sync_elapsed:.1f}ms)")
 
                         # 🔧 改善：只在實際處理了部位時輸出成功信息
                         if confirmed_count > 0:
@@ -978,20 +978,20 @@ class MultiGroupPositionManager:
         finally:
             # 🔧 清理處理標記
             if hasattr(self, '_processing_fills'):
-                processing_key = f"{group_id}_{price}_{qty}_{filled_lots}"
+                processing_key = f"{logical_group_id}_{price}_{qty}_{filled_lots}"
                 self._processing_fills.discard(processing_key)
-                self.logger.info(f"🧹 [簡化追蹤] 組{group_id}處理完成，清理標記: {processing_key}")
+                self.logger.info(f"🧹 [簡化追蹤] 組{logical_group_id}處理完成，清理標記: {processing_key}")
 
-    def _register_position_to_trailing_calculator(self, position_id: int, position_data: tuple,
-                                                 fill_price: float, group_id: int):
+    def _register_position_to_trailing_calculator(self, position_pk: int, position_data: tuple,
+                                                 fill_price: float, logical_group_id: int):
         """
         註冊部位到統一移動停利計算器 - 🔧 新增：支援統一計算器架構
 
         Args:
-            position_id: 部位ID
+            position_pk: 部位主鍵ID
             position_data: 部位資料元組
             fill_price: 成交價格
-            group_id: 組ID
+            logical_group_id: 邏輯組ID
         """
         try:
             # 檢查是否有統一移動停利計算器（使用弱引用）
@@ -1010,11 +1010,11 @@ class MultiGroupPositionManager:
             lot_id = position_data[2]     # lot_id 在第3個位置
 
             # 獲取組配置以確定移動停利參數
-            group_config = self._get_group_trailing_config(group_id, lot_id)
+            group_config = self._get_group_trailing_config(logical_group_id, lot_id)
 
             # 註冊到統一移動停利計算器
             success = parent.trailing_calculator.register_position(
-                position_id=position_id,
+                position_id=position_pk,
                 direction=direction,
                 entry_price=fill_price,
                 activation_points=group_config.get('activation_points', 15.0),  # 預設15點啟動
@@ -1022,21 +1022,21 @@ class MultiGroupPositionManager:
             )
 
             if success:
-                self.logger.info(f"✅ [統一移動停利] 部位{position_id}已註冊: {direction} @{fill_price:.0f}, "
+                self.logger.info(f"✅ [統一移動停利] 部位{position_pk}已註冊: {direction} @{fill_price:.0f}, "
                                f"啟動{group_config.get('activation_points', 15):.0f}點, "
                                f"回撤{group_config.get('pullback_percent', 0.2)*100:.0f}%")
             else:
-                self.logger.warning(f"⚠️ [統一移動停利] 部位{position_id}註冊失敗")
+                self.logger.warning(f"⚠️ [統一移動停利] 部位{position_pk}註冊失敗")
 
         except Exception as e:
             self.logger.error(f"註冊部位到統一移動停利計算器失敗: {e}")
 
-    def _get_group_trailing_config(self, group_id: int, lot_id: int) -> dict:
+    def _get_group_trailing_config(self, logical_group_id: int, lot_id: int) -> dict:
         """
         獲取組的移動停利配置 - 🔧 新增：支援分層移動停利
 
         Args:
-            group_id: 組ID
+            logical_group_id: 邏輯組ID
             lot_id: 口數ID
 
         Returns:
@@ -1057,10 +1057,10 @@ class MultiGroupPositionManager:
             self.logger.error(f"獲取組移動停利配置失敗: {e}")
             return {'activation_points': 15.0, 'pullback_percent': 0.2}  # 預設配置
 
-    def _on_group_complete(self, group_id: int):
+    def _on_group_complete(self, logical_group_id: int):
         """組完成處理"""
         try:
-            self.logger.info(f"🎉 [簡化追蹤] 組{group_id}建倉完成!")
+            self.logger.info(f"🎉 [簡化追蹤] 組{logical_group_id}建倉完成!")
 
             # 可以在這裡添加組完成後的處理邏輯
             # 例如：啟動風險管理、發送通知等
@@ -1068,17 +1068,17 @@ class MultiGroupPositionManager:
         except Exception as e:
             self.logger.error(f"處理組完成失敗: {e}")
 
-    def _execute_group_retry(self, group_id: int, qty: int, price: float, retry_count: int):
+    def _execute_group_retry(self, logical_group_id: int, qty: int, price: float, retry_count: int):
         """執行組追價重試"""
         try:
-            self.logger.info(f"🔄 [簡化追蹤] 組{group_id}觸發追價重試: "
+            self.logger.info(f"🔄 [簡化追蹤] 組{logical_group_id}觸發追價重試: "
                            f"{qty}口 @{price}, 第{retry_count}次")
 
             # 🔧 實際追價下單邏輯
             # 1. 獲取組的基本信息
-            group_info = self._get_group_info_by_id(group_id)
+            group_info = self._get_group_info_by_id(logical_group_id)
             if not group_info:
-                self.logger.error(f"找不到組{group_id}的信息")
+                self.logger.error(f"找不到組{logical_group_id}的信息")
                 return
 
             direction = group_info.get('direction')
@@ -1137,16 +1137,16 @@ class MultiGroupPositionManager:
         except Exception as e:
             self.logger.error(f"執行組追價重試失敗: {e}")
 
-    def _get_group_info_by_id(self, group_id: int) -> dict:
+    def _get_group_info_by_id(self, logical_group_id: int) -> dict:
         """根據組ID獲取組信息"""
         try:
             # 🔧 修復：使用正確的資料庫方法
-            group_info = self.db_manager.get_strategy_group_info(group_id)
+            group_info = self.db_manager.get_strategy_group_info(logical_group_id)
             if group_info:
-                self.logger.info(f"🔍 [追價] 獲取組{group_id}信息: {group_info.get('direction')} @{group_info.get('range_low')}-{group_info.get('range_high')}")
+                self.logger.info(f"🔍 [追價] 獲取組{logical_group_id}信息: {group_info.get('direction')} @{group_info.get('range_low')}-{group_info.get('range_high')}")
                 return group_info
             else:
-                self.logger.warning(f"⚠️ [追價] 組{group_id}信息不存在")
+                self.logger.warning(f"⚠️ [追價] 組{logical_group_id}信息不存在")
                 return None
         except Exception as e:
             self.logger.error(f"獲取組{group_id}信息失敗: {e}")
@@ -1300,91 +1300,91 @@ class MultiGroupPositionManager:
     def _on_order_cancelled(self, order_info):
         """訂單取消回調 - 增加事件驅動追價觸發"""
         try:
-            # 根據訂單ID找到對應的部位ID
-            position_id = self._get_position_id_by_order_id(order_info.order_id)
-            if position_id:
+            # 根據訂單ID找到對應的部位主鍵ID
+            position_pk = self._get_position_pk_by_order_id(order_info.order_id)
+            if position_pk:
                 # 設定原始價格（如果還沒設定）
-                position_info = self.db_manager.get_position_by_id(position_id)
+                position_info = self.db_manager.get_position_by_id(position_pk)
                 if position_info and not position_info.get('original_price'):
                     original_price = order_info.price if hasattr(order_info, 'price') else position_info.get('entry_price')
                     if original_price:
-                        self.db_manager.set_original_price(position_id, original_price)
+                        self.db_manager.set_original_price(position_pk, original_price)
 
                 # 標記部位失敗
                 success = self.db_manager.mark_position_failed(
-                    position_id=position_id,
+                    position_id=position_pk,
                     failure_reason='FOK失敗',
                     order_status='CANCELLED'
                 )
 
                 if success:
-                    self.logger.info(f"❌ 部位{position_id}下單失敗: FOK取消")
+                    self.logger.info(f"❌ 部位{position_pk}下單失敗: FOK取消")
 
                     # 🔧 新增: 事件驅動追價觸發（避免GIL風險）
-                    self._trigger_retry_if_allowed(position_id)
+                    self._trigger_retry_if_allowed(position_pk)
 
         except Exception as e:
             self.logger.error(f"處理取消回調失敗: {e}")
 
-    def _trigger_retry_if_allowed(self, position_id: int):
+    def _trigger_retry_if_allowed(self, position_pk: int):
         """觸發追價重試（如果允許）- 事件驅動，避免GIL風險"""
         try:
             # 使用Timer延遲執行，避免立即重試
             # 這樣可以讓市場價格有時間更新
-            retry_timer = threading.Timer(2.0, self._execute_delayed_retry, args=[position_id])
+            retry_timer = threading.Timer(2.0, self._execute_delayed_retry, args=[position_pk])
             retry_timer.daemon = True  # 設為守護線程
             retry_timer.start()
 
-            self.logger.info(f"⏰ 已排程部位{position_id}的延遲追價（2秒後執行）")
+            self.logger.info(f"⏰ 已排程部位{position_pk}的延遲追價（2秒後執行）")
 
         except Exception as e:
             self.logger.error(f"觸發追價重試失敗: {e}")
 
-    def _execute_delayed_retry(self, position_id: int):
+    def _execute_delayed_retry(self, position_pk: int):
         """延遲執行追價重試 - 在獨立線程中安全執行"""
         try:
-            self.logger.info(f"🔄 開始執行部位{position_id}的延遲追價")
+            self.logger.info(f"🔄 開始執行部位{position_pk}的延遲追價")
 
             # 檢查部位是否仍然需要重試
-            position_info = self.db_manager.get_position_by_id(position_id)
+            position_info = self.db_manager.get_position_by_id(position_pk)
             if not position_info:
-                self.logger.warning(f"部位{position_id}不存在，取消追價")
+                self.logger.warning(f"部位{position_pk}不存在，取消追價")
                 return
 
             if position_info.get('status') != 'FAILED':
-                self.logger.info(f"部位{position_id}狀態已變更({position_info.get('status')})，取消追價")
+                self.logger.info(f"部位{position_pk}狀態已變更({position_info.get('status')})，取消追價")
                 return
 
             # 執行追價重試
             if self.is_retry_allowed(position_info):
-                success = self.retry_failed_position(position_id)
+                success = self.retry_failed_position(position_pk)
                 if success:
-                    self.logger.info(f"✅ 部位{position_id}延遲追價執行成功")
+                    self.logger.info(f"✅ 部位{position_pk}延遲追價執行成功")
                 else:
-                    self.logger.warning(f"⚠️ 部位{position_id}延遲追價執行失敗")
+                    self.logger.warning(f"⚠️ 部位{position_pk}延遲追價執行失敗")
             else:
-                self.logger.info(f"📋 部位{position_id}不符合追價條件，跳過")
+                self.logger.info(f"📋 部位{position_pk}不符合追價條件，跳過")
 
         except Exception as e:
             self.logger.error(f"延遲追價執行失敗: {e}")
 
-    def _get_position_id_by_order_id(self, order_id: str) -> Optional[int]:
-        """根據訂單ID查詢部位ID"""
+    def _get_position_pk_by_order_id(self, order_id: str) -> Optional[int]:
+        """根據訂單ID查詢部位主鍵ID"""
         try:
             # 從映射中查找
-            for position_id, mapped_order_id in self.position_order_mapping.items():
+            for position_pk, mapped_order_id in self.position_order_mapping.items():
                 if mapped_order_id == order_id:
-                    return position_id
+                    return position_pk
 
             # 從資料庫查找
             position = self.db_manager.get_position_by_order_id(order_id)
             if position:
-                return position['id']
+                return position['position_pk']
 
             return None
 
         except Exception as e:
-            self.logger.error(f"根據訂單ID查詢部位ID失敗: {e}")
+            self.logger.error(f"根據訂單ID查詢部位主鍵ID失敗: {e}")
             return None
 
     # 🔧 新增：追價機制核心方法
@@ -1398,25 +1398,25 @@ class MultiGroupPositionManager:
 
             for position in failed_positions:
                 if self.is_retry_allowed(position):
-                    self.logger.info(f"🔄 觸發部位{position['id']}追價重試")
-                    self.retry_failed_position(position['id'])
+                    self.logger.info(f"🔄 觸發部位{position['position_pk']}追價重試")
+                    self.retry_failed_position(position['position_pk'])
 
         except Exception as e:
             self.logger.error(f"監控失敗部位錯誤: {e}")
 
-    def retry_failed_position(self, position_id: int) -> bool:
+    def retry_failed_position(self, position_pk: int) -> bool:
         """執行單一部位的追價補單"""
         try:
             with self.retry_lock:
                 # 1. 取得部位資訊
-                position_info = self.db_manager.get_position_by_id(position_id)
+                position_info = self.db_manager.get_position_by_id(position_pk)
                 if not position_info:
-                    self.logger.error(f"找不到部位{position_id}")
+                    self.logger.error(f"找不到部位{position_pk}")
                     return False
 
                 # 2. 檢查重試條件
                 if not self.is_retry_allowed(position_info):
-                    self.logger.warning(f"部位{position_id}不符合重試條件")
+                    self.logger.warning(f"部位{position_pk}不符合重試條件")
                     return False
 
                 # 3. 計算新價格
@@ -1424,13 +1424,13 @@ class MultiGroupPositionManager:
                 new_price = self.calculate_retry_price(position_info, retry_count)
 
                 if new_price is None:
-                    self.logger.error(f"無法計算部位{position_id}的重試價格")
+                    self.logger.error(f"無法計算部位{position_pk}的重試價格")
                     return False
 
                 # 4. 檢查滑價限制
                 original_price = position_info.get('original_price') or position_info.get('entry_price')
                 if original_price and not self.validate_slippage(original_price, new_price, self.max_slippage_points):
-                    self.logger.warning(f"部位{position_id}滑價超出限制: {abs(new_price - original_price)}點")
+                    self.logger.warning(f"部位{position_pk}滑價超出限制: {abs(new_price - original_price)}點")
                     return False
 
                 # 5. 執行重試下單
@@ -1447,14 +1447,14 @@ class MultiGroupPositionManager:
                         retry_reason = f"進場追價第{retry_count}次"
 
                     self.db_manager.update_retry_info(
-                        position_id=position_id,
+                        position_id=position_pk,
                         retry_count=retry_count,
                         retry_price=new_price,
                         retry_reason=retry_reason
                     )
-                    self.logger.info(f"✅ 部位{position_id}第{retry_count}次追價成功: @{new_price}")
+                    self.logger.info(f"✅ 部位{position_pk}第{retry_count}次追價成功: @{new_price}")
                 else:
-                    self.logger.error(f"❌ 部位{position_id}第{retry_count}次追價失敗")
+                    self.logger.error(f"❌ 部位{position_pk}第{retry_count}次追價失敗")
 
                 return success
 
@@ -1589,16 +1589,16 @@ class MultiGroupPositionManager:
             # 檢查重試次數
             retry_count = position_info.get('retry_count', 0)
             if retry_count >= self.max_retry_count:
-                self.logger.info(f"部位{position_info['id']}已達最大重試次數({self.max_retry_count})")
+                self.logger.info(f"部位{position_info['position_pk']}已達最大重試次數({self.max_retry_count})")
                 return False
 
             # 檢查狀態
             if position_info.get('status') != 'FAILED':
-                self.logger.info(f"部位{position_info['id']}狀態不是FAILED")
+                self.logger.info(f"部位{position_info['position_pk']}狀態不是FAILED")
                 return False
 
             if position_info.get('order_status') != 'CANCELLED':
-                self.logger.info(f"部位{position_info['id']}訂單狀態不是CANCELLED")
+                self.logger.info(f"部位{position_info['position_pk']}訂單狀態不是CANCELLED")
                 return False
 
             # 檢查時間窗口（在資料庫查詢中已處理）
@@ -1644,7 +1644,7 @@ class MultiGroupPositionManager:
             # 執行下單
             order_result = self.order_manager.execute_strategy_order(
                 direction=direction,
-                signal_source=f"retry_{retry_count}_{position_info['id']}",
+                signal_source=f"retry_{retry_count}_{position_info['position_pk']}",
                 product=product,
                 price=retry_price,
                 quantity=quantity
@@ -1667,12 +1667,12 @@ class MultiGroupPositionManager:
                             quantity=quantity,
                             price=retry_price,
                             api_seq_no=api_seq_no,
-                            signal_source=f"retry_{retry_count}_{position_info['id']}",
+                            signal_source=f"retry_{retry_count}_{position_info['position_pk']}",
                             is_virtual=(order_result.mode == "virtual")
                         )
 
                         # 更新部位訂單映射
-                        self.position_order_mapping[position_info['id']] = order_result.order_id
+                        self.position_order_mapping[position_info['position_pk']] = order_result.order_id
 
                         self.logger.info(f"📝 重試訂單已註冊到追蹤器: {order_result.order_id} (API序號: {api_seq_no})")
 
@@ -1689,33 +1689,33 @@ class MultiGroupPositionManager:
             self.logger.error(f"執行重試下單失敗: {e}")
             return False
 
-    def execute_exit_retry(self, position_id: int) -> bool:
+    def execute_exit_retry(self, position_pk: int) -> bool:
         """
         執行出場追價
 
         Args:
-            position_id: 部位ID
+            position_pk: 部位主鍵ID
 
         Returns:
             bool: 是否成功
         """
         try:
             # 1. 取得部位資訊
-            position_info = self.db_manager.get_position_by_id(position_id)
+            position_info = self.db_manager.get_position_by_id(position_pk)
             if not position_info:
-                self.logger.error(f"找不到部位 {position_id}")
+                self.logger.error(f"找不到部位 {position_pk}")
                 return False
 
             # 2. 檢查重試條件
             retry_count = position_info.get('retry_count', 0) + 1
             if retry_count > self.max_retry_count:
-                self.logger.warning(f"部位{position_id}出場重試次數已達上限")
+                self.logger.warning(f"部位{position_pk}出場重試次數已達上限")
                 return False
 
             # 3. 計算追價價格
             new_price = self.calculate_exit_retry_price(position_info, retry_count)
             if not new_price:
-                self.logger.error(f"無法計算部位{position_id}的出場追價")
+                self.logger.error(f"無法計算部位{position_pk}的出場追價")
                 return False
 
             # 4. 檢查滑價限制
@@ -1724,7 +1724,7 @@ class MultiGroupPositionManager:
                 max_slippage = 5  # 最大滑價5點
                 actual_slippage = abs(new_price - original_price)
                 if actual_slippage > max_slippage:
-                    self.logger.warning(f"部位{position_id}出場滑價超出限制: {actual_slippage}點")
+                    self.logger.warning(f"部位{position_pk}出場滑價超出限制: {actual_slippage}點")
                     return False
 
             # 5. 執行出場重試下單
@@ -1733,14 +1733,14 @@ class MultiGroupPositionManager:
             if success:
                 # 6. 更新重試記錄
                 self.db_manager.update_retry_info(
-                    position_id=position_id,
+                    position_id=position_pk,
                     retry_count=retry_count,
                     retry_price=new_price,
                     retry_reason=f"出場追價第{retry_count}次"
                 )
-                self.logger.info(f"✅ 部位{position_id}出場第{retry_count}次追價成功: @{new_price}")
+                self.logger.info(f"✅ 部位{position_pk}出場第{retry_count}次追價成功: @{new_price}")
             else:
-                self.logger.error(f"❌ 部位{position_id}出場第{retry_count}次追價失敗")
+                self.logger.error(f"❌ 部位{position_pk}出場第{retry_count}次追價失敗")
 
             return success
 
@@ -1778,7 +1778,7 @@ class MultiGroupPositionManager:
             # 🔧 關鍵修正：使用與進場相同的下單方法
             order_result = self.order_manager.execute_strategy_order(
                 direction=exit_direction,
-                signal_source=f"exit_retry_{retry_count}_{position_info['id']}",
+                signal_source=f"exit_retry_{retry_count}_{position_info['position_pk']}",
                 product="TM0000",
                 price=price,
                 quantity=1
@@ -1803,12 +1803,12 @@ class MultiGroupPositionManager:
                             quantity=1,
                             price=price,
                             api_seq_no=api_seq_no,
-                            signal_source=f"exit_retry_{retry_count}_{position_info['id']}",
+                            signal_source=f"exit_retry_{retry_count}_{position_info['position_pk']}",
                             is_virtual=(order_result.mode == "virtual")
                         )
 
                         # 更新部位訂單映射
-                        self.position_order_mapping[position_info['id']] = order_result.order_id
+                        self.position_order_mapping[position_info['position_pk']] = order_result.order_id
 
                         self.logger.info(f"📝 出場重試訂單已註冊到追蹤器: {order_result.order_id} (API序號: {api_seq_no})")
 

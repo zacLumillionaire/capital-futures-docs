@@ -9,9 +9,9 @@ import threading
 import random
 from datetime import datetime
 
-class SimpleVirtualQuote:
-    """簡化版虛擬報價機 - 只做核心功能"""
-    
+class VirtualQuoteMachine:
+    """虛擬報價機 - 包含報價和五檔功能"""
+
     def __init__(self):
         # 報價參數
         self.base_price = 21500
@@ -19,15 +19,19 @@ class SimpleVirtualQuote:
         self.spread = 5  # 買賣價差
         self.running = False
         self.quote_thread = None
-        
+
         # 事件處理器
         self.quote_handlers = []
         self.reply_handlers = []
-        
+
         # 下單計數器
         self.order_counter = 0
-        
-        print("✅ [Virtual] 簡化版虛擬報價機初始化完成")
+
+        # 五檔設定
+        self.best5_enabled = False
+        self.price_step = 5  # 五檔價格間距
+
+        print("✅ [Virtual] 虛擬報價機初始化完成 (含五檔功能)")
     
     def register_quote_handler(self, handler):
         """註冊報價事件處理器"""
@@ -47,7 +51,7 @@ class SimpleVirtualQuote:
         self.running = True
         self.quote_thread = threading.Thread(target=self._quote_loop, daemon=True)
         self.quote_thread.start()
-        print("🚀 [Virtual] 報價推送已啟動")
+        print("🚀 [Virtual] 報價推送已啟動 (含五檔)" if self.best5_enabled else "🚀 [Virtual] 報價推送已啟動")
     
     def stop_quote_feed(self):
         """停止報價推送"""
@@ -72,22 +76,12 @@ class SimpleVirtualQuote:
                 time_hms = int(now.strftime('%H%M%S'))
                 time_ms = now.microsecond // 1000
                 
-                # 推送報價事件
-                for handler in self.quote_handlers:
-                    if hasattr(handler, 'OnNotifyTicksLONG'):
-                        handler.OnNotifyTicksLONG(
-                            1,  # sMarketNo
-                            0,  # nStockidx
-                            0,  # nPtr
-                            date,  # lDate
-                            time_hms,  # lTimehms
-                            time_ms,  # lTimemillismicros
-                            bid_price * 100,  # nBid (*100)
-                            ask_price * 100,  # nAsk (*100)
-                            self.current_price * 100,  # nClose (*100)
-                            random.randint(1, 5),  # nQty
-                            0  # nSimulate
-                        )
+                # 推送即時報價事件
+                self._dispatch_tick_event(date, time_hms, time_ms, bid_price, ask_price, self.current_price)
+
+                # 推送五檔報價事件 (如果啟用)
+                if self.best5_enabled:
+                    self._dispatch_best5_event(date, time_hms, time_ms, bid_price, ask_price)
                 
                 # 等待0.5秒
                 time.sleep(0.5)
@@ -95,7 +89,74 @@ class SimpleVirtualQuote:
             except Exception as e:
                 print(f"❌ [Virtual] 報價循環錯誤: {e}")
                 time.sleep(0.1)
-    
+
+    def _dispatch_tick_event(self, date, time_hms, time_ms, bid_price, ask_price, close_price):
+        """分發即時報價事件"""
+        for handler in self.quote_handlers:
+            if hasattr(handler, 'OnNotifyTicksLONG'):
+                try:
+                    handler.OnNotifyTicksLONG(
+                        1,  # sMarketNo
+                        0,  # nStockidx
+                        0,  # nPtr
+                        date,  # lDate
+                        time_hms,  # lTimehms
+                        time_ms,  # lTimemillismicros
+                        int(bid_price * 100),  # nBid (*100)
+                        int(ask_price * 100),  # nAsk (*100)
+                        int(close_price * 100),  # nClose (*100)
+                        random.randint(1, 5),  # nQty
+                        0  # nSimulate
+                    )
+                except Exception as e:
+                    print(f"❌ [Virtual] 報價事件處理錯誤: {e}")
+
+    def _dispatch_best5_event(self, date, time_hms, time_ms, bid_price, ask_price):
+        """分發五檔報價事件"""
+        # 生成買方五檔 (由高到低)
+        bid_prices = []
+        bid_qtys = []
+        for i in range(5):
+            price = bid_price - (i * self.price_step)
+            qty = random.randint(10, 50)
+            bid_prices.append(int(price * 100))
+            bid_qtys.append(qty)
+
+        # 生成賣方五檔 (由低到高)
+        ask_prices = []
+        ask_qtys = []
+        for i in range(5):
+            price = ask_price + (i * self.price_step)
+            qty = random.randint(10, 50)
+            ask_prices.append(int(price * 100))
+            ask_qtys.append(qty)
+
+        # 推送五檔事件
+        for handler in self.quote_handlers:
+            if hasattr(handler, 'OnNotifyBest5LONG'):
+                try:
+                    handler.OnNotifyBest5LONG(
+                        1,  # sMarketNo
+                        0,  # nStockidx
+                        0,  # nPtr
+                        date,  # lDate
+                        time_hms,  # lTimehms
+                        time_ms,  # lTimemillismicros
+                        bid_prices[0], bid_qtys[0],  # 買一價量
+                        bid_prices[1], bid_qtys[1],  # 買二價量
+                        bid_prices[2], bid_qtys[2],  # 買三價量
+                        bid_prices[3], bid_qtys[3],  # 買四價量
+                        bid_prices[4], bid_qtys[4],  # 買五價量
+                        ask_prices[0], ask_qtys[0],  # 賣一價量
+                        ask_prices[1], ask_qtys[1],  # 賣二價量
+                        ask_prices[2], ask_qtys[2],  # 賣三價量
+                        ask_prices[3], ask_qtys[3],  # 賣四價量
+                        ask_prices[4], ask_qtys[4],  # 賣五價量
+                        0  # nSimulate
+                    )
+                except Exception as e:
+                    print(f"❌ [Virtual] 五檔事件處理錯誤: {e}")
+
     def process_order(self, user_id, async_flag, order_obj):
         """處理下單請求"""
         try:
@@ -174,7 +235,7 @@ class SimpleVirtualQuote:
                 handler.OnNewData("virtual_user", reply_data)
 
 # 全域實例
-_virtual_quote = SimpleVirtualQuote()
+_virtual_quote = VirtualQuoteMachine()
 
 # 模擬群益API物件
 class MockSKCenterLib:
@@ -211,7 +272,8 @@ class MockSKQuoteLib:
         return 0
     
     def SKQuoteLib_RequestBest5LONG(self, page, product):
-        print(f"🎯 [Virtual] 模擬五檔訂閱: {product}")
+        print(f"🎯 [Virtual] 開始五檔推送: {product}")
+        _virtual_quote.best5_enabled = True
         return 0
 
 class MockSKReplyLib:
@@ -260,4 +322,4 @@ def stop_virtual_machine():
 # 模組初始化
 print("📦 [Virtual] Global 模組載入完成")
 print("🎯 [Virtual] 虛擬報價機 API 模擬器就緒")
-print("💡 [Virtual] 核心功能: 報價推送 + 下單成交模擬")
+print("💡 [Virtual] 核心功能: 報價推送 + 五檔推送 + 下單成交模擬")

@@ -67,6 +67,9 @@ class StrategyConfig:
     risk_config: RiskConfig = field(default_factory=RiskConfig)
     stop_loss_config: StopLossConfig = field(default_factory=StopLossConfig)
 
+    # === 新增進場價格模式配置 (預設使用區間邊緣，保持向後相容) ===
+    entry_price_mode: str = "range_boundary"  # "range_boundary" 或 "breakout_low"
+
 def format_config_summary(config: StrategyConfig) -> str:
     """將 StrategyConfig 物件格式化為人類易讀的摘要字串。"""
     summary_lines = [f"\n📋======= 🔄反轉策略設定摘要 (交易口數: {config.trade_size_in_lots}) =======📋"]
@@ -225,17 +228,31 @@ def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config:
             position, entry_price, entry_time, entry_candle_index = 'SHORT', candle['close_price'], candle['trade_datetime'].time(), i
             break
         elif candle['low_price'] < range_low:
-            # 原本做空的點改為做多
-            position, entry_price, entry_time, entry_candle_index = 'LONG', candle['low_price'], candle['trade_datetime'].time(), i
+            # 原本做空的點改為做多 - 根據 entry_price_mode 選擇進場價格
+            if hasattr(config, 'entry_price_mode') and config.entry_price_mode == "range_boundary":
+                # 使用區間下邊緣作為進場價格
+                entry_price = range_low
+            else:
+                # 預設或 "breakout_low" 模式：使用跌破時的最低點+5點
+                entry_price = candle['low_price'] + 5
+
+            position, entry_time, entry_candle_index = 'LONG', candle['trade_datetime'].time(), i
             break
 
     if not position: return Decimal(0), ""
 
     # 🚀 【移除舊邏輯】不再使用累積虧損檢查，改用風控停損點方式
 
-    # 🔄 【反轉策略】日誌顯示反轉後的實際進場方向
-    logger.info(f"  📈 LONG  | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))} (原策略做空點)" if position == 'LONG'
-                else f"  📉 SHORT | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))} (原策略做多點)")
+    # 🔄 【反轉策略】日誌顯示反轉後的實際進場方向和進場價格模式
+    entry_mode_desc = ""
+    if hasattr(config, 'entry_price_mode'):
+        if config.entry_price_mode == "range_boundary":
+            entry_mode_desc = " [區間邊緣進場]"
+        elif config.entry_price_mode == "breakout_low":
+            entry_mode_desc = " [最低點+5點進場]"
+
+    logger.info(f"  📈 LONG  | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))}{entry_mode_desc} (原策略做空點)" if position == 'LONG'
+                else f"  📉 SHORT | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))}{entry_mode_desc} (原策略做多點)")
 
     lots = []
     # 🎯 取得停利目標點（雖然函數名稱是 get_initial_stop_loss，但實際返回停利目標）
@@ -686,6 +703,14 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
                 logger.info(f"總損益({config.trade_size_in_lots}口): {total_pnl:.2f}")
                 logger.info(format_config_summary(config))
                 logger.info("===========================")
+                logger.info("====== 多空分析 ======")
+                logger.info(f"LONG TRADING DAYS: {long_trades}")
+                logger.info(f"LONG PNL: {long_pnl:.2f}")
+                logger.info(f"LONG WIN RATE: {long_win_rate:.2f}%")
+                logger.info(f"SHORT TRADING DAYS: {short_trades}")
+                logger.info(f"SHORT PNL: {short_pnl:.2f}")
+                logger.info(f"SHORT WIN RATE: {short_win_rate:.2f}%")
+                logger.info("=====================")
 
             # 返回結構化結果
             return {
@@ -729,6 +754,8 @@ def create_strategy_config_from_gui(gui_config):
     fixed_stop_mode = gui_config.get("fixed_stop_mode", False)
     # 🎯 檢查是否啟用每口獨立停利設定
     individual_take_profit_enabled = gui_config.get("individual_take_profit_enabled", False)
+    # 🎯 檢查進場價格模式設定
+    entry_price_mode = gui_config.get("entry_price_mode", "range_boundary")
 
     # 創建口數規則
     lot_rules = []
@@ -850,7 +877,8 @@ def create_strategy_config_from_gui(gui_config):
         lot_rules=lot_rules,
         range_filter=range_filter,
         risk_config=risk_config,
-        stop_loss_config=stop_loss_config
+        stop_loss_config=stop_loss_config,
+        entry_price_mode=entry_price_mode  # 新增進場價格模式
     )
 
     return strategy_config

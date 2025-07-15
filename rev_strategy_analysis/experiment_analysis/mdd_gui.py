@@ -72,6 +72,12 @@ HTML_TEMPLATE = """
         .recommendation-badge { background-color: #ffc107; color: #212529; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
         .mdd-value { font-weight: bold; color: #dc3545; }
         .pnl-value { font-weight: bold; color: #28a745; }
+        .entry-mode-badge { padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: bold; }
+        .entry-mode-boundary { background-color: #17a2b8; color: white; }
+        .entry-mode-breakout { background-color: #fd7e14; color: white; }
+        .radio-group { display: flex; gap: 20px; margin-top: 5px; }
+        .radio-group label { display: flex; align-items: center; font-weight: normal; margin-bottom: 0; }
+        .radio-group input[type="radio"] { margin-right: 8px; }
     </style>
 </head>
 <body>
@@ -154,6 +160,21 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
                 <button type="button" class="btn btn-info" onclick="addInterval()">➕ 新增時間區間</button>
+
+                <!-- 進場價格模式設定 -->
+                <h3>🎯 進場價格模式設定</h3>
+                <div class="form-row">
+                    <label>進場價格模式:</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="entry_price_mode" value="range_boundary" checked> 區間邊緣進場</label>
+                        <label><input type="radio" name="entry_price_mode" value="breakout_low"> 最低點+5點進場</label>
+                    </div>
+                </div>
+                <div class="help-text">
+                    <strong>進場模式說明：</strong><br>
+                    • <strong>區間邊緣進場：</strong> 當K棒跌破區間低點時，使用區間下邊緣價格進場（保守，執行確定性高）<br>
+                    • <strong>最低點+5點進場：</strong> 當K棒跌破區間低點時，使用該K棒的最低價+5點進場（避免極端價格，平衡執行風險）
+                </div>
 
                 <!-- 執行設定 -->
                 <h3>⚙️ 執行設定</h3>
@@ -243,6 +264,18 @@ HTML_TEMPLATE = """
         // 全域變數
         let statusCheckInterval = null;
 
+        // 解析進場模式的輔助函數
+        function getEntryModeFromExperimentId(experimentId) {
+            if (experimentId.includes('_BL')) {
+                return { text: '最低點+5', class: 'entry-mode-breakout' };
+            } else if (experimentId.includes('_RB')) {
+                return { text: '區間邊緣', class: 'entry-mode-boundary' };
+            } else {
+                // 預設為區間邊緣模式
+                return { text: '區間邊緣', class: 'entry-mode-boundary' };
+            }
+        }
+
         // 表單提交處理
         document.getElementById('mddForm').addEventListener('submit', function(e) {
             e.preventDefault();
@@ -296,6 +329,10 @@ HTML_TEMPLATE = """
                 }
             });
 
+            // 獲取選中的進場模式
+            const entryPriceModeRadio = document.querySelector('input[name="entry_price_mode"]:checked');
+            const entryPriceMode = entryPriceModeRadio ? entryPriceModeRadio.value : 'range_boundary';
+
             return {
                 stop_loss_ranges: {
                     lot1: parseNumberList(document.getElementById('lot1StopLoss').value),
@@ -307,7 +344,8 @@ HTML_TEMPLATE = """
                     individual: parseNumberList(document.getElementById('individualProfit').value)
                 },
                 time_intervals: timeIntervals,
-                max_workers: parseInt(document.getElementById('maxWorkers').value)
+                max_workers: parseInt(document.getElementById('maxWorkers').value),
+                entry_price_mode: entryPriceMode  // 更新為明確的進場模式選擇
             };
         }
 
@@ -529,6 +567,7 @@ HTML_TEMPLATE = """
                             <th>SHORT PNL</th>
                             <th>參數設定</th>
                             <th>策略類型</th>
+                            <th>進場模式</th>
                             <th>時間區間</th>
                         </tr>
                     </thead>
@@ -536,6 +575,9 @@ HTML_TEMPLATE = """
             `;
 
             mddTop10.forEach(item => {
+                // 解析進場模式
+                const entryMode = getEntryModeFromExperimentId(item.experiment_id || '');
+
                 html += `
                     <tr>
                         <td><strong>${item.rank}</strong></td>
@@ -545,6 +587,7 @@ HTML_TEMPLATE = """
                         <td class="pnl-value">${item.short_pnl || 0}</td>
                         <td>${item.params || ''}</td>
                         <td>${item.strategy || ''}</td>
+                        <td><span class="entry-mode-badge ${entryMode.class}">${entryMode.text}</span></td>
                         <td>${item.time || ''}</td>
                     </tr>
                 `;
@@ -577,12 +620,16 @@ HTML_TEMPLATE = """
                             <th>SHORT PNL</th>
                             <th>參數設定</th>
                             <th>策略類型</th>
+                            <th>進場模式</th>
                         </tr>
                     </thead>
                     <tbody>
             `;
 
             riskTop10.forEach(item => {
+                // 解析進場模式
+                const entryMode = getEntryModeFromExperimentId(item.experiment_id || '');
+
                 html += `
                     <tr>
                         <td><strong>${item.rank}</strong></td>
@@ -593,6 +640,7 @@ HTML_TEMPLATE = """
                         <td class="pnl-value">${item.short_pnl || 0}</td>
                         <td>${item.params || ''}</td>
                         <td>${item.strategy || ''}</td>
+                        <td><span class="entry-mode-badge ${entryMode.class}">${entryMode.text}</span></td>
                     </tr>
                 `;
             });
@@ -622,6 +670,7 @@ HTML_TEMPLATE = """
                             <th>SHORT PNL</th>
                             <th>參數設定</th>
                             <th>策略類型</th>
+                            <th>進場模式</th>
                             <th>時間區間</th>
                         </tr>
                     </thead>
@@ -629,6 +678,9 @@ HTML_TEMPLATE = """
             `;
 
             longPnlTop10.forEach(item => {
+                // 解析進場模式
+                const entryMode = getEntryModeFromExperimentId(item.experiment_id || '');
+
                 html += `
                     <tr>
                         <td><strong>${item.rank}</strong></td>
@@ -637,6 +689,7 @@ HTML_TEMPLATE = """
                         <td class="pnl-value">${item.short_pnl || 0}</td>
                         <td>${item.params || ''}</td>
                         <td>${item.strategy || ''}</td>
+                        <td><span class="entry-mode-badge ${entryMode.class}">${entryMode.text}</span></td>
                         <td>${item.time || ''}</td>
                     </tr>
                 `;
@@ -667,6 +720,7 @@ HTML_TEMPLATE = """
                             <th>LONG PNL</th>
                             <th>參數設定</th>
                             <th>策略類型</th>
+                            <th>進場模式</th>
                             <th>時間區間</th>
                         </tr>
                     </thead>
@@ -674,6 +728,9 @@ HTML_TEMPLATE = """
             `;
 
             shortPnlTop10.forEach(item => {
+                // 解析進場模式
+                const entryMode = getEntryModeFromExperimentId(item.experiment_id || '');
+
                 html += `
                     <tr>
                         <td><strong>${item.rank}</strong></td>
@@ -682,6 +739,7 @@ HTML_TEMPLATE = """
                         <td class="pnl-value">${item.long_pnl || 0}</td>
                         <td>${item.params || ''}</td>
                         <td>${item.strategy || ''}</td>
+                        <td><span class="entry-mode-badge ${entryMode.class}">${entryMode.text}</span></td>
                         <td>${item.time || ''}</td>
                     </tr>
                 `;
@@ -892,9 +950,12 @@ def create_temp_config(params):
     individual_count = len(params['take_profit_ranges']['individual'])
     time_interval_count = len(params['time_intervals'])
 
-    # 計算總組合數（停損組合 × 停利模式 × 時間區間）
+    # 計算總組合數（停損組合 × 停利模式 × 時間區間 × 進場模式）
     stop_loss_combinations = lot1_count * lot2_count * lot3_count
     take_profit_combinations = unified_count + individual_count + 1  # +1 for range_boundary
+
+    # 根據選擇的進場模式計算組合數量（現在只有一種模式，不再是倍數關係）
+    entry_mode = params.get('entry_price_mode', 'range_boundary')
     total_combinations = stop_loss_combinations * take_profit_combinations * time_interval_count
 
     return {
@@ -903,9 +964,10 @@ def create_temp_config(params):
         'take_profit_modes': ['unified_fixed', 'individual_fixed', 'range_boundary'],
         'take_profit_ranges': params['take_profit_ranges'],
         'time_intervals': [tuple(interval) for interval in params['time_intervals']],
+        'entry_price_mode': entry_mode,  # 更新為明確的進場模式選擇
         'estimated_combinations': {
             'per_interval_analysis': total_combinations,
-            'breakdown': f'{stop_loss_combinations} 停損組合 × {take_profit_combinations} 停利模式 × {time_interval_count} 時間區間 = {total_combinations} 總組合 (GUI 自定義)'
+            'breakdown': f'{stop_loss_combinations} 停損組合 × {take_profit_combinations} 停利模式 × {time_interval_count} 時間區間 = {total_combinations} 總組合 (進場模式: {entry_mode}) (GUI 自定義)'
         }
     }
 

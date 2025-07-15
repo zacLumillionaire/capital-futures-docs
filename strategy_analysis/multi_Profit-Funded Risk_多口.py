@@ -60,6 +60,9 @@ class StrategyConfig:
     fixed_stop_loss_points: Decimal = Decimal(15)
     lot_rules: list[LotRule] = field(default_factory=list)
 
+    # === 新增交易方向配置 ===
+    trading_direction: str = "BOTH"  # "LONG_ONLY", "SHORT_ONLY", "BOTH"
+
     # === 新增濾網配置 (預設不啟用，保持向後相容) ===
     range_filter: RangeFilter = field(default_factory=RangeFilter)
     risk_config: RiskConfig = field(default_factory=RiskConfig)
@@ -206,10 +209,11 @@ def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config:
     position, entry_price, entry_time, entry_candle_index = None, Decimal(0), None, -1
 
     for i, candle in enumerate(trade_candles):
-        if candle['close_price'] > range_high:
+        # 🚀 【新增】根據交易方向配置過濾信號
+        if candle['close_price'] > range_high and config.trading_direction in ["LONG_ONLY", "BOTH"]:
             position, entry_price, entry_time, entry_candle_index = 'LONG', candle['close_price'], candle['trade_datetime'].time(), i
             break
-        elif candle['low_price'] < range_low:
+        elif candle['low_price'] < range_low and config.trading_direction in ["SHORT_ONLY", "BOTH"]:
             position, entry_price, entry_time, entry_candle_index = 'SHORT', candle['close_price'], candle['trade_datetime'].time(), i
             break
 
@@ -630,6 +634,7 @@ def create_strategy_config_from_gui(gui_config):
         trade_size_in_lots=trade_lots,
         stop_loss_type=stop_loss_config.stop_loss_type,
         lot_rules=lot_rules,
+        trading_direction=gui_config.get("trading_direction", "BOTH"),  # 🚀 新增交易方向
         range_filter=range_filter,
         risk_config=risk_config,
         stop_loss_config=stop_loss_config

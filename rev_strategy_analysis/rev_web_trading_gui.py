@@ -337,6 +337,23 @@ HTML_TEMPLATE = '''
                 </div>
             </div>
 
+            <!-- 進場價格模式設定 -->
+            <div class="section">
+                <h3>🎯 進場價格模式設定</h3>
+                <div class="form-row">
+                    <label>進場價格模式:</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="entry_price_mode" value="range_boundary" checked> 區間邊緣進場</label>
+                        <label><input type="radio" name="entry_price_mode" value="breakout_low"> 最低點+5點進場</label>
+                    </div>
+                </div>
+                <div class="help-text">
+                    <strong>進場模式說明：</strong><br>
+                    • <strong>區間邊緣進場：</strong> 當K棒跌破區間低點時，使用區間下邊緣價格進場（保守，執行確定性高）<br>
+                    • <strong>最低點+5點進場：</strong> 當K棒跌破區間低點時，使用該K棒的最低價+5點進場（避免極端價格，平衡執行風險）
+                </div>
+            </div>
+
             <!-- 濾網設定 -->
             <div class="section">
                 <h3>濾網設定</h3>
@@ -855,6 +872,7 @@ def execute_backtest_thread(config_data):
             "range_end_time": config_data.get("range_end_time", "08:47"),
             "fixed_stop_mode": config_data.get("fixed_stop_mode", False),  # 🎯 新增固定停損模式
             "individual_take_profit_enabled": config_data.get("individual_take_profit_enabled", False),  # 🎯 每口停利設定
+            "entry_price_mode": config_data.get("entry_price_mode", "range_boundary"),  # 🎯 新增進場價格模式
             "lot_settings": {
                 "lot1": {
                     "trigger": config_data.get("lot1_trigger", 15),
@@ -975,7 +993,7 @@ def execute_backtest_thread(config_data):
                 # 調試：打印所有包含關鍵字的行
                 print("🔍 搜尋統計數據...")
                 for i, line in enumerate(output_lines):
-                    if any(keyword in line for keyword in ['總交易天數', '總交易次數', '獲利次數', '虧損次數', '勝率', '總損益']):
+                    if any(keyword in line for keyword in ['總交易天數', '總交易次數', '獲利次數', '虧損次數', '勝率', '總損益', 'LONG TRADING DAYS', 'LONG PNL', 'SHORT TRADING DAYS', 'SHORT PNL']):
                         print(f"第{i}行: {line}")
 
                 # 改進的統計數據提取邏輯
@@ -984,11 +1002,17 @@ def execute_backtest_thread(config_data):
 
                     # 處理不同的日誌格式，更精確地提取內容
                     clean_line = original_line
-                    if '] INFO [' in line:
-                        # 分割日誌格式: [時間] INFO [模組:行號] 內容
+                    if '] INFO [' in line and ']:' in line:
+                        # 新的日誌格式: [時間] INFO [模組:行號] 內容
+                        # 找到最後一個 ']:' 之後的內容
+                        last_bracket_pos = line.rfind(']:')
+                        if last_bracket_pos != -1:
+                            clean_line = line[last_bracket_pos + 2:].strip()
+                    elif '] INFO [' in line:
+                        # 舊的日誌格式處理
                         parts = line.split('] ')
-                        if len(parts) >= 3:  # 確保有足夠的部分
-                            clean_line = parts[2].strip()  # 取第三部分作為實際內容
+                        if len(parts) >= 3:
+                            clean_line = parts[2].strip()
 
                     # 使用更精確的匹配模式
                     if '總交易天數:' in clean_line:
@@ -1039,6 +1063,38 @@ def execute_backtest_thread(config_data):
                         except Exception as e:
                             print(f"❌ 解析總損益失敗: {e}")
                             stats['total_pnl'] = 'N/A'
+                    elif 'LONG TRADING DAYS:' in clean_line:
+                        try:
+                            value = clean_line.split('LONG TRADING DAYS:')[1].strip()
+                            stats['long_trading_days'] = value
+                            print(f"✅ 找到LONG TRADING DAYS: {value}")
+                        except Exception as e:
+                            print(f"❌ 解析LONG TRADING DAYS失敗: {e}")
+                            stats['long_trading_days'] = 'N/A'
+                    elif 'LONG PNL:' in clean_line:
+                        try:
+                            value = clean_line.split('LONG PNL:')[1].strip()
+                            stats['long_pnl'] = value
+                            print(f"✅ 找到LONG PNL: {value}")
+                        except Exception as e:
+                            print(f"❌ 解析LONG PNL失敗: {e}")
+                            stats['long_pnl'] = 'N/A'
+                    elif 'SHORT TRADING DAYS:' in clean_line:
+                        try:
+                            value = clean_line.split('SHORT TRADING DAYS:')[1].strip()
+                            stats['short_trading_days'] = value
+                            print(f"✅ 找到SHORT TRADING DAYS: {value}")
+                        except Exception as e:
+                            print(f"❌ 解析SHORT TRADING DAYS失敗: {e}")
+                            stats['short_trading_days'] = 'N/A'
+                    elif 'SHORT PNL:' in clean_line:
+                        try:
+                            value = clean_line.split('SHORT PNL:')[1].strip()
+                            stats['short_pnl'] = value
+                            print(f"✅ 找到SHORT PNL: {value}")
+                        except Exception as e:
+                            print(f"❌ 解析SHORT PNL失敗: {e}")
+                            stats['short_pnl'] = 'N/A'
 
                 # 調試：打印提取的統計數據
                 print(f"📊 提取的統計數據: {stats}")
@@ -1052,7 +1108,11 @@ def execute_backtest_thread(config_data):
                         'winning_trades': 'N/A',
                         'losing_trades': 'N/A',
                         'win_rate': 'N/A',
-                        'total_pnl': 'N/A'
+                        'total_pnl': 'N/A',
+                        'long_trading_days': 'N/A',
+                        'long_pnl': 'N/A',
+                        'short_trading_days': 'N/A',
+                        'short_pnl': 'N/A'
                     }
 
 
@@ -1122,6 +1182,26 @@ def execute_backtest_thread(config_data):
             <div class="stat-card">
                 <div class="stat-value">{stats.get('losing_trades', 'N/A')}</div>
                 <div class="stat-label">虧損次數</div>
+            </div>
+        </div>
+
+        <h2>📊 多空部位分析</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">{stats.get('long_trading_days', 'N/A')}</div>
+                <div class="stat-label">LONG 交易天數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats.get('long_pnl', 'N/A')}</div>
+                <div class="stat-label">LONG TOTAL P&L</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats.get('short_trading_days', 'N/A')}</div>
+                <div class="stat-label">SHORT 交易天數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats.get('short_pnl', 'N/A')}</div>
+                <div class="stat-label">SHORT TOTAL P&L</div>
             </div>
         </div>
 

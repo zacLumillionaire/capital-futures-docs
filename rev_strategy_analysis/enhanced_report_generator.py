@@ -150,23 +150,34 @@ def extract_trading_data_from_log(log_content: str) -> tuple:
                 if daily_data:
                     daily_data[-1]['direction'] = current_direction
 
-                # 提取進場價格 - 改進的解析邏輯
-                if '價格:' in line:
-                    # 處理格式: "價格: 22906 (原策略做空點)"
-                    price_part = line.split('價格:')[1].split('(')[0].strip()
-                    current_entry_price = int(price_part)
-                elif '時間:' in line and '價格:' in line:
-                    # 處理格式: "時間: 11:34:00, 價格: 22906"
-                    price_part = line.split('價格:')[1].split(',')[0].strip()
-                    current_entry_price = int(price_part)
-                else:
-                    # 嘗試從整行中提取數字
-                    import re
-                    price_match = re.search(r'價格:\s*(\d+)', line)
-                    if price_match:
-                        current_entry_price = int(price_match.group(1))
-                    else:
+                # 提取進場價格 - 改進的解析邏輯，處理新的進場模式標籤格式
+                import re
+                # 使用正則表達式匹配價格，忽略進場模式標籤
+                # 格式：價格: 數字 [進場模式標籤] (原策略說明) 或 價格: 數字, 時間: ...
+                price_match = re.search(r'價格:\s*(\d+)(?:\s*\[[^\]]+\])?', line)
+                if price_match:
+                    current_entry_price = int(price_match.group(1))
+                elif '價格:' in line:
+                    # 備用方案：處理舊格式
+                    try:
+                        if '(' in line:
+                            # 處理格式: "價格: 22906 (原策略做空點)"
+                            price_part = line.split('價格:')[1].split('(')[0].strip()
+                        elif ',' in line:
+                            # 處理格式: "時間: 11:34:00, 價格: 22906"
+                            price_part = line.split('價格:')[1].split(',')[0].strip()
+                        else:
+                            # 處理其他格式
+                            price_part = line.split('價格:')[1].strip()
+
+                        # 移除可能的標籤和其他文字
+                        price_part = re.sub(r'\s*\[[^\]]+\].*', '', price_part)
+                        price_part = re.sub(r'\s*\(.*', '', price_part)
+                        current_entry_price = int(price_part.strip())
+                    except:
                         current_entry_price = None
+                else:
+                    current_entry_price = None
 
                 lot_counter = 0
             except Exception as e:

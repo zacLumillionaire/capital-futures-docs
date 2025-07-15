@@ -76,44 +76,63 @@ class EnhancedMDDOptimizer:
                         for lot3_sl in config['stop_loss_ranges']['lot3']:
                             # 確保停損遞增約束
                             if lot1_sl <= lot2_sl <= lot3_sl:
-                                # 1. 區間邊緣停利
-                                combination_boundary = {
-                                    'time_interval': f"{time_interval[0]}-{time_interval[1]}",
-                                    'lot1_stop_loss': lot1_sl,
-                                    'lot2_stop_loss': lot2_sl,
-                                    'lot3_stop_loss': lot3_sl,
-                                    'take_profit_mode': 'range_boundary',
-                                    'experiment_id': f"{time_interval[0]}{time_interval[1]}_L1SL{lot1_sl}_L2SL{lot2_sl}_L3SL{lot3_sl}_RangeBoundary"
-                                }
-                                combinations.append(combination_boundary)
+                                # 定義進場模式列表
+                                # 支援新舊兩種配置格式
+                                if 'entry_price_mode' in config:
+                                    # 新格式：明確指定進場模式
+                                    entry_modes = [config['entry_price_mode']]
+                                elif config.get('enable_breakout_low', False):
+                                    # 舊格式：同時測試兩種模式
+                                    entry_modes = ['range_boundary', 'breakout_low']
+                                else:
+                                    # 預設：只使用區間邊緣進場
+                                    entry_modes = ['range_boundary']
 
-                                # 2. 統一固定停利 (每個停利點)
-                                for take_profit in config['take_profit_ranges']['unified']:
-                                    combination_fixed = {
+                                # 為每種進場模式生成組合
+                                for entry_mode in entry_modes:
+                                    entry_suffix = "_RB" if entry_mode == 'range_boundary' else "_BL"
+
+                                    # 1. 區間邊緣停利
+                                    combination_boundary = {
                                         'time_interval': f"{time_interval[0]}-{time_interval[1]}",
                                         'lot1_stop_loss': lot1_sl,
                                         'lot2_stop_loss': lot2_sl,
                                         'lot3_stop_loss': lot3_sl,
-                                        'take_profit': take_profit,
-                                        'experiment_id': f"{time_interval[0]}{time_interval[1]}_L1SL{lot1_sl}_L2SL{lot2_sl}_L3SL{lot3_sl}_TP{take_profit}"
+                                        'take_profit_mode': 'range_boundary',
+                                        'entry_price_mode': entry_mode,  # 新增進場價格模式
+                                        'experiment_id': f"{time_interval[0]}{time_interval[1]}_L1SL{lot1_sl}_L2SL{lot2_sl}_L3SL{lot3_sl}_RangeBoundary{entry_suffix}"
                                     }
-                                    combinations.append(combination_fixed)
+                                    combinations.append(combination_boundary)
 
-                                # 3. 各口獨立停利 (每口都可以有不同停利點)
-                                for lot1_tp in config['take_profit_ranges']['individual']:
-                                    for lot2_tp in config['take_profit_ranges']['individual']:
-                                        for lot3_tp in config['take_profit_ranges']['individual']:
-                                            combination_individual = {
-                                                'time_interval': f"{time_interval[0]}-{time_interval[1]}",
-                                                'lot1_stop_loss': lot1_sl,
-                                                'lot2_stop_loss': lot2_sl,
-                                                'lot3_stop_loss': lot3_sl,
-                                                'lot1_take_profit': lot1_tp,
-                                                'lot2_take_profit': lot2_tp,
-                                                'lot3_take_profit': lot3_tp,
-                                                'experiment_id': f"{time_interval[0]}{time_interval[1]}_L1SL{lot1_sl}TP{lot1_tp}_L2SL{lot2_sl}TP{lot2_tp}_L3SL{lot3_sl}TP{lot3_tp}"
-                                            }
-                                            combinations.append(combination_individual)
+                                    # 2. 統一固定停利 (每個停利點)
+                                    for take_profit in config['take_profit_ranges']['unified']:
+                                        combination_fixed = {
+                                            'time_interval': f"{time_interval[0]}-{time_interval[1]}",
+                                            'lot1_stop_loss': lot1_sl,
+                                            'lot2_stop_loss': lot2_sl,
+                                            'lot3_stop_loss': lot3_sl,
+                                            'take_profit': take_profit,
+                                            'entry_price_mode': entry_mode,  # 新增進場價格模式
+                                            'experiment_id': f"{time_interval[0]}{time_interval[1]}_L1SL{lot1_sl}_L2SL{lot2_sl}_L3SL{lot3_sl}_TP{take_profit}{entry_suffix}"
+                                        }
+                                        combinations.append(combination_fixed)
+
+                                    # 3. 各口獨立停利 (每口都可以有不同停利點)
+                                    for lot1_tp in config['take_profit_ranges']['individual']:
+                                        for lot2_tp in config['take_profit_ranges']['individual']:
+                                            for lot3_tp in config['take_profit_ranges']['individual']:
+                                                combination_individual = {
+                                                    'time_interval': f"{time_interval[0]}-{time_interval[1]}",
+                                                    'lot1_stop_loss': lot1_sl,
+                                                    'lot2_stop_loss': lot2_sl,
+                                                    'lot3_stop_loss': lot3_sl,
+                                                    'lot1_take_profit': lot1_tp,
+                                                    'lot2_take_profit': lot2_tp,
+                                                    'lot3_take_profit': lot3_tp,
+                                                    'entry_price_mode': entry_mode,  # 新增進場價格模式
+                                                    'experiment_id': f"{time_interval[0]}{time_interval[1]}_L1SL{lot1_sl}TP{lot1_tp}_L2SL{lot2_sl}TP{lot2_tp}_L3SL{lot3_sl}TP{lot3_tp}{entry_suffix}"
+                                                }
+                                                combinations.append(combination_individual)
         # 檢查是否為區間邊緣停利模式
         elif config.get('take_profit_mode') == 'range_boundary':
             # 區間邊緣停利模式 - 無需停利參數
@@ -188,6 +207,7 @@ class EnhancedMDDOptimizer:
             'trade_lots': 3,
             'fixed_stop_mode': True,
             'individual_take_profit_enabled': True,
+            'entry_price_mode': params.get('entry_price_mode', 'range_boundary'),  # 新增進場價格模式
             'lot_settings': {},
             'filters': {
                 'range_filter': {'enabled': False},

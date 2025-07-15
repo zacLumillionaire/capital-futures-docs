@@ -94,6 +94,48 @@ class OptimizedRiskManager:
         if self.console_enabled:
             print("[OPTIMIZED_RISK] 🔗 停損執行器已設置")
 
+    def invalidate_position_cache(self, position_id: str):
+        """
+        使部位緩存失效 - 用於平倉後清理緩存
+
+        Args:
+            position_id: 部位ID (字符串或整數)
+        """
+        try:
+            # 🔧 確保 position_id 為字符串格式
+            position_id_str = str(position_id)
+
+            with self.cache_lock:
+                # 🧹 安全地從各個緩存中移除部位數據
+                removed_items = []
+
+                if position_id_str in self.position_cache:
+                    self.position_cache.pop(position_id_str, None)
+                    removed_items.append("position_cache")
+
+                if position_id_str in self.stop_loss_cache:
+                    self.stop_loss_cache.pop(position_id_str, None)
+                    removed_items.append("stop_loss_cache")
+
+                if position_id_str in self.activation_cache:
+                    self.activation_cache.pop(position_id_str, None)
+                    removed_items.append("activation_cache")
+
+                if position_id_str in self.trailing_cache:
+                    self.trailing_cache.pop(position_id_str, None)
+                    removed_items.append("trailing_cache")
+
+                if self.console_enabled and removed_items:
+                    print(f"[OPTIMIZED_RISK] 🧹 緩存失效: 部位{position_id_str}")
+                    print(f"[OPTIMIZED_RISK]   清理項目: {', '.join(removed_items)}")
+                elif self.console_enabled:
+                    print(f"[OPTIMIZED_RISK] ⚠️ 緩存失效: 部位{position_id_str} 不在緩存中")
+
+        except Exception as e:
+            logger.error(f"緩存失效失敗: {e}")
+            if self.console_enabled:
+                print(f"[OPTIMIZED_RISK] ❌ 緩存失效異常: 部位{position_id}, 錯誤: {e}")
+
     def _initial_cache_load(self):
         """初始化時載入緩存"""
         try:
@@ -454,16 +496,149 @@ class OptimizedRiskManager:
             logger.error(f"啟動檢查失敗: {e}")
             return False
     
+    def _check_trailing_trigger(self, position_id: str, current_price: float,
+                              peak_price: float, entry_price: float, direction: str) -> bool:
+        """
+        檢查移動停利回撤觸發條件
+
+        Args:
+            position_id: 部位ID
+            current_price: 當前價格
+            peak_price: 峰值價格
+            entry_price: 進場價格
+            direction: 交易方向 (LONG/SHORT)
+
+        Returns:
+            bool: 是否觸發移動停利
+        """
+        try:
+            # 🔧 使用固定的20%回撤比例（與回測程式一致）
+            pullback_percent = 0.20
+
+            if direction == 'LONG':
+                # 多單：計算從峰值的回撤幅度
+                total_gain = peak_price - entry_price
+                pullback_amount = total_gain * pullback_percent
+                trailing_stop_price = peak_price - pullback_amount
+
+                # 觸發條件：當前價格 <= 停利價格
+                if current_price <= trailing_stop_price:
+                    if self.console_enabled:
+                        print(f"[OPTIMIZED_RISK] 💥 LONG移動停利觸發: {position_id}")
+                        print(f"[OPTIMIZED_RISK]   峰值:{peak_price:.0f} 進場:{entry_price:.0f} 當前:{current_price:.0f}")
+                        print(f"[OPTIMIZED_RISK]   停利價:{trailing_stop_price:.0f} 回撤:{pullback_amount:.1f}點")
+                    return True
+
+            elif direction == 'SHORT':
+                # 空單：計算從峰值的回撤幅度
+                total_gain = entry_price - peak_price
+                pullback_amount = total_gain * pullback_percent
+                trailing_stop_price = peak_price + pullback_amount
+
+                # 觸發條件：當前價格 >= 停利價格
+                if current_price >= trailing_stop_price:
+                    if self.console_enabled:
+                        print(f"[OPTIMIZED_RISK] 💥 SHORT移動停利觸發: {position_id}")
+                        print(f"[OPTIMIZED_RISK]   峰值:{peak_price:.0f} 進場:{entry_price:.0f} 當前:{current_price:.0f}")
+                        print(f"[OPTIMIZED_RISK]   停利價:{trailing_stop_price:.0f} 回撤:{pullback_amount:.1f}點")
+                    return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"移動停利觸發檢查失敗: {e}")
+            if self.console_enabled:
+                print(f"[OPTIMIZED_RISK] ❌ 移動停利觸發檢查異常: {position_id}, 錯誤: {e}")
+            return False
+
+    def _execute_trailing_stop(self, position_id: str, current_price: float, direction: str):
+        """
+        執行移動停利平倉
+
+        Args:
+            position_id: 部位ID
+            current_price: 當前觸發價格
+            direction: 交易方向 (LONG/SHORT)
+        """
+        try:
+            if not self.stop_loss_executor:
+                if self.console_enabled:
+                    print(f"[OPTIMIZED_RISK] ⚠️ 停損執行器未設置，無法執行移動停利平倉: 部位{position_id}")
+                return False
+
+            # 🔧 新增：全局平倉管理器檢查
+            trigger_source = f"optimized_risk_trailing_stop_{direction}"
+            if not self.global_exit_manager.mark_exit(str(position_id), trigger_source, "trailing_stop"):
+                existing_info = self.global_exit_manager.get_exit_info(str(position_id))
+                if self.console_enabled:
+                    print(f"[OPTIMIZED_RISK] 🔒 移動停利被全局管理器阻止: 部位{position_id}")
+                    print(f"[OPTIMIZED_RISK]   已有平倉: {existing_info.get('trigger_source', 'unknown')}")
+
+                # 🔧 新增：檢查是否為過期鎖定，如果是則強制清除並重試
+                current_time = time.time()
+                lock_time = existing_info.get('timestamp', 0)
+                if current_time - lock_time > 10.0:  # 如果鎖定超過10秒，視為過期
+                    if self.console_enabled:
+                        print(f"[OPTIMIZED_RISK] 🧹 檢測到過期鎖定({current_time - lock_time:.1f}秒)，強制清除並重試")
+                    self.global_exit_manager.clear_exit(str(position_id))
+                    # 重新嘗試標記
+                    if not self.global_exit_manager.mark_exit(str(position_id), trigger_source, "trailing_stop"):
+                        if self.console_enabled:
+                            print(f"[OPTIMIZED_RISK] ❌ 清除後仍無法標記平倉: 部位{position_id}")
+                        return False
+                else:
+                    return False
+
+            # 創建移動停利觸發信息
+            from stop_loss_monitor import StopLossTrigger
+
+            # 🔧 修復：獲取group_id信息
+            position_data = self.position_cache.get(position_id, {})
+            group_id = position_data.get('group_id', 1)  # 預設為1
+
+            # 🔧 修復：使用正確的參數名稱
+            trigger_info = StopLossTrigger(
+                position_id=int(position_id),
+                group_id=int(group_id),
+                direction=direction,
+                current_price=current_price,  # 🔧 修復：trigger_price -> current_price
+                stop_loss_price=current_price,  # 使用當前價格作為平倉價
+                trigger_time=datetime.now().strftime("%H:%M:%S"),
+                trigger_reason=f"移動停利: {direction}部位20%回撤觸發",  # ✅ 明確標識為移動停利
+                breach_amount=0.0  # 移動停利不需要突破金額
+            )
+
+            if self.console_enabled:
+                print(f"[OPTIMIZED_RISK] 🚀 執行移動停利平倉: 部位{position_id} @{current_price}")
+
+            # 執行移動停利平倉
+            execution_result = self.stop_loss_executor.execute_stop_loss(trigger_info)
+
+            if execution_result.success:
+                if self.console_enabled:
+                    print(f"[OPTIMIZED_RISK] ✅ 移動停利平倉成功: 部位{position_id}, 訂單{execution_result.order_id}")
+                return True
+            else:
+                if self.console_enabled:
+                    print(f"[OPTIMIZED_RISK] ❌ 移動停利平倉失敗: 部位{position_id}, 錯誤: {execution_result.error_message}")
+                return False
+
+        except Exception as e:
+            logger.error(f"執行移動停利平倉失敗: {e}")
+            if self.console_enabled:
+                print(f"[OPTIMIZED_RISK] ❌ 執行移動停利平倉異常: 部位{position_id}, 錯誤: {e}")
+            return False
+
     def _update_trailing_stop(self, position_id: str, current_price: float) -> bool:
         """更新移動停利 - 純內存比較"""
         try:
             trailing_data = self.trailing_cache.get(position_id)
             if not trailing_data or not trailing_data.get('activated'):
                 return False
-            
+
             direction = trailing_data.get('direction')
             current_peak = trailing_data.get('peak_price')
-            
+
             # 📈 更新峰值價格
             peak_updated = False
             if direction == 'LONG' and current_price > current_peak:
@@ -472,9 +647,22 @@ class OptimizedRiskManager:
             elif direction == 'SHORT' and current_price < current_peak:
                 trailing_data['peak_price'] = current_price
                 peak_updated = True
-            
+
+            # 🔧 新增：檢查回撤觸發
+            if trailing_data.get('activated'):
+                position_data = self.position_cache.get(position_id, {})
+                entry_price = position_data.get('entry_price')
+                peak_price = trailing_data.get('peak_price')
+
+                if entry_price and peak_price:
+                    # 檢查是否觸發移動停利
+                    if self._check_trailing_trigger(position_id, current_price, peak_price, entry_price, direction):
+                        # 執行移動停利平倉
+                        self._execute_trailing_stop(position_id, current_price, direction)
+                        return True
+
             return peak_updated
-            
+
         except Exception as e:
             logger.error(f"移動停利更新失敗: {e}")
             return False

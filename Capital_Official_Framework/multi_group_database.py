@@ -384,7 +384,8 @@ class MultiGroupDatabaseManager:
     def create_position_record(self, group_id: int, lot_id: int, direction: str,
                              entry_price: Optional[float] = None, entry_time: Optional[str] = None,
                              rule_config: Optional[str] = None, order_id: Optional[str] = None,
-                             api_seq_no: Optional[str] = None, order_status: str = 'PENDING') -> int:
+                             api_seq_no: Optional[str] = None, order_status: str = 'PENDING',
+                             retry_count: int = 0, max_slippage_points: int = 5) -> int:
         """創建部位記錄 - 支援訂單追蹤，包含group_id驗證"""
         try:
             with self.get_connection() as conn:
@@ -417,10 +418,10 @@ class MultiGroupDatabaseManager:
                 cursor.execute('''
                     INSERT INTO position_records
                     (group_id, lot_id, direction, entry_price, entry_time, rule_config,
-                     order_id, api_seq_no, order_status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     order_id, api_seq_no, order_status, retry_count, max_slippage_points)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (group_id, lot_id, direction, entry_price, entry_time, rule_config,
-                      order_id, api_seq_no, order_status))
+                      order_id, api_seq_no, order_status, retry_count, max_slippage_points))
 
                 position_id = cursor.lastrowid
                 conn.commit()
@@ -433,27 +434,47 @@ class MultiGroupDatabaseManager:
             logger.error(f"創建部位記錄失敗: {e}")
             raise
     
-    def update_position_exit(self, position_id: int, exit_price: float, 
-                           exit_time: str, exit_reason: str, pnl: float):
-        """更新部位出場資訊"""
+    def update_position_exit(self, position_id: int, exit_price: float,
+                           exit_time: str, exit_reason: str, pnl: float,
+                           on_success_callback=None):
+        """
+        更新部位出場資訊
+
+        Args:
+            position_id: 部位ID
+            exit_price: 出場價格
+            exit_time: 出場時間
+            exit_reason: 出場原因
+            pnl: 損益點數
+            on_success_callback: 成功後的回呼函數 (可選)
+        """
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 # 計算損益金額 (小台指每點50元)
                 pnl_amount = pnl * 50
-                
+
                 cursor.execute('''
-                    UPDATE position_records 
-                    SET exit_price = ?, exit_time = ?, exit_reason = ?, 
+                    UPDATE position_records
+                    SET exit_price = ?, exit_time = ?, exit_reason = ?,
                         pnl = ?, pnl_amount = ?, status = 'EXITED',
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                 ''', (exit_price, exit_time, exit_reason, pnl, pnl_amount, position_id))
-                
+
                 conn.commit()
                 logger.info(f"更新部位出場: ID={position_id}, 損益={pnl}點")
-                
+
+                # 🔧 新增：成功後調用回呼函數
+                if on_success_callback:
+                    try:
+                        on_success_callback(position_id)
+                        logger.debug(f"部位{position_id}出場回呼執行成功")
+                    except Exception as callback_error:
+                        logger.error(f"部位{position_id}出場回呼執行失敗: {callback_error}")
+                        # 注意：回呼失敗不影響主要的資料庫更新操作
+
         except Exception as e:
             logger.error(f"更新部位出場失敗: {e}")
             raise

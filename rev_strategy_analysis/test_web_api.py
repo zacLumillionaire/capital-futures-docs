@@ -21,7 +21,7 @@ def test_web_gui_backtest():
         'fixed_stop_mode': 'off',    # 使用移動停損
         'individual_take_profit_enabled': True,  # 啟用個別停利
         'entry_price_mode': 'range_boundary',
-        'trading_direction': 'LONG_ONLY',  # 與 rev_future_path_analyzer.py 一致
+        'trading_direction': 'LONG_ONLY',  # 🚀 【修改】測試只做多模式
         'lot_settings': {
             'lot1': {
                 'trigger': 15,      # 與標準配置一致

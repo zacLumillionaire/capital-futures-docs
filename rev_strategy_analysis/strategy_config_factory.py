@@ -126,8 +126,8 @@ def create_default_rev_a_config(use_rev_core_types=False) -> StrategyConfig:
         range_filter=range_filter,
         risk_config=risk_config,
         stop_loss_config=stop_loss_config,
-        entry_price_mode="range_boundary",
-        trading_direction="LONG_ONLY"  # 標準配置使用只做多
+        trading_direction="LONG_ONLY",  # 🚀 【恢復】標準配置使用只做多
+        entry_price_mode="range_boundary"  # 🚀 【恢復】使用區間邊緣進場
     )
 
 def create_rev_core_compatible_config():
@@ -282,8 +282,8 @@ def create_web_gui_compatible_config(gui_config: Dict[str, Any]):
         range_filter=range_filter,
         risk_config=risk_config,
         stop_loss_config=stop_loss_config,
-        entry_price_mode="range_boundary",
-        trading_direction="LONG_ONLY"  # 標準配置使用只做多
+        trading_direction="LONG_ONLY",  # 🚀 【恢復】標準配置使用只做多
+        entry_price_mode="range_boundary"  # 🚀 【恢復】使用區間邊緣進場
     )
 
 def create_config_from_gui_dict(gui_config: Dict[str, Any]) -> StrategyConfig:
@@ -384,8 +384,8 @@ def create_config_from_gui_dict(gui_config: Dict[str, Any]) -> StrategyConfig:
         range_filter=range_filter,
         risk_config=risk_config,
         stop_loss_config=stop_loss_config,
-        entry_price_mode=entry_price_mode,
-        trading_direction=trading_direction
+        trading_direction=trading_direction,  # 🚀 【恢復】使用GUI設定的交易方向
+        entry_price_mode=entry_price_mode  # 🚀 【恢復】使用GUI設定的進場模式
     )
 
 def create_config_from_yaml_dict(yaml_config: Dict[str, Any]) -> StrategyConfig:
@@ -462,8 +462,8 @@ def create_config_from_yaml_dict(yaml_config: Dict[str, Any]) -> StrategyConfig:
         range_filter=range_filter,
         risk_config=risk_config,
         stop_loss_config=stop_loss_config,
-        entry_price_mode=strategy_params.get('entry_price_mode', 'range_boundary'),
-        trading_direction=strategy_params.get('trading_direction', 'BOTH')
+        trading_direction=strategy_params.get('trading_direction', 'BOTH'),  # 🚀 【恢復】使用YAML設定的交易方向
+        entry_price_mode=strategy_params.get('entry_price_mode', 'range_boundary')  # 🚀 【恢復】使用YAML設定的進場模式
     )
 
 # ============================================================================
@@ -512,6 +512,7 @@ def get_config_summary(config: StrategyConfig) -> str:
 交易口數: {config.trade_size_in_lots}
 交易方向: {config.trading_direction}
 進場模式: {config.entry_price_mode}
+停損類型: {config.stop_loss_type}
 區間過濾: {'啟用' if config.range_filter.use_range_size_filter else '停用'}
 風險管理: {'啟用' if config.risk_config.use_risk_filter else '停用'}
 

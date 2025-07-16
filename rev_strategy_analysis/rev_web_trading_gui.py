@@ -977,8 +977,7 @@ def execute_backtest_thread(config_data):
                 start_date=start_date,
                 end_date=end_date,
                 range_start_time=range_start_time,
-                range_end_time=range_end_time,
-                enable_console_log=True  # 🚀 【修改】啟用日誌以便捕獲
+                range_end_time=range_end_time
             )
 
             # 獲取捕獲的日誌內容

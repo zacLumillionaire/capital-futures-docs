@@ -67,9 +67,22 @@ class StrategyConfig:
     risk_config: RiskConfig = field(default_factory=RiskConfig)
     stop_loss_config: StopLossConfig = field(default_factory=StopLossConfig)
 
+    # === 🚀 【新增】交易方向和進場模式控制 ===
+    trading_direction: str = "BOTH"  # "BOTH", "LONG_ONLY", "SHORT_ONLY"
+    entry_price_mode: str = "range_boundary"  # "range_boundary", "breakout_close", "breakout_low"
+
 def format_config_summary(config: StrategyConfig) -> str:
     """將 StrategyConfig 物件格式化為人類易讀的摘要字串。"""
     summary_lines = [f"\n📋======= 🔄反轉策略設定摘要 (交易口數: {config.trade_size_in_lots}) =======📋"]
+
+    # 🚀 【新增】交易方向顯示
+    direction_map = {
+        "BOTH": "多空都做",
+        "LONG_ONLY": "只做多",
+        "SHORT_ONLY": "只做空"
+    }
+    trading_direction = getattr(config, 'trading_direction', 'BOTH')
+    summary_lines.append(f"  - 交易方向：{direction_map.get(trading_direction, trading_direction)}")
 
     # 停損策略顯示 (優先使用濾網設定，向後相容)
     stop_loss_type = config.stop_loss_config.stop_loss_type if hasattr(config, 'stop_loss_config') else config.stop_loss_type
@@ -236,16 +249,20 @@ def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config:
     """支援任意口數，並使用正確序列檢查的邏輯 - 反轉策略版本"""
     position, entry_price, entry_time, entry_candle_index = None, Decimal(0), None, -1
 
-    # 🔄 【反轉策略】進場邏輯完全反轉
+    # 🔄 【反轉策略】進場邏輯完全反轉 + 🚀 【新增】交易方向控制
+    trading_direction = getattr(config, 'trading_direction', 'BOTH')
+
     for i, candle in enumerate(trade_candles):
         if candle['close_price'] > range_high:
             # 原本做多的點改為做空
-            position, entry_price, entry_time, entry_candle_index = 'SHORT', candle['close_price'], candle['trade_datetime'].time(), i
-            break
+            if trading_direction in ['BOTH', 'SHORT_ONLY']:
+                position, entry_price, entry_time, entry_candle_index = 'SHORT', candle['close_price'], candle['trade_datetime'].time(), i
+                break
         elif candle['low_price'] < range_low:
             # 原本做空的點改為做多
-            position, entry_price, entry_time, entry_candle_index = 'LONG', candle['low_price'], candle['trade_datetime'].time(), i
-            break
+            if trading_direction in ['BOTH', 'LONG_ONLY']:
+                position, entry_price, entry_time, entry_candle_index = 'LONG', candle['low_price'], candle['trade_datetime'].time(), i
+                break
 
     if not position: return Decimal(0), ""
 

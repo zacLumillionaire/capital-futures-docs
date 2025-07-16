@@ -35,7 +35,6 @@ def test_web_gui_config():
         print(f"   停損類型: {strategy_config.stop_loss_type}")
         print(f"   停損類型 (repr): {repr(strategy_config.stop_loss_type)}")
         print(f"   停損類型 (value): {strategy_config.stop_loss_type.value}")
-        print(f"   交易方向: {strategy_config.trading_direction}")
         print(f"   口數規則數量: {len(strategy_config.lot_rules)}")
         
         # 測試第一口規則

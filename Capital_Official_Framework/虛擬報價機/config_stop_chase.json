@@ -1,0 +1,69 @@
+{
+    "scenario": "停損追價測試",
+    "description": "快速惡化環境，測試停損追價機制",
+    "virtual_quote_config": {
+        "base_price": 21500,
+        "price_range": 100,
+        "spread": 8,
+        "quote_interval": 0.2,
+        "fill_probability": 0.6,
+        "fill_delay_ms": 400,
+        "volatility": 0.03,
+        "trend_factor": -0.4
+    },
+    "market_config": {
+        "product": "MTX00",
+        "market_no": 1,
+        "stock_idx": 0,
+        "trading_hours": {
+            "start": "00:00:00",
+            "end": "23:59:59",
+            "24h_mode": true
+        }
+    },
+    "order_config": {
+        "default_account": "F0200006363839",
+        "order_types": ["ROD", "IOC", "FOK"],
+        "default_order_type": "IOC",
+        "max_quantity": 10,
+        "min_quantity": 1
+    },
+    "best5_config": {
+        "enabled": true,
+        "depth_levels": 5,
+        "quantity_range": [3, 25],
+        "price_step": 8
+    },
+    "logging_config": {
+        "enabled": true,
+        "level": "DEBUG",
+        "console_output": true,
+        "file_output": true,
+        "log_file": "stop_chase_test.log"
+    },
+    "performance_config": {
+        "max_memory_mb": 100,
+        "max_cpu_percent": 5,
+        "quote_buffer_size": 1000,
+        "order_buffer_size": 500
+    },
+    "test_features": {
+        "rapid_deterioration": true,
+        "stop_chase_required": true,
+        "slippage_simulation": true,
+        "liquidity_crisis": true
+    },
+    "crisis_simulation": {
+        "direction": "down",
+        "strength": 0.4,
+        "acceleration": true,
+        "gap_down_probability": 0.2,
+        "liquidity_reduction": 0.5
+    },
+    "chase_parameters": {
+        "max_chase_attempts": 5,
+        "chase_price_step": 5,
+        "chase_timeout_ms": 1000,
+        "slippage_tolerance": 10
+    }
+}

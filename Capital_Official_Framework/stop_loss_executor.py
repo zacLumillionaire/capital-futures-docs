@@ -14,6 +14,47 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+
+def standardize_exit_reason(reason: str) -> str:
+    """
+    將詳細的出場原因標準化為資料庫允許的枚舉值
+
+    Args:
+        reason: 原始的出場原因描述
+
+    Returns:
+        str: 標準化的出場原因，符合資料庫 CHECK 約束
+        允許的值: '移動停利', '保護性停損', '初始停損', '手動出場', 'FOK失敗', '下單失敗'
+    """
+    if not reason:
+        return "手動出場"
+
+    reason_lower = reason.lower()
+
+    # 移動停利相關
+    if "移動停利" in reason or "trailing" in reason_lower or "移动停利" in reason:
+        return "移動停利"
+
+    # 保護性停損相關
+    if "保護性停損" in reason or "protective" in reason_lower or "保护性停损" in reason:
+        return "保護性停損"
+
+    # 初始停損相關
+    if "初始停損" in reason or "initial" in reason_lower or "初始停损" in reason:
+        return "初始停損"
+
+    # FOK失敗相關
+    if "fok" in reason_lower or "FOK" in reason:
+        return "FOK失敗"
+
+    # 下單失敗相關
+    if "下單失敗" in reason or ("order" in reason_lower and "fail" in reason_lower):
+        return "下單失敗"
+
+    # 預設為手動出場
+    return "手動出場"
+
+
 # 🔧 導入全局平倉管理器
 try:
     from simplified_order_tracker import GlobalExitManager
@@ -145,6 +186,49 @@ class StopLossExecutor:
             status = "啟用" if enabled else "停用"
             print(f"[STOP_EXECUTOR] 🔧 異步更新已{status}")
 
+    def add_exit_success_callback(self, callback):
+        """
+        添加平倉成功回呼函式 - 任務3新增
+
+        Args:
+            callback: 回呼函式，接收 (position_id, execution_result, trigger_info) 參數
+        """
+        if callback not in self.success_callbacks:
+            self.success_callbacks.append(callback)
+            if self.console_enabled:
+                print(f"[STOP_EXECUTOR] 📞 已添加平倉成功回呼")
+
+    def remove_exit_success_callback(self, callback):
+        """
+        移除平倉成功回呼函式 - 任務3新增
+
+        Args:
+            callback: 要移除的回呼函式
+        """
+        if callback in self.success_callbacks:
+            self.success_callbacks.remove(callback)
+            if self.console_enabled:
+                print(f"[STOP_EXECUTOR] 📞 已移除平倉成功回呼")
+
+    def _trigger_exit_success_callbacks(self, position_id: int, execution_result: StopLossExecutionResult, trigger_info):
+        """
+        觸發所有平倉成功回呼 - 任務3新增
+
+        Args:
+            position_id: 部位ID
+            execution_result: 執行結果
+            trigger_info: 觸發資訊
+        """
+        for callback in self.success_callbacks:
+            try:
+                callback(position_id, execution_result, trigger_info)
+                if self.console_enabled:
+                    print(f"[STOP_EXECUTOR] 📞 平倉成功回呼已觸發: 部位{position_id}")
+            except Exception as e:
+                logger.error(f"平倉成功回呼執行失敗: {e}")
+                if self.console_enabled:
+                    print(f"[STOP_EXECUTOR] ❌ 回呼執行失敗: {e}")
+
     def set_exit_tracker(self, exit_tracker):
         """
         設定平倉訂單追蹤器 - 🔧 新增：整合平倉追蹤器
@@ -201,37 +285,87 @@ class StopLossExecutor:
     
     def execute_stop_loss(self, trigger_info) -> StopLossExecutionResult:
         """
-        執行停損平倉
-        
+        執行停損平倉 - 🔧 任務3：使用 try...finally 確保鎖的正確釋放
+
         Args:
             trigger_info: 停損觸發資訊 (StopLossTrigger)
-            
+
         Returns:
             StopLossExecutionResult: 執行結果
         """
-        try:
-            position_id = trigger_info.position_id
-            current_price = trigger_info.current_price
-            
-            # 🔍 DEBUG: 停損執行開始 (重要事件，立即輸出)
-            if self.console_enabled:
-                print(f"[STOP_EXECUTOR] 🚨 開始執行停損平倉")
-                print(f"[STOP_EXECUTOR]   部位ID: {position_id}")
-                print(f"[STOP_EXECUTOR]   觸發價格: {current_price}")
-                print(f"[STOP_EXECUTOR]   方向: {trigger_info.direction}")
-                print(f"[STOP_EXECUTOR]   觸發原因: {getattr(trigger_info, 'trigger_reason', 'N/A')}")
-                print(f"[STOP_EXECUTOR]   組別: {getattr(trigger_info, 'group_id', 'N/A')}")
+        position_id = trigger_info.position_id
+        current_price = trigger_info.current_price
+        lock_acquired = False
 
-            # 🔧 新增：全局平倉管理器檢查（第一層防護）
+        # 🔍 DEBUG: 停損執行開始 (重要事件，立即輸出)
+        if self.console_enabled:
+            print(f"[STOP_EXECUTOR] 🚨 開始執行停損平倉")
+            print(f"[STOP_EXECUTOR]   部位ID: {position_id}")
+            print(f"[STOP_EXECUTOR]   觸發價格: {current_price}")
+            print(f"[STOP_EXECUTOR]   方向: {trigger_info.direction}")
+            print(f"[STOP_EXECUTOR]   觸發原因: {getattr(trigger_info, 'trigger_reason', 'N/A')}")
+            print(f"[STOP_EXECUTOR]   組別: {getattr(trigger_info, 'group_id', 'N/A')}")
+
+        # 🔧 任務3：第一步檢查鎖定狀態
+        lock_reason = self.global_exit_manager.check_exit_in_progress(str(position_id))
+        if lock_reason is not None:
+            # 🔧 新增：獲取詳細的鎖定信息
+            lock_info = self.global_exit_manager.get_exit_info(str(position_id))
+            lock_age = time.time() - lock_info.get('timestamp', 0) if lock_info else 0
+
+            if self.console_enabled:
+                print(f"[STOP_EXECUTOR] 🔒 停損被全局管理器阻止: 部位{position_id}")
+                print(f"[STOP_EXECUTOR]   鎖定原因: {lock_reason}")
+                print(f"[STOP_EXECUTOR]   鎖定時間: {lock_age:.1f}秒前")
+                print(f"[STOP_EXECUTOR]   觸發源: {lock_info.get('trigger_source', 'unknown')}")
+                print(f"[STOP_EXECUTOR]   鎖定類型: {lock_info.get('exit_type', 'unknown')}")
+            return StopLossExecutionResult(position_id, False,
+                                         error_message=f"全局管理器防止重複平倉: {lock_reason}")
+
+        try:
+            # 🔍 任務1：數據源交叉驗證 - 證據鞏固
+            if self.console_enabled:
+                print("--- 數據源交叉驗證 ---")
+                print(f"[TRIGGER_INFO] 觸發器傳入的價格: {current_price}")
+                print(f"[TRIGGER_INFO] 觸發器傳入的方向: {trigger_info.direction}")
+                print(f"[TRIGGER_INFO] 觸發器傳入的部位ID: {position_id}")
+                print(f"[TRIGGER_INFO] 觸發器傳入的組別ID: {getattr(trigger_info, 'group_id', 'N/A')}")
+
+                # 檢查觸發器是否包含進場價格信息
+                trigger_entry_price = getattr(trigger_info, 'entry_price', '觸發器中無此字段')
+                print(f"[TRIGGER_INFO] 觸發器中的進場價格: {trigger_entry_price}")
+
+            # 🔧 任務3：第二步上鎖
             trigger_source = f"stop_loss_{getattr(trigger_info, 'trigger_reason', 'unknown')}"
-            if not self.global_exit_manager.mark_exit(str(position_id), trigger_source, "stop_loss"):
-                existing_info = self.global_exit_manager.get_exit_info(str(position_id))
+            reason = f"停損平倉執行中: {getattr(trigger_info, 'trigger_reason', 'unknown')}"
+            details = {
+                'current_price': current_price,
+                'direction': trigger_info.direction,
+                'group_id': getattr(trigger_info, 'group_id', 'N/A')
+            }
+
+            if not self.global_exit_manager.mark_exit(str(position_id), trigger_source, "stop_loss", reason, details):
                 if self.console_enabled:
-                    print(f"[STOP_EXECUTOR] 🔒 停損被全局管理器阻止: 部位{position_id}")
-                    print(f"[STOP_EXECUTOR]   已有平倉: {existing_info.get('trigger_source', 'unknown')} "
-                          f"({existing_info.get('exit_type', 'unknown')})")
+                    print(f"[STOP_EXECUTOR] 🔒 無法獲取平倉鎖: 部位{position_id}")
                 return StopLossExecutionResult(position_id, False,
-                                             error_message="全局管理器防止重複平倉")
+                                             error_message="無法獲取平倉鎖")
+
+            lock_acquired = True
+            lock_start_time = time.time()  # 🔧 記錄鎖定開始時間
+            if self.console_enabled:
+                print(f"[STOP_EXECUTOR] 🔐 已獲取平倉鎖: 部位{position_id}")
+                print(f"[STOP_EXECUTOR]   鎖定源: {trigger_source}")
+                print(f"[STOP_EXECUTOR]   鎖定原因: {reason}")
+                print(f"[STOP_EXECUTOR]   當前價格: {current_price}")
+                print(f"[STOP_EXECUTOR]   方向: {trigger_info.direction}")
+
+            # 🔧 新增：重複平倉防護檢查（第二層防護）
+            protection_result = self._check_duplicate_exit_protection(position_id)
+            if not protection_result['can_execute']:
+                if self.console_enabled:
+                    print(f"[STOP_EXECUTOR] ⚠️ 重複平倉防護: {protection_result['reason']}")
+                return StopLossExecutionResult(position_id, False,
+                                             error_message=protection_result['reason'])
 
             # 🔧 新增：重複平倉防護檢查（第二層防護）
             protection_result = self._check_duplicate_exit_protection(position_id)
@@ -243,12 +377,37 @@ class StopLossExecutor:
                 return StopLossExecutionResult(position_id, False,
                                              error_message=protection_result['reason'])
 
-            # 取得部位詳細資訊
-            position_info = self._get_position_info(position_id)
-            if not position_info:
-                error_msg = f"無法取得部位 {position_id} 的詳細資訊"
+            # 🔧 任務2：直接使用觸發器中的完整數據，避免數據庫查詢
+            # 從觸發器中構建部位信息
+            position_info = {
+                'id': position_id,
+                'group_id': trigger_info.group_id,
+                'direction': trigger_info.direction,
+                'entry_price': trigger_info.entry_price,
+                'quantity': trigger_info.quantity,
+                'lot_id': trigger_info.lot_id,
+                'range_high': trigger_info.range_high,
+                'range_low': trigger_info.range_low,
+                'status': 'ACTIVE'  # 觸發停損的部位必然是活躍的
+            }
+
+            # 🔧 任務3：簡化日誌輸出，專注於觸發器數據
+            if self.console_enabled:
+                print(f"[TRIGGER_DATA] 使用觸發器數據執行平倉:")
+                print(f"[TRIGGER_DATA]   進場價: {trigger_info.entry_price}")
+                print(f"[TRIGGER_DATA]   方向: {trigger_info.direction}")
+                print(f"[TRIGGER_DATA]   數量: {trigger_info.quantity}")
+                print(f"[TRIGGER_DATA]   觸發原因: {trigger_info.trigger_reason}")
+                print("🔧 任務3：純觸發器數據驅動，無數據庫依賴")
+                print("--------------------")
+
+            # 🔧 任務2：使用觸發器中的進場價格進行檢查
+            entry_price = trigger_info.entry_price
+            if entry_price is None:
+                error_msg = f"部位 {position_id} 觸發器中缺少進場價格，無法執行停損平倉"
                 if self.console_enabled:
                     print(f"[STOP_EXECUTOR] ❌ {error_msg}")
+                    print(f"[STOP_EXECUTOR]   觸發器資訊: {trigger_info}")
                 return StopLossExecutionResult(position_id, False, error_message=error_msg)
 
             # 🔧 修復：註冊停損平倉組到口級別追蹤系統
@@ -283,7 +442,7 @@ class StopLossExecutor:
 
             # 🔍 DEBUG: 平倉參數計算
             if self.console_enabled:
-                entry_price = position_info.get('entry_price', 0)
+                # 🔧 修復：使用已驗證的entry_price，避免重複檢查
                 if trigger_info.direction == "LONG":
                     expected_pnl = current_price - entry_price
                 else:
@@ -317,12 +476,13 @@ class StopLossExecutor:
                     print(f"[STOP_EXECUTOR] ❌ 平倉下單失敗:")
                     print(f"[STOP_EXECUTOR]   錯誤訊息: {execution_result.error_message}")
 
-            # 更新資料庫
+            # 任務3修復：觸發回呼而不是直接更新資料庫
             if execution_result.success:
                 if self.console_enabled:
-                    print(f"[STOP_EXECUTOR] 💾 更新資料庫狀態...")
+                    print(f"[STOP_EXECUTOR] 📞 觸發平倉成功回呼...")
 
-                self._update_position_exit_status(position_id, execution_result, trigger_info)
+                # 觸發回呼機制，由上層應用負責資料庫更新
+                self._trigger_exit_success_callbacks(position_id, execution_result, trigger_info)
 
                 # 🛡️ 觸發保護性停損更新 (如果是移動停利成功平倉)
                 if self.console_enabled:
@@ -367,13 +527,30 @@ class StopLossExecutor:
                 print(f"[STOP_EXECUTOR] ═══════════════════════════════════════")
 
             return execution_result
-            
+
         except Exception as e:
             error_msg = f"停損執行過程發生錯誤: {e}"
             logger.error(error_msg)
             if self.console_enabled:
                 print(f"[STOP_EXECUTOR] ❌ {error_msg}")
-            return StopLossExecutionResult(trigger_info.position_id, False, error_message=error_msg)
+            return StopLossExecutionResult(position_id, False, error_message=error_msg)
+
+        finally:
+            # 🔧 任務3：確保鎖的釋放 - 無論成功、失敗還是異常
+            if lock_acquired:
+                try:
+                    # 🔧 新增：記錄鎖定持續時間
+                    lock_duration = time.time() - lock_start_time if 'lock_start_time' in locals() else 0
+
+                    self.global_exit_manager.clear_exit(str(position_id))
+                    if self.console_enabled:
+                        print(f"[STOP_EXECUTOR] 🔓 已釋放平倉鎖: 部位{position_id}")
+                        print(f"[STOP_EXECUTOR]   鎖定持續: {lock_duration:.3f}秒")
+                        print(f"[STOP_EXECUTOR]   釋放時間: {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+                except Exception as clear_error:
+                    logger.error(f"釋放平倉鎖失敗: {clear_error}")
+                    if self.console_enabled:
+                        print(f"[STOP_EXECUTOR] ❌ 釋放平倉鎖失敗: {clear_error}")
     
     def _get_position_info(self, position_id: int) -> Optional[Dict]:
         """取得部位詳細資訊 - 🚀 優化：使用動態停損價格，避免複雜JOIN"""
@@ -539,8 +716,14 @@ class StopLossExecutor:
                     if self.console_enabled:
                         print(f"[STOP_EXECUTOR] 📝 平倉訂單已註冊到專門追蹤器: {order_id}")
 
-                # 計算損益
-                entry_price = position_info.get('entry_price', current_price)
+                # 任務4：強化數據驗證 - 計算損益前檢查進場價格
+                entry_price = position_info.get('entry_price')
+                if entry_price is None:
+                    # 使用當前價格作為備用，但記錄警告
+                    entry_price = current_price
+                    if self.console_enabled:
+                        print(f"[STOP_EXECUTOR] ⚠️ 部位{position_id}缺少進場價格，使用當前價格{current_price}作為備用")
+
                 pnl = self._calculate_pnl(
                     position_info['direction'], entry_price, current_price
                 )
@@ -574,8 +757,14 @@ class StopLossExecutor:
             # 模擬下單成功
             order_id = f"SIM_STOP_{position_id}_{int(time.time())}"
             
-            # 計算損益
-            entry_price = position_info.get('entry_price', current_price)
+            # 任務4：強化數據驗證 - 計算損益前檢查進場價格
+            entry_price = position_info.get('entry_price')
+            if entry_price is None:
+                # 使用當前價格作為備用，但記錄警告
+                entry_price = current_price
+                if self.console_enabled:
+                    print(f"[STOP_EXECUTOR] ⚠️ 模擬平倉：部位{position_id}缺少進場價格，使用當前價格{current_price}作為備用")
+
             pnl = self._calculate_pnl(
                 position_info['direction'], entry_price, current_price
             )
@@ -602,20 +791,29 @@ class StopLossExecutor:
     def _calculate_pnl(self, direction: str, entry_price: float, exit_price: float) -> float:
         """
         計算損益點數
-        
+
         Args:
             direction: 交易方向
             entry_price: 進場價格
             exit_price: 出場價格
-            
+
         Returns:
             float: 損益點數
         """
-        if direction == "LONG":
-            return exit_price - entry_price
-        elif direction == "SHORT":
-            return entry_price - exit_price
-        else:
+        # 🔧 新增：防禦性檢查 - 確保價格參數有效
+        if entry_price is None or exit_price is None:
+            logger.error(f"計算損益失敗：價格參數無效 entry_price={entry_price}, exit_price={exit_price}")
+            return 0.0
+
+        try:
+            if direction == "LONG":
+                return exit_price - entry_price
+            elif direction == "SHORT":
+                return entry_price - exit_price
+            else:
+                return 0.0
+        except (TypeError, ValueError) as e:
+            logger.error(f"計算損益時發生錯誤: {e}, direction={direction}, entry_price={entry_price}, exit_price={exit_price}")
             return 0.0
     
     def _update_position_exit_status(self, position_id: int, execution_result: StopLossExecutionResult,
@@ -626,10 +824,13 @@ class StopLossExecutor:
         try:
             # 🚀 優先使用異步更新（參考建倉機制）
             if self.async_updater and self.async_update_enabled:
-                # 確定平倉原因
-                exit_reason = getattr(trigger_info, 'trigger_reason', 'STOP_LOSS')
+                # 確定平倉原因並標準化
+                raw_exit_reason = getattr(trigger_info, 'trigger_reason', '手動出場')
                 if hasattr(trigger_info, 'exit_reason'):
-                    exit_reason = trigger_info.exit_reason
+                    raw_exit_reason = trigger_info.exit_reason
+
+                # 標準化 exit_reason 以符合資料庫約束
+                exit_reason = standardize_exit_reason(raw_exit_reason)
 
                 # 異步更新（非阻塞）
                 self.async_updater.schedule_position_exit_update(
@@ -665,22 +866,20 @@ class StopLossExecutor:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # 更新 position_records
+                # 更新 position_records - 🔧 修復：移除不存在的字段
                 cursor.execute('''
                     UPDATE position_records
                     SET status = 'EXITED',
                         exit_price = ?,
                         exit_time = ?,
-                        exit_reason = 'INITIAL_STOP',
-                        exit_trigger_type = 'INITIAL_STOP',
-                        exit_order_id = ?,
-                        realized_pnl = ?,
+                        exit_reason = ?,
+                        pnl = ?,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                 ''', (
                     execution_result.execution_price,
                     execution_result.execution_time,
-                    execution_result.order_id,
+                    standardize_exit_reason(getattr(trigger_info, 'trigger_reason', '手動出場')),
                     execution_result.pnl,
                     position_id
                 ))
@@ -815,6 +1014,14 @@ class StopLossExecutor:
 
             if self.console_enabled:
                 print(f"[STOP_EXECUTOR] 🧹 清理平倉執行狀態: 部位{position_id}")
+
+        # 🔧 關鍵修復：清理執行狀態時也釋放全局鎖
+        try:
+            self.global_exit_manager.clear_exit(str(position_id))
+            if self.console_enabled:
+                print(f"[STOP_EXECUTOR] 🔓 清理執行狀態時已釋放全局鎖: 部位{position_id}")
+        except Exception as clear_error:
+            logger.error(f"清理執行狀態時釋放全局鎖失敗: {clear_error}")
 
     def execute_exit_retry(self, position_id: int, original_order: dict, retry_count: int = 1) -> bool:
         """
@@ -1291,11 +1498,15 @@ class StopLossExecutor:
         try:
             if self.async_updater and self.async_update_enabled:
                 # 🚀 異步更新（非阻塞）- 與止損使用相同機制
+                # 創建詳細的移動停利描述，然後標準化
+                detailed_reason = f"移動停利: 峰值{trigger_info['peak_price']:.0f} 回撤至{trigger_info['current_price']:.0f}"
+                standardized_reason = standardize_exit_reason(detailed_reason)
+
                 self.async_updater.schedule_position_exit_update(
                     position_id=position_id,
                     exit_price=getattr(order_result, 'execution_price', trigger_info['current_price']),
                     exit_time=datetime.now().strftime('%H:%M:%S'),
-                    exit_reason=f"移動停利: 峰值{trigger_info['peak_price']:.0f} 回撤至{trigger_info['current_price']:.0f}",
+                    exit_reason=standardized_reason,
                     order_id=getattr(order_result, 'order_id', ''),
                     pnl=self._calculate_trailing_stop_pnl(trigger_info, order_result)
                 )
@@ -1325,9 +1536,21 @@ class StopLossExecutor:
             float: 計算的損益
         """
         try:
-            entry_price = trigger_info['entry_price']
-            exit_price = getattr(order_result, 'execution_price', trigger_info['current_price'])
-            direction = trigger_info['direction']
+            # 🔧 新增：防禦性檢查 - 確保進場價格存在
+            entry_price = trigger_info.get('entry_price')
+            if entry_price is None:
+                logger.error(f"計算移動停利損益失敗：缺少進場價格 trigger_info={trigger_info}")
+                return 0.0
+
+            exit_price = getattr(order_result, 'execution_price', trigger_info.get('current_price'))
+            if exit_price is None:
+                logger.error(f"計算移動停利損益失敗：缺少出場價格")
+                return 0.0
+
+            direction = trigger_info.get('direction')
+            if not direction:
+                logger.error(f"計算移動停利損益失敗：缺少交易方向")
+                return 0.0
 
             if direction == "LONG":
                 pnl = exit_price - entry_price
@@ -1336,8 +1559,11 @@ class StopLossExecutor:
 
             return pnl
 
+        except (TypeError, ValueError, KeyError) as e:
+            logger.error(f"計算移動停利損益失敗: {e}, trigger_info={trigger_info}")
+            return 0.0
         except Exception as e:
-            logger.error(f"計算移動停利損益失敗: {e}")
+            logger.error(f"計算移動停利損益時發生未預期錯誤: {e}")
             return 0.0
 
     def _trigger_protection_update_if_needed(self, trigger_info, execution_result):
@@ -1386,7 +1612,9 @@ class StopLossExecutor:
         """
         for callback in self.success_callbacks:
             try:
-                callback(trigger_info, execution_result)
+                # 修復：統一參數格式為 (position_id, execution_result, trigger_info)
+                position_id = getattr(trigger_info, 'position_id', 0)
+                callback(position_id, execution_result, trigger_info)
             except Exception as e:
                 logger.error(f"成功回調函數執行失敗: {e}")
                 if self.console_enabled:

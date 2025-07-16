@@ -212,7 +212,9 @@ class MultiGroupPositionManager:
                     direction=group_info['direction'],
                     entry_time=actual_time,
                     rule_config=lot_rule.to_json(),
-                    order_status='PENDING'  # 🔧 初始狀態為PENDING
+                    order_status='PENDING',  # 🔧 初始狀態為PENDING
+                    retry_count=0,  # 🛡️ 根源性修復：明確設置默認值
+                    max_slippage_points=5  # 🛡️ 根源性修復：明確設置默認值
                 )
 
                 # 2. 執行下單
@@ -609,12 +611,13 @@ class MultiGroupPositionManager:
                     # 🚀 異步更新（非阻塞）
                     fill_time_str = order_info.fill_time.strftime('%H:%M:%S') if order_info.fill_time else ''
 
-                    # 異步確認成交
+                    # 🔧 修復：異步確認成交，並在成功後設定初始停損
                     self.async_updater.schedule_position_fill_update(
                         position_id=position_pk,
                         fill_price=order_info.fill_price,
                         fill_time=fill_time_str,
-                        order_status='FILLED'
+                        order_status='FILLED',
+                        on_success_callback=self._setup_initial_stop_loss_for_position  # 🔧 新增：成交確認後設定停損
                     )
 
                     # 異步初始化風險管理狀態
@@ -644,6 +647,9 @@ class MultiGroupPositionManager:
                             current_time=order_info.fill_time.strftime('%H:%M:%S') if order_info.fill_time else '',
                             update_reason="成交初始化"
                         )
+
+                        # 🔧 修復：成交確認成功後立即設定初始停損
+                        self._setup_initial_stop_loss_for_position(position_pk)
 
                         self.logger.info(f"✅ 部位{position_pk}成交確認: @{order_info.fill_price}")
 
@@ -798,7 +804,19 @@ class MultiGroupPositionManager:
 
     def _update_group_positions_on_fill(self, logical_group_id: int, price: float, qty: int,
                                       filled_lots: int, total_lots: int):
-        """更新組內部位的成交狀態"""
+        """
+        更新組內部位的成交狀態
+
+        此方法處理簡化追蹤器的成交回調，確認部位成交並初始化風險管理狀態。
+        包含防禦性檢查以避免 NoneType 錯誤。
+
+        Args:
+            logical_group_id: 邏輯組別ID
+            price: 成交價格
+            qty: 成交數量
+            filled_lots: 已成交口數
+            total_lots: 總口數
+        """
         try:
             self.logger.info(f"📊 [簡化追蹤] 組{logical_group_id}成交統計更新: "
                            f"{qty}口 @{price}, 總進度: {filled_lots}/{total_lots}")
@@ -833,7 +851,8 @@ class MultiGroupPositionManager:
                         cursor = conn.cursor()
                         # 🔧 修復：查詢order_status='PENDING'而不是status='PENDING'
                         cursor.execute('''
-                            SELECT id AS position_pk, group_id AS group_pk, lot_id, status, order_status
+                            SELECT id AS position_pk, group_id AS group_pk, lot_id, status, order_status,
+                                   retry_count, max_slippage_points, entry_price, direction
                             FROM position_records
                             WHERE group_id = ? AND order_status = 'PENDING'
                             ORDER BY lot_id
@@ -858,7 +877,9 @@ class MultiGroupPositionManager:
                             total_count = count_result[0] if count_result else 0
                             filled_count = count_result[1] if count_result else 0
 
-                            if filled_count >= total_count and total_count > 0:
+                            # 🛡️ 防禦性修復：確保數值不是 None
+                            if (filled_count is not None and total_count is not None and
+                                filled_count >= total_count and total_count > 0):
                                 # 所有部位已成交，這是正常情況
                                 self.logger.info(f"✅ [簡化追蹤] 組{logical_group_id} 所有部位已成交 ({filled_count}/{total_count})，跳過重複處理")
                                 return  # 直接返回，避免無意義警告
@@ -868,7 +889,8 @@ class MultiGroupPositionManager:
                         # 🔧 修復：確認成交，每次處理qty個部位
                         confirmed_count = 0
                         for position_record in pending_positions:
-                            if confirmed_count >= qty:
+                            # 🛡️ 防禦性修復：確保 confirmed_count 和 qty 都不是 None
+                            if confirmed_count is not None and qty is not None and confirmed_count >= qty:
                                 break  # 只處理本次成交的數量
 
                             # ⏰ 記錄開始時間用於性能追蹤
@@ -887,11 +909,13 @@ class MultiGroupPositionManager:
                                     async_success_2 = True
 
                                     try:
+                                        # 🔧 修復：添加初始停損設定回呼
                                         self.async_updater.schedule_position_fill_update(
                                             position_id=position_pk,
                                             fill_price=price,
                                             fill_time=fill_time_str,
-                                            order_status='FILLED'
+                                            order_status='FILLED',
+                                            on_success_callback=self._setup_initial_stop_loss_for_position
                                         )
                                     except Exception as e1:
                                         async_success_1 = False
@@ -947,8 +971,12 @@ class MultiGroupPositionManager:
                                     position_id=position_pk,
                                     peak_price=price,
                                     current_time=fill_time_str,
-                                    update_reason="成交初始化"
+                                    update_category="成交初始化",  # 🔧 修復：使用正確的參數名
+                                    update_message="同步成交初始化"
                                 )
+
+                                # 🔧 修復：成交確認成功後立即設定初始停損
+                                self._setup_initial_stop_loss_for_position(position_pk)
 
                                 # 🔧 新增：註冊到統一移動停利計算器（如果啟用）
                                 self._register_position_to_trailing_calculator(
@@ -974,9 +1002,10 @@ class MultiGroupPositionManager:
                 self.logger.error(f"資料庫部位更新失敗: {db_error}")
 
         except Exception as e:
-            self.logger.error(f"更新組部位成交狀態失敗: {e}")
+            # 🔧 改善：使用 logger.exception 記錄完整的錯誤堆疊信息
+            self.logger.exception(f"更新組部位成交狀態失敗: {e}")
         finally:
-            # 🔧 清理處理標記
+            # 🔧 清理處理標記，確保不會影響後續處理
             if hasattr(self, '_processing_fills'):
                 processing_key = f"{logical_group_id}_{price}_{qty}_{filled_lots}"
                 self._processing_fills.discard(processing_key)
@@ -1056,6 +1085,104 @@ class MultiGroupPositionManager:
         except Exception as e:
             self.logger.error(f"獲取組移動停利配置失敗: {e}")
             return {'activation_points': 15.0, 'pullback_percent': 0.2}  # 預設配置
+
+    def _setup_initial_stop_loss_for_position(self, position_id: int):
+        """
+        🔧 新增：為單個部位設定初始停損（成交確認後的回呼方法）
+
+        Args:
+            position_id: 部位ID
+        """
+        try:
+            # 獲取部位信息
+            position_info = self.db_manager.get_position_by_id(position_id)
+            if not position_info:
+                self.logger.error(f"❌ 找不到部位{position_id}信息，無法設定初始停損")
+                return
+
+            # 檢查是否已有進場價格
+            entry_price = position_info.get('entry_price')
+            if entry_price is None:
+                self.logger.error(f"❌ 部位{position_id}缺少進場價格，無法設定初始停損")
+                return
+
+            # 獲取組信息以取得區間資料
+            group_id = position_info.get('group_id')
+            if group_id is None:
+                self.logger.error(f"❌ 部位{position_id}缺少組ID，無法設定初始停損")
+                return
+
+            # 查找組的資料庫記錄以獲取區間資料
+            all_groups = self.db_manager.get_today_strategy_groups()
+            range_data = None
+
+            for strategy_group in all_groups:
+                if strategy_group['logical_group_id'] == group_id:
+                    range_data = {
+                        'range_high': strategy_group['range_high'],
+                        'range_low': strategy_group['range_low'],
+                        'direction': strategy_group['direction']
+                    }
+                    break
+
+            if not range_data:
+                self.logger.error(f"❌ 找不到組{group_id}的區間資料，無法設定初始停損")
+                return
+
+            # 計算初始停損價格
+            direction = position_info.get('direction', '').upper()
+            if direction == 'LONG':
+                stop_loss_price = range_data['range_low']  # 多單停損在區間低點
+            elif direction == 'SHORT':
+                stop_loss_price = range_data['range_high']  # 空單停損在區間高點
+            else:
+                self.logger.error(f"❌ 部位{position_id}方向無效: {direction}")
+                return
+
+            # 🔧 修復：使用風險管理狀態記錄初始停損
+            try:
+                # 更新風險管理狀態中的停損價格
+                success = self.db_manager.update_risk_management_state(
+                    position_id=position_id,
+                    current_stop_loss=stop_loss_price,
+                    update_time=datetime.now().strftime('%H:%M:%S'),
+                    update_category="初始化",  # 🔧 修復：使用資料庫約束中允許的值
+                    update_message=f"區間{direction}停損@{stop_loss_price}"
+                )
+
+                if success:
+                    self.logger.info(f"✅ 部位{position_id}初始停損設定成功: {direction} @{entry_price} 停損@{stop_loss_price}")
+                else:
+                    self.logger.error(f"❌ 部位{position_id}初始停損設定失敗")
+
+            except Exception as update_error:
+                self.logger.error(f"❌ 部位{position_id}初始停損設定異常: {update_error}")
+                # 如果更新失敗，嘗試創建新的風險管理狀態
+                try:
+                    # 🔧 修復：create_risk_management_state不支持current_stop_loss參數
+                    success_create = self.db_manager.create_risk_management_state(
+                        position_id=position_id,
+                        peak_price=entry_price,
+                        current_time=datetime.now().strftime('%H:%M:%S'),
+                        update_category="初始化",  # 🔧 修復：使用資料庫約束中允許的值
+                        update_message=f"區間{direction}停損@{stop_loss_price}"
+                    )
+
+                    # 創建成功後，立即更新停損價格
+                    if success_create:
+                        self.db_manager.update_risk_management_state(
+                            position_id=position_id,
+                            current_stop_loss=stop_loss_price,
+                            update_time=datetime.now().strftime('%H:%M:%S'),
+                            update_category="初始化",
+                            update_message=f"設定區間{direction}停損@{stop_loss_price}"
+                        )
+                    self.logger.info(f"✅ 部位{position_id}初始停損設定成功(創建新狀態): {direction} @{entry_price} 停損@{stop_loss_price}")
+                except Exception as create_error:
+                    self.logger.error(f"❌ 部位{position_id}初始停損設定完全失敗: {create_error}")
+
+        except Exception as e:
+            self.logger.error(f"設定部位{position_id}初始停損失敗: {e}")
 
     def _on_group_complete(self, logical_group_id: int):
         """組完成處理"""
@@ -1584,10 +1711,25 @@ class MultiGroupPositionManager:
             return None
 
     def is_retry_allowed(self, position_info: Dict) -> bool:
-        """檢查是否允許重試"""
+        """
+        檢查是否允許重試
+
+        包含防禦性檢查以避免 NoneType 錯誤。
+
+        Args:
+            position_info: 部位信息字典
+
+        Returns:
+            bool: 是否允許重試
+        """
         try:
             # 檢查重試次數
             retry_count = position_info.get('retry_count', 0)
+            # 🛡️ 防禦性修復：確保 retry_count 不是 None，避免 TypeError
+            if retry_count is None:
+                retry_count = 0
+                self.logger.warning(f"部位{position_info.get('position_pk', 'Unknown')}的retry_count為None，設為0")
+
             if retry_count >= self.max_retry_count:
                 self.logger.info(f"部位{position_info['position_pk']}已達最大重試次數({self.max_retry_count})")
                 return False

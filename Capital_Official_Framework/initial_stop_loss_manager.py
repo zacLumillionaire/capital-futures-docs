@@ -49,94 +49,108 @@ class InitialStopLossManager:
         if self.console_enabled:
             print("[STOP_LOSS] ⚙️ 初始停損管理器初始化完成")
     
-    def setup_initial_stop_loss_for_group(self, group_id: int, range_data: Dict[str, float]) -> bool:
+    def setup_initial_stop_loss_for_group(self, group_db_id: int, range_data: Dict[str, float]) -> bool:
         """
         為整個策略組設定初始停損
-        
+
         Args:
-            group_id: 策略組ID
+            group_db_id: 策略組資料庫ID
             range_data: 區間資料 {'range_high': float, 'range_low': float}
-            
+
         Returns:
             bool: 設定是否成功
         """
         try:
             if self.console_enabled:
-                print(f"[STOP_LOSS] 🛡️ 開始為策略組 {group_id} 設定初始停損")
+                print(f"[STOP_LOSS] 🛡️ 開始為策略組 {group_db_id} 設定初始停損")
                 print(f"[STOP_LOSS] 📊 區間資料: 高點 {range_data['range_high']}, 低點 {range_data['range_low']}")
-            
-            # 取得該組的所有活躍部位
-            positions = self.db_manager.get_active_positions_by_group(group_id)
-            
+
+            # 🔧 修復：先獲取邏輯組ID，然後查詢活躍部位
+            group_info = self.db_manager.get_strategy_group_by_db_id(group_db_id)
+            if not group_info:
+                if self.console_enabled:
+                    print(f"[STOP_LOSS] ❌ 找不到策略組: {group_db_id}")
+                return False
+
+            logical_group_id = group_info['logical_group_id']
+            positions = self.db_manager.get_active_positions_by_group(logical_group_id)
+
             if not positions:
                 if self.console_enabled:
-                    print(f"[STOP_LOSS] ⚠️ 策略組 {group_id} 沒有活躍部位")
+                    print(f"[STOP_LOSS] ⚠️ 策略組 {logical_group_id} (DB_ID:{group_db_id}) 沒有活躍部位")
                 return False
-            
+
             success_count = 0
             total_count = len(positions)
-            
+
             for position in positions:
                 if self._setup_position_initial_stop_loss(position, range_data):
                     success_count += 1
-            
+
             if self.console_enabled:
                 print(f"[STOP_LOSS] ✅ 初始停損設定完成: {success_count}/{total_count} 個部位")
                 if success_count == total_count:
-                    print(f"[STOP_LOSS] 🎯 策略組 {group_id} 所有部位停損設定成功")
+                    print(f"[STOP_LOSS] 🎯 策略組 {group_db_id} 所有部位停損設定成功")
                 else:
                     print(f"[STOP_LOSS] ⚠️ 部分部位停損設定失敗")
-            
+
             return success_count > 0
-            
+
         except Exception as e:
             logger.error(f"設定策略組停損失敗: {e}")
             if self.console_enabled:
-                print(f"[STOP_LOSS] ❌ 策略組 {group_id} 停損設定失敗: {e}")
+                print(f"[STOP_LOSS] ❌ 策略組 {group_db_id} 停損設定失敗: {e}")
             return False
     
     def _setup_position_initial_stop_loss(self, position: Dict, range_data: Dict[str, float]) -> bool:
         """
         為單個部位設定初始停損
-        
+
         Args:
             position: 部位資料
             range_data: 區間資料
-            
+
         Returns:
             bool: 設定是否成功
         """
+        position_id = None  # 🔧 修復：初始化變數避免異常處理時未定義錯誤
         try:
-            position_id = position['id']
+            # 🔧 修復：使用正確的鍵名 'position_pk' 而不是 'id'
+            position_id = position.get('position_pk') or position.get('id')
+            if position_id is None:
+                if self.console_enabled:
+                    print(f"[STOP_LOSS] ❌ 部位資料缺少ID: {position}")
+                return False
+
             direction = position['direction']
             entry_price = position.get('entry_price')
             lot_id = position.get('lot_id', 1)
-            
+
             if entry_price is None:
                 if self.console_enabled:
                     print(f"[STOP_LOSS] ⚠️ 部位 {position_id} 缺少進場價格，跳過停損設定")
                 return False
-            
+
             # 計算初始停損價格 (區間邊緣)
             stop_loss_price = self._calculate_initial_stop_loss_price(direction, range_data)
-            
+
             if self.console_enabled:
                 print(f"[STOP_LOSS] 🎯 部位 {position_id} (第{lot_id}口):")
                 print(f"[STOP_LOSS]   📍 方向: {direction}")
                 print(f"[STOP_LOSS]   💰 進場價格: {entry_price}")
                 print(f"[STOP_LOSS]   🛡️ 初始停損: {stop_loss_price}")
                 print(f"[STOP_LOSS]   📏 停損距離: {abs(entry_price - stop_loss_price):.1f} 點")
-            
+
             # 更新資料庫
             success = self._update_position_stop_loss_in_db(
                 position_id, stop_loss_price, range_data, entry_price
             )
-            
+
             if success:
                 # 創建停損資訊記錄
                 stop_loss_info = StopLossInfo(
                     position_id=position_id,
-                    group_id=position.get('group_id'),
+                    group_id=position.get('group_pk') or position.get('group_id'),  # 🔧 修復：使用正確的鍵名
                     lot_number=lot_id,
                     direction=direction,
                     entry_price=entry_price,
@@ -145,18 +159,20 @@ class InitialStopLossManager:
                     range_low=range_data['range_low'],
                     created_time=datetime.now().strftime('%H:%M:%S')
                 )
-                
+
                 self.active_stop_losses[position_id] = stop_loss_info
-                
+
                 if self.console_enabled:
                     print(f"[STOP_LOSS] ✅ 部位 {position_id} 初始停損設定成功")
-            
+
             return success
-            
+
         except Exception as e:
             logger.error(f"設定部位停損失敗: {e}")
             if self.console_enabled:
-                print(f"[STOP_LOSS] ❌ 部位 {position_id} 停損設定失敗: {e}")
+                # 🔧 修復：安全地顯示position_id，避免未定義變數錯誤
+                position_display = position_id if position_id is not None else "未知"
+                print(f"[STOP_LOSS] ❌ 部位 {position_display} 停損設定失敗: {e}")
             return False
     
     def _calculate_initial_stop_loss_price(self, direction: str, range_data: Dict[str, float]) -> float:

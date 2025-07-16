@@ -152,12 +152,19 @@ class DrawdownMonitor:
         Returns:
             Optional[DrawdownTrigger]: 回撤觸發資訊 (如果觸發)
         """
+        position_id = None  # 🔧 修復：初始化變數避免異常處理時未定義錯誤
         try:
-            position_id = position['id']
+            # 🔧 修復：使用正確的鍵名，支援新舊格式
+            position_id = position.get('position_pk') or position.get('id')
+            if position_id is None:
+                logger.error(f"部位資料缺少ID: {position}")
+                return None
+
             direction = position['direction']
             peak_price = position['peak_price']
             pullback_ratio = position.get('trailing_pullback_ratio', 0.20)  # 預設20%
-            group_id = position['group_id']
+            # 🔧 修復：使用正確的鍵名，支援新舊格式
+            group_id = position.get('group_pk') or position.get('group_id')
             
             # 檢查是否已經觸發過
             if position_id in self.triggered_positions:
@@ -199,6 +206,10 @@ class DrawdownMonitor:
             
         except Exception as e:
             logger.error(f"檢查回撤觸發失敗: {e}")
+            if self.console_enabled:
+                # 🔧 修復：安全地顯示position_id，避免未定義變數錯誤
+                position_display = position_id if position_id is not None else "未知"
+                print(f"[DRAWDOWN] ❌ 部位 {position_display} 回撤檢查失敗: {e}")
             return None
     
     def _calculate_drawdown(self, direction: str, peak_price: float, current_price: float, 

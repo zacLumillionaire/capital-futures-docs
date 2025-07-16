@@ -25,6 +25,7 @@ class UpdateTask:
     timestamp: float
     retry_count: int = 0
     max_retries: int = 3
+    on_success_callback: callable = None  # 🔧 新增：成功後的回呼函數
 
 class AsyncDatabaseUpdater:
     """
@@ -118,16 +119,18 @@ class AsyncDatabaseUpdater:
         if self.console_enabled:
             print("[ASYNC_DB] 🛑 異步更新工作線程已停止")
     
-    def schedule_position_fill_update(self, position_id: int, fill_price: float, 
-                                    fill_time: str, order_status: str = 'FILLED'):
+    def schedule_position_fill_update(self, position_id: int, fill_price: float,
+                                    fill_time: str, order_status: str = 'FILLED',
+                                    on_success_callback=None):
         """
         排程部位成交更新（非阻塞）
-        
+
         Args:
             position_id: 部位ID
             fill_price: 成交價格
             fill_time: 成交時間
             order_status: 訂單狀態
+            on_success_callback: 成功後的回呼函數 (可選)
         """
         start_time = time.time()
         
@@ -152,7 +155,8 @@ class AsyncDatabaseUpdater:
                 'fill_time': fill_time,
                 'order_status': order_status
             },
-            timestamp=start_time
+            timestamp=start_time,
+            on_success_callback=on_success_callback  # 🔧 新增：傳遞回呼函數
         )
         
         try:
@@ -173,7 +177,7 @@ class AsyncDatabaseUpdater:
                 print(f"[ASYNC_DB] ⚠️ 隊列已滿，跳過部位{position_id}異步更新")
 
     def schedule_position_exit_update(self, position_id: int, exit_price: float,
-                                    exit_time: str, exit_reason: str = 'STOP_LOSS',
+                                    exit_time: str, exit_reason: str = '手動出場',
                                     order_id: str = None, pnl: float = 0.0):
         """
         排程部位平倉更新（非阻塞）- 🔧 新增：參考建倉邏輯
@@ -649,12 +653,38 @@ class AsyncDatabaseUpdater:
         
         try:
             if task.task_type == 'position_fill':
+                # 任務4診斷：添加詳細的處理日誌
+                if self.console_enabled:
+                    print(f"[ASYNC_DB] 🔄 處理部位成交任務: 部位{task.position_id}")
+                    print(f"[ASYNC_DB]   成交價格: {task.data['fill_price']}")
+                    print(f"[ASYNC_DB]   成交時間: {task.data['fill_time']}")
+                    print(f"[ASYNC_DB]   訂單狀態: {task.data['order_status']}")
+
                 success = self.db_manager.confirm_position_filled(
                     position_id=task.position_id,
                     actual_fill_price=task.data['fill_price'],
                     fill_time=task.data['fill_time'],
                     order_status=task.data['order_status']
                 )
+
+                # ✅ 任務1：添加成功日誌，確認異步資料庫寫入任務最終成功執行
+                if success:
+                    if self.console_enabled:
+                        print(f"✅ [ASYNC_DB] 部位 {task.position_id} 已成功更新為ACTIVE，entry_price={task.data['fill_price']}")
+                else:
+                    if self.console_enabled:
+                        print(f"❌ [ASYNC_DB] 部位 {task.position_id} 成交確認失敗")
+
+                # 🔧 新增：成功後執行回呼函數
+                if success and task.on_success_callback:
+                    try:
+                        task.on_success_callback(task.position_id)
+                        if self.console_enabled:
+                            print(f"[ASYNC_DB] ✅ 部位{task.position_id}成交確認回呼執行成功")
+                    except Exception as callback_error:
+                        logger.error(f"成交確認回呼執行失敗: {callback_error}")
+                        if self.console_enabled:
+                            print(f"[ASYNC_DB] ❌ 部位{task.position_id}成交確認回呼失敗: {callback_error}")
             elif task.task_type == 'risk_state':
                 # 🔧 修復：檢查是否已存在風險管理狀態，避免重複創建
                 try:
@@ -883,15 +913,13 @@ class AsyncDatabaseUpdater:
                         exit_price = ?,
                         exit_time = ?,
                         exit_reason = ?,
-                        exit_order_id = ?,
-                        realized_pnl = ?,
+                        pnl = ?,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                 ''', (
                     task.data['exit_price'],
                     task.data['exit_time'],
                     task.data['exit_reason'],
-                    task.data.get('order_id'),
                     task.data.get('pnl', 0.0),
                     task.position_id
                 ))

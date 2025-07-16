@@ -180,8 +180,10 @@ class GlobalExitManager:
 
     def __init__(self):
         if not self._initialized:
-            self.exit_locks = {}  # {position_id: {'timestamp': float, 'trigger_source': str, 'exit_type': str}}
+            # 🔧 任務2：強化鎖定資訊結構
+            self.exit_locks = {}  # {position_id: {'timestamp': float, 'trigger_source': str, 'exit_type': str, 'reason': str, 'details': dict}}
             self.exit_timeout = 2.0  # 🔧 修復：調整為2.0秒，應對平倉查詢延遲，解決"找不到部位資訊"問題
+            self.exit_lock = threading.RLock()  # 🔧 任務3修復：添加線程鎖確保原子性
             self._initialized = True
 
     def can_exit(self, position_id: str, trigger_source: str = "unknown") -> bool:
@@ -200,16 +202,28 @@ class GlobalExitManager:
 
         return False
 
-    def mark_exit(self, position_id: str, trigger_source: str = "unknown", exit_type: str = "stop_loss") -> bool:
-        """標記平倉狀態"""
-        if self.can_exit(position_id, trigger_source):
-            self.exit_locks[position_id] = {
-                'timestamp': time.time(),
-                'trigger_source': trigger_source,
-                'exit_type': exit_type
-            }
-            return True
-        return False
+    def mark_exit(self, position_id: str, trigger_source: str = "unknown", exit_type: str = "stop_loss", reason: str = None, details: dict = None) -> bool:
+        """
+        標記平倉狀態 - 🔧 任務2：強化鎖定資訊，任務3：添加線程安全
+
+        Args:
+            position_id: 部位ID
+            trigger_source: 觸發來源
+            exit_type: 平倉類型
+            reason: 鎖定原因（詳細描述）
+            details: 額外詳細信息
+        """
+        with self.exit_lock:  # 🔧 任務3修復：確保原子性操作
+            if self.can_exit(position_id, trigger_source):
+                self.exit_locks[position_id] = {
+                    'timestamp': time.time(),
+                    'trigger_source': trigger_source,
+                    'exit_type': exit_type,
+                    'reason': reason or f"{exit_type}_triggered_by_{trigger_source}",
+                    'details': details or {}
+                }
+                return True
+            return False
 
     def mark_exit_with_lot(self, position_id: str, lot_index: int, trigger_source: str = "unknown", exit_type: str = "stop_loss") -> bool:
         """
@@ -249,20 +263,58 @@ class GlobalExitManager:
         return False
 
     def clear_exit(self, position_id: str):
-        """清除平倉狀態"""
-        self.exit_locks.pop(position_id, None)
+        """清除平倉狀態 - 🔧 任務3修復：線程安全"""
+        with self.exit_lock:
+            self.exit_locks.pop(position_id, None)
 
     def clear_exit_for_lot(self, position_id: str, lot_index: int):
         """清除口級別平倉狀態"""
         lot_key = f"{position_id}_lot_{lot_index}"
         self.exit_locks.pop(lot_key, None)
 
+    def check_exit_in_progress(self, position_id: str) -> Optional[str]:
+        """
+        檢查平倉是否正在進行中 - 🔧 任務2：返回鎖定原因，任務3：線程安全
+
+        Args:
+            position_id: 部位ID
+
+        Returns:
+            Optional[str]: 如果已鎖定，返回鎖定原因；如果未鎖定，返回 None
+        """
+        with self.exit_lock:  # 🔧 任務3修復：線程安全
+            exit_info = self.exit_locks.get(position_id)
+            if not exit_info:
+                return None
+
+            # 檢查是否過期
+            current_time = time.time()
+            if current_time - exit_info['timestamp'] >= self.exit_timeout:
+                # 過期，清除並返回 None
+                self.exit_locks.pop(position_id, None)
+                return None
+
+            # 返回詳細的鎖定原因
+            return exit_info.get('reason', f"locked_by_{exit_info.get('trigger_source', 'unknown')}")
+
     def get_exit_info(self, position_id: str) -> dict:
         """獲取平倉狀態信息"""
-        return self.exit_locks.get(position_id, {})
+        with self.exit_lock:  # 🔧 任務3修復：線程安全
+            return self.exit_locks.get(position_id, {})
 
     def clear_all_exits(self):
         """清除所有平倉狀態 - 用於新交易週期開始時"""
+        cleared_count = len(self.exit_locks)
+        self.exit_locks.clear()
+        return cleared_count
+
+    def clear_all_locks(self):
+        """
+        任務3：清除所有歷史遺留的平倉鎖 - 系統啟動時的安全檢查
+
+        Returns:
+            int: 清除的鎖數量
+        """
         cleared_count = len(self.exit_locks)
         self.exit_locks.clear()
         return cleared_count

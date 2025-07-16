@@ -9,6 +9,9 @@ from datetime import datetime
 import time
 import threading
 
+# 導入標準化函式
+from stop_loss_executor import standardize_exit_reason
+
 
 class UnifiedExitManager:
     """統一出場管理器 - 所有出場的統一入口"""
@@ -294,10 +297,11 @@ class UnifiedExitManager:
                     )
                 else:
                     # 🛡️ 同步更新（備用模式）
+                    standardized_reason = standardize_exit_reason(exit_reason)
                     self.db_manager.update_position_status(
                         position_id=position_info['id'],
                         status='ACTIVE',  # 保持ACTIVE狀態
-                        exit_reason=exit_reason,
+                        exit_reason=standardized_reason,
                         exit_price=exit_price
                     )
                 

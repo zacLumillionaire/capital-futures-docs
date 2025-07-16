@@ -13,21 +13,39 @@ class SimpleVirtualQuote:
     """簡化版虛擬報價機 - 只做核心功能"""
     
     def __init__(self):
+        # 載入配置
+        self.config = self._load_config()
+
         # 報價參數
-        self.base_price = 21500
+        self.base_price = self.config.get('virtual_quote_config', {}).get('base_price', 21500)
         self.current_price = self.base_price
-        self.spread = 5  # 買賣價差
+        self.spread = self.config.get('virtual_quote_config', {}).get('spread', 5)
+        self.quote_interval = self.config.get('virtual_quote_config', {}).get('quote_interval', 1.0)
         self.running = False
         self.quote_thread = None
-        
+
         # 事件處理器
         self.quote_handlers = []
         self.reply_handlers = []
-        
+        self.best5_handlers = []  # 五檔報價處理器
+
         # 下單計數器
         self.order_counter = 0
-        
+
         print("✅ [Virtual] 簡化版虛擬報價機初始化完成")
+        print(f"📊 [Virtual] 基準價格: {self.base_price}, 報價間隔: {self.quote_interval}秒")
+
+    def _load_config(self):
+        """載入配置文件"""
+        try:
+            import json
+            import os
+            config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"⚠️ [Virtual] 載入配置失敗: {e}, 使用默認配置")
+            return {}
     
     def register_quote_handler(self, handler):
         """註冊報價事件處理器"""
@@ -38,6 +56,11 @@ class SimpleVirtualQuote:
         """註冊回報事件處理器"""
         self.reply_handlers.append(handler)
         print(f"📝 [Virtual] 註冊回報處理器: {type(handler).__name__}")
+
+    def register_best5_handler(self, handler):
+        """註冊五檔報價事件處理器"""
+        self.best5_handlers.append(handler)
+        print(f"📝 [Virtual] 註冊五檔處理器: {type(handler).__name__}")
     
     def start_quote_feed(self):
         """開始報價推送"""
@@ -49,9 +72,24 @@ class SimpleVirtualQuote:
         self.quote_thread.start()
         print("🚀 [Virtual] 報價推送已啟動")
     
+    def start_best5_feed(self):
+        """啟動五檔報價推送"""
+        if not hasattr(self, 'best5_running'):
+            self.best5_running = False
+
+        if self.best5_running:
+            return
+
+        self.best5_running = True
+        self.best5_thread = threading.Thread(target=self._best5_loop, daemon=True)
+        self.best5_thread.start()
+        print("🚀 [Virtual] 五檔報價推送已啟動")
+
     def stop_quote_feed(self):
         """停止報價推送"""
         self.running = False
+        if hasattr(self, 'best5_running'):
+            self.best5_running = False
         print("🛑 [Virtual] 報價推送已停止")
     
     def _quote_loop(self):
@@ -89,13 +127,62 @@ class SimpleVirtualQuote:
                             0  # nSimulate
                         )
                 
-                # 等待0.5秒
-                time.sleep(0.5)
+                # 使用配置的報價間隔
+                time.sleep(self.quote_interval)
                 
             except Exception as e:
                 print(f"❌ [Virtual] 報價循環錯誤: {e}")
                 time.sleep(0.1)
-    
+
+    def _best5_loop(self):
+        """五檔報價循環"""
+        while self.best5_running:
+            try:
+                # 生成五檔報價數據
+                base_bid = self.current_price - 2
+                base_ask = self.current_price + 2
+
+                # 構建五檔數據
+                best5_data = {
+                    'bid1': base_bid, 'bid1_qty': random.randint(10, 50),
+                    'bid2': base_bid - 1, 'bid2_qty': random.randint(5, 30),
+                    'bid3': base_bid - 2, 'bid3_qty': random.randint(5, 25),
+                    'bid4': base_bid - 3, 'bid4_qty': random.randint(3, 20),
+                    'bid5': base_bid - 4, 'bid5_qty': random.randint(2, 15),
+                    'ask1': base_ask, 'ask1_qty': random.randint(10, 50),
+                    'ask2': base_ask + 1, 'ask2_qty': random.randint(5, 30),
+                    'ask3': base_ask + 2, 'ask3_qty': random.randint(5, 25),
+                    'ask4': base_ask + 3, 'ask4_qty': random.randint(3, 20),
+                    'ask5': base_ask + 4, 'ask5_qty': random.randint(2, 15),
+                }
+
+                # 推送五檔報價事件
+                for handler in self.best5_handlers:
+                    if hasattr(handler, 'OnNotifyBest5LONG'):
+                        handler.OnNotifyBest5LONG(
+                            1,  # sMarketNo
+                            0,  # nStockidx
+                            0,  # nPtr
+                            int(best5_data['bid1'] * 100), int(best5_data['bid1_qty']),  # 買1價量
+                            int(best5_data['bid2'] * 100), int(best5_data['bid2_qty']),  # 買2價量
+                            int(best5_data['bid3'] * 100), int(best5_data['bid3_qty']),  # 買3價量
+                            int(best5_data['bid4'] * 100), int(best5_data['bid4_qty']),  # 買4價量
+                            int(best5_data['bid5'] * 100), int(best5_data['bid5_qty']),  # 買5價量
+                            int(best5_data['ask1'] * 100), int(best5_data['ask1_qty']),  # 賣1價量
+                            int(best5_data['ask2'] * 100), int(best5_data['ask2_qty']),  # 賣2價量
+                            int(best5_data['ask3'] * 100), int(best5_data['ask3_qty']),  # 賣3價量
+                            int(best5_data['ask4'] * 100), int(best5_data['ask4_qty']),  # 賣4價量
+                            int(best5_data['ask5'] * 100), int(best5_data['ask5_qty']),  # 賣5價量
+                            0  # nSimulate
+                        )
+
+                # 五檔報價更新頻率稍慢一些
+                time.sleep(self.quote_interval * 2)
+
+            except Exception as e:
+                print(f"❌ [Virtual] 五檔報價循環錯誤: {e}")
+                time.sleep(0.1)
+
     def process_order(self, user_id, async_flag, order_obj):
         """處理下單請求"""
         try:
@@ -128,8 +215,18 @@ class SimpleVirtualQuote:
             time.sleep(0.05)  # 50ms後
             self._send_reply(order_id, account, product, buy_sell, price, quantity, "N", 0, 0)
             
-            # 2. 決定是否成交 (95%成交率)
-            if random.random() < 0.95:
+            # 2. 決定是否成交 (從配置讀取成交率)
+            try:
+                import json
+                import os
+                config_path = os.path.join(os.path.dirname(__file__), 'config.json')
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                fill_probability = config['virtual_quote_config']['fill_probability']
+            except:
+                fill_probability = 0.95  # 默認值
+
+            if random.random() < fill_probability:
                 # 成交
                 time.sleep(0.15)  # 再等150ms
                 fill_price = price  # 簡化：使用委託價成交
@@ -211,7 +308,8 @@ class MockSKQuoteLib:
         return 0
     
     def SKQuoteLib_RequestBest5LONG(self, page, product):
-        print(f"🎯 [Virtual] 模擬五檔訂閱: {product}")
+        print(f"🎯 [Virtual] 開始五檔報價推送: {product}")
+        _virtual_quote.start_best5_feed()
         return 0
 
 class MockSKReplyLib:
@@ -246,6 +344,10 @@ def register_quote_handler(handler):
 def register_reply_handler(handler):
     """註冊回報事件處理器"""
     _virtual_quote.register_reply_handler(handler)
+
+def register_best5_handler(handler):
+    """註冊五檔報價事件處理器"""
+    _virtual_quote.register_best5_handler(handler)
 
 def start_virtual_machine():
     """啟動虛擬報價機"""

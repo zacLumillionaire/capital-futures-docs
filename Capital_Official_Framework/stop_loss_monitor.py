@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class StopLossTrigger:
-    """停損觸發資訊"""
+    """停損觸發資訊 - 🔧 任務2：擴展為完整數據載體"""
     position_id: int
     group_id: int
     direction: str
@@ -25,6 +25,14 @@ class StopLossTrigger:
     trigger_time: str
     trigger_reason: str
     breach_amount: float  # 突破金額
+
+    # 🔧 任務2：新增完整部位信息，避免執行器查詢數據庫
+    entry_price: Optional[float] = None  # 進場價格（來自內存）
+    peak_price: Optional[float] = None   # 峰值價格（移動停利用）
+    quantity: int = 1                    # 部位數量
+    lot_id: int = 1                      # 口數ID
+    range_high: Optional[float] = None   # 區間上限
+    range_low: Optional[float] = None    # 區間下限
 
 class StopLossMonitor:
     """
@@ -135,33 +143,40 @@ class StopLossMonitor:
             logger.error(f"查詢活躍停損部位失敗: {e}")
             return []
     
-    def _check_position_stop_loss(self, position: Dict, current_price: float, 
+    def _check_position_stop_loss(self, position: Dict, current_price: float,
                                 timestamp: str) -> Optional[StopLossTrigger]:
         """
         檢查單個部位的停損觸發
-        
+
         Args:
             position: 部位資料
             current_price: 當前價格
             timestamp: 時間戳
-            
+
         Returns:
             Optional[StopLossTrigger]: 停損觸發資訊 (如果觸發)
         """
+        position_id = None  # 🔧 修復：初始化變數避免異常處理時未定義錯誤
         try:
-            position_id = position['id']
+            # 🔧 修復：使用正確的鍵名，支援新舊格式
+            position_id = position.get('position_pk') or position.get('id')
+            if position_id is None:
+                logger.error(f"部位資料缺少ID: {position}")
+                return None
+
             direction = position['direction']
             stop_loss_price = position['current_stop_loss']
-            group_id = position['group_id']
-            
+            # 🔧 修復：使用正確的鍵名，支援新舊格式
+            group_id = position.get('group_pk') or position.get('group_id')
+
             # 檢查停損觸發條件
             is_triggered, breach_amount = self._is_stop_loss_triggered(
                 direction, current_price, stop_loss_price
             )
-            
+
             if is_triggered:
                 trigger_reason = f"{direction}部位價格突破停損點"
-                
+
                 if self.console_enabled:
                     print(f"[STOP_MONITOR] 🚨 停損觸發!")
                     print(f"[STOP_MONITOR]   部位ID: {position_id}")
@@ -170,7 +185,7 @@ class StopLossMonitor:
                     print(f"[STOP_MONITOR]   停損價格: {stop_loss_price}")
                     print(f"[STOP_MONITOR]   突破金額: {breach_amount:.1f} 點")
                     print(f"[STOP_MONITOR]   觸發時間: {timestamp}")
-                
+
                 return StopLossTrigger(
                     position_id=position_id,
                     group_id=group_id,
@@ -181,11 +196,15 @@ class StopLossMonitor:
                     trigger_reason=trigger_reason,
                     breach_amount=breach_amount
                 )
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"檢查部位停損失敗: {e}")
+            if self.console_enabled:
+                # 🔧 修復：安全地顯示position_id，避免未定義變數錯誤
+                position_display = position_id if position_id is not None else "未知"
+                print(f"[STOP_MONITOR] ❌ 部位 {position_display} 停損檢查失敗: {e}")
             return None
     
     def _is_stop_loss_triggered(self, direction: str, current_price: float, 

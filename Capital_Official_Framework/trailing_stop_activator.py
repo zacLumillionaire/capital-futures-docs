@@ -125,30 +125,37 @@ class TrailingStopActivator:
             logger.error(f"查詢符合條件的部位失敗: {e}")
             return []
     
-    def _check_position_activation(self, position: Dict, current_price: float, 
+    def _check_position_activation(self, position: Dict, current_price: float,
                                  timestamp: str) -> Optional[TrailingStopActivation]:
         """
         檢查單個部位的移動停利啟動
-        
+
         Args:
             position: 部位資料
             current_price: 當前價格
             timestamp: 時間戳
-            
+
         Returns:
             Optional[TrailingStopActivation]: 啟動資訊 (如果啟動)
         """
+        position_id = None  # 🔧 修復：初始化變數避免異常處理時未定義錯誤
         try:
-            position_id = position['id']
+            # 🔧 修復：使用正確的鍵名，支援新舊格式
+            position_id = position.get('position_pk') or position.get('id')
+            if position_id is None:
+                logger.error(f"部位資料缺少ID: {position}")
+                return None
+
             direction = position['direction']
             entry_price = position['entry_price']
             activation_points = position['trailing_activation_points']
             lot_id = position.get('lot_id', 1)
-            group_id = position['group_id']
-            
+            # 🔧 修復：使用正確的鍵名，支援新舊格式
+            group_id = position.get('group_pk') or position.get('group_id')
+
             # 計算當前獲利點數
             profit_points = self._calculate_profit_points(direction, entry_price, current_price)
-            
+
             # 檢查是否達到啟動條件
             if profit_points >= activation_points:
                 if self.console_enabled:
@@ -160,7 +167,7 @@ class TrailingStopActivator:
                     print(f"[TRAILING]   當前獲利: {profit_points:.1f} 點")
                     print(f"[TRAILING]   啟動條件: {activation_points} 點")
                     print(f"[TRAILING]   啟動時間: {timestamp}")
-                
+
                 return TrailingStopActivation(
                     position_id=position_id,
                     group_id=group_id,
@@ -172,11 +179,15 @@ class TrailingStopActivator:
                     profit_points=profit_points,
                     activation_time=timestamp
                 )
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"檢查部位移動停利啟動失敗: {e}")
+            if self.console_enabled:
+                # 🔧 修復：安全地顯示position_id，避免未定義變數錯誤
+                position_display = position_id if position_id is not None else "未知"
+                print(f"[TRAILING] ❌ 部位 {position_display} 移動停利檢查失敗: {e}")
             return None
     
     def _calculate_profit_points(self, direction: str, entry_price: float, current_price: float) -> float:

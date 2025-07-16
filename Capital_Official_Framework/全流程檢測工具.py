@@ -215,13 +215,37 @@ class StrategyFlowInspector:
             else:
                 self.log_passed('ENTRY_FLOW', "所有部位都正確關聯到策略組")
             
-            # 檢查是否有部位使用了DB_ID作為group_id
+            # 🔧 修復：檢查是否有部位使用了DB_ID作為group_id（使用正確的查詢邏輯）
+            # 先查詢所有活躍部位
             cursor.execute('''
-                SELECT pr.id, pr.group_id, sg.id as db_id, sg.group_id as real_group_id
+                SELECT pr.id, pr.group_id
                 FROM position_records pr
-                JOIN strategy_groups sg ON pr.group_id = sg.id AND sg.date = ?
                 WHERE pr.status = 'ACTIVE'
-            ''', (today,))
+            ''')
+
+            active_positions = cursor.fetchall()
+            db_id_misuse = []
+
+            # 對每個部位檢查是否存在對應的策略組
+            for pos_id, group_id in active_positions:
+                # 檢查是否存在邏輯組ID匹配的策略組
+                cursor.execute('''
+                    SELECT COUNT(*) FROM strategy_groups
+                    WHERE group_id = ? AND date = ?
+                ''', (group_id, today))
+
+                logical_match = cursor.fetchone()[0]
+
+                if logical_match == 0:
+                    # 檢查是否錯誤使用了DB_ID
+                    cursor.execute('''
+                        SELECT id, group_id FROM strategy_groups
+                        WHERE id = ? AND date = ?
+                    ''', (group_id, today))
+
+                    db_match = cursor.fetchone()
+                    if db_match:
+                        db_id_misuse.append((pos_id, group_id, db_match[0], db_match[1]))
             
             db_id_misuse = cursor.fetchall()
             if db_id_misuse:

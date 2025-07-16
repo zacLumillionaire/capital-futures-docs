@@ -302,7 +302,7 @@ class ExitOrderTracker:
                 position_id=position_pk,  # 保持與async_updater參數一致
                 exit_price=fill_report.fill_price,
                 exit_time=fill_report.fill_time,
-                exit_reason='MARKET_EXIT',
+                exit_reason='手動出場',  # 修復：使用符合資料庫約束的值
                 order_id=exit_order.order_id,
                 pnl=pnl
             )

@@ -193,14 +193,21 @@ class CumulativeProfitProtectionManager:
         Returns:
             Optional[ProtectionUpdate]: 保護更新資訊 (如果需要更新)
         """
+        position_id = None  # 🔧 修復：初始化變數避免異常處理時未定義錯誤
         try:
-            position_id = position['id']
+            # 🔧 修復：使用正確的鍵名，支援新舊格式
+            position_id = position.get('position_pk') or position.get('id')
+            if position_id is None:
+                logger.error(f"部位資料缺少ID: {position}")
+                return None
+
             direction = position['direction']
             entry_price = position['entry_price']
             current_stop_loss = position['current_stop_loss']
             protection_multiplier = position.get('protective_stop_multiplier', 2.0)  # 預設2.0倍
             lot_id = position.get('lot_id', 1)
-            group_id = position['group_id']
+            # 🔧 修復：使用正確的鍵名，支援新舊格式
+            group_id = position.get('group_pk') or position.get('group_id')
             
             # 檢查是否有保護倍數設定
             if protection_multiplier is None:
@@ -251,6 +258,10 @@ class CumulativeProfitProtectionManager:
             
         except Exception as e:
             logger.error(f"計算保護性停損更新失敗: {e}")
+            if self.console_enabled:
+                # 🔧 修復：安全地顯示position_id，避免未定義變數錯誤
+                position_display = position_id if position_id is not None else "未知"
+                print(f"[PROTECTION] ❌ 部位 {position_display} 保護性停損檢查失敗: {e}")
             return None
     
     def _calculate_protective_stop_price(self, direction: str, entry_price: float, 

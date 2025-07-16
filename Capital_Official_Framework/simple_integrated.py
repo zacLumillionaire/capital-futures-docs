@@ -308,6 +308,11 @@ class SimpleIntegratedApp:
                 self.optimized_risk_manager.set_stop_loss_executor(self.stop_loss_executor)
                 print("[OPTIMIZED_RISK] 🔗 停損執行器已設置到優化風險管理器")
 
+            # 🚀 任務2新增：設置異步更新器到優化風險管理器
+            if hasattr(self, 'async_updater') and self.async_updater:
+                self.optimized_risk_manager.set_async_updater(self.async_updater)
+                print("[OPTIMIZED_RISK] 🚀 異步更新器已設置到優化風險管理器")
+
             # ✅ 設定啟用狀態
             self.optimized_risk_enabled = True
 
@@ -451,6 +456,19 @@ class SimpleIntegratedApp:
                             print("[MULTI_GROUP] ⚠️ 檢測到回調丟失，重新設置...")
                             self.multi_group_position_manager._setup_simplified_tracker_callbacks()
 
+                # 🔧 修復：正式機啟動時的安全檢查 - 清除所有歷史遺留的平倉鎖
+                try:
+                    if hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
+                       self.multi_group_position_manager.simplified_tracker:
+                        global_exit_manager = self.multi_group_position_manager.simplified_tracker.global_exit_manager
+                        cleared_count = global_exit_manager.clear_all_locks()
+                        if cleared_count > 0:
+                            print(f"[MULTI_GROUP] 🧹 正式機啟動時清除了 {cleared_count} 個歷史平倉鎖")
+                        else:
+                            print("[MULTI_GROUP] 🧹 正式機啟動時無需清除平倉鎖（系統乾淨）")
+                except Exception as clear_error:
+                    print(f"[MULTI_GROUP] ⚠️ 正式機啟動時清除平倉鎖失敗: {clear_error}")
+
                 # 🔍 DEBUG: 設定簡化追蹤器的console開關
                 if hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
                    self.multi_group_position_manager.simplified_tracker:
@@ -494,6 +512,17 @@ class SimpleIntegratedApp:
                                 if success:
                                     if self.console_enabled:
                                         print(f"[MAIN] ✅ 部位{position_id}狀態已更新為EXITED")
+
+                                    # 🔧 修復：平倉成功後清除全局平倉鎖
+                                    try:
+                                        if hasattr(self.multi_group_position_manager, 'simplified_tracker'):
+                                            global_exit_manager = self.multi_group_position_manager.simplified_tracker.global_exit_manager
+                                            global_exit_manager.clear_exit(str(position_id))
+                                            if self.console_enabled:
+                                                print(f"[MAIN] 🔓 已清除部位{position_id}的平倉鎖")
+                                    except Exception as clear_error:
+                                        if self.console_enabled:
+                                            print(f"[MAIN] ⚠️ 清除平倉鎖失敗: {clear_error}")
                                 else:
                                     if self.console_enabled:
                                         print(f"[MAIN] ❌ 部位{position_id}狀態更新失敗")
@@ -526,6 +555,17 @@ class SimpleIntegratedApp:
                             if retry_count > max_retries:
                                 if self.console_enabled:
                                     print(f"[MAIN] ❌ 部位{position_id}追價次數超限({retry_count}>{max_retries})")
+
+                                # 🔧 修復：追價失敗後清除全局平倉鎖
+                                try:
+                                    if hasattr(self.multi_group_position_manager, 'simplified_tracker'):
+                                        global_exit_manager = self.multi_group_position_manager.simplified_tracker.global_exit_manager
+                                        global_exit_manager.clear_exit(str(position_id))
+                                        if self.console_enabled:
+                                            print(f"[MAIN] 🔓 追價失敗，已清除部位{position_id}的平倉鎖")
+                                except Exception as clear_error:
+                                    if self.console_enabled:
+                                        print(f"[MAIN] ⚠️ 清除平倉鎖失敗: {clear_error}")
                                 return
 
                             # 計算平倉追價價格
@@ -3005,8 +3045,9 @@ class SimpleIntegratedApp:
                 self.check_exit_conditions_safe(price, time_str)
 
             # 🎯 多組策略風險管理檢查
-            if self.multi_group_enabled and self.multi_group_risk_engine:
-                self.check_multi_group_exit_conditions(price, time_str)
+            # 任務2：停用舊引擎輪詢，統一到 OptimizedRiskManager
+            # if self.multi_group_enabled and self.multi_group_risk_engine:
+            #     self.check_multi_group_exit_conditions(price, time_str)
             elif self.console_enabled:
                 # 🔍 DEBUG: 風險管理引擎狀態檢查 (每100次輸出一次)
                 if not hasattr(self, '_risk_engine_debug_count'):
@@ -3229,22 +3270,10 @@ class SimpleIntegratedApp:
                         print(f"✅ [MULTI_GROUP] 組別 {group_config.group_id} 進場成功")
 
                         # =======================================================
-                        # 🚀 新增：在此處添加初始停損設定邏輯
+                        # 🔧 修復：移除直接的初始停損設定邏輯
+                        # 初始停損現在通過成交確認回呼自動設定，確保「先成交後設定」的原子性
                         # =======================================================
-                        if hasattr(self, 'initial_stop_loss_manager') and self.initial_stop_loss_manager:
-                            try:
-                                # 獲取組的區間高低點資訊
-                                group_info = self.multi_group_db_manager.get_strategy_group_by_db_id(group_db_id)
-                                if group_info and group_info.get('range_high') is not None:
-                                    self.initial_stop_loss_manager.setup_initial_stop_loss_for_group(
-                                        group_db_id=group_db_id,
-                                        range_data=group_info
-                                    )
-                                    print(f"🛡️ [STOP_LOSS] 組別 {group_config.group_id} 初始停損已自動設定")
-                                else:
-                                    print(f"⚠️ [STOP_LOSS] 無法為組別 {group_config.group_id} 設定初始停損：缺少區間資訊")
-                            except Exception as sl_error:
-                                print(f"❌ [STOP_LOSS] 為組別 {group_config.group_id} 設定初始停損失敗: {sl_error}")
+                        print(f"🛡️ [STOP_LOSS] 組別 {group_config.group_id} 初始停損將在成交確認後自動設定")
                         # =======================================================
 
                         # 🚀 新增：通知優化風險管理器新部位建立 (修復版)
@@ -3255,13 +3284,19 @@ class SimpleIntegratedApp:
                                     # 🔧 修復：確保 row_factory 設置正確
                                     conn.row_factory = sqlite3.Row
                                     cursor = conn.cursor()
-                                    cursor.execute('''
-                                        SELECT pr.*, sg.range_high, sg.range_low
-                                        FROM position_records pr
-                                        JOIN strategy_groups sg ON pr.group_id = sg.id
-                                        WHERE pr.group_id = ? AND pr.status IN ('PENDING', 'ACTIVE')
-                                        ORDER BY pr.lot_id
-                                    ''', (group_db_id,))
+                                    # 🔧 修復：先獲取邏輯組別編號，然後正確查詢部位記錄
+                                    group_info = self.multi_group_db_manager.get_strategy_group_by_db_id(group_db_id)
+                                    if group_info:
+                                        logical_group_id = group_info['logical_group_id']
+                                        cursor.execute('''
+                                            SELECT pr.*, sg.range_high, sg.range_low
+                                            FROM position_records pr
+                                            JOIN strategy_groups sg ON pr.group_id = sg.group_id
+                                            WHERE pr.group_id = ? AND pr.status IN ('PENDING', 'ACTIVE')
+                                            ORDER BY pr.lot_id
+                                        ''', (logical_group_id,))
+                                    else:
+                                        cursor.execute('SELECT 1 WHERE 0')  # 空查詢
 
                                     new_positions = cursor.fetchall()
 
@@ -4171,23 +4206,12 @@ class SimpleIntegratedApp:
                 print(f"[MULTI_GROUP] ⚠️ 異步更新器初始化失敗: {e}")
                 self.async_updater = None
 
-            # 初始化風險管理引擎
-            self.multi_group_risk_engine = RiskManagementEngine(self.multi_group_db_manager)
+            # 任務4：移除冗餘的 RiskManagementEngine 初始化
+            # 風險管理職責已統一到 OptimizedRiskManager
+            # self.multi_group_risk_engine = RiskManagementEngine(self.multi_group_db_manager)
+            self.multi_group_risk_engine = None  # 保留變數以避免其他代碼引用錯誤
 
-            # 🚀 連接全局異步更新器到風險管理引擎
-            if hasattr(self, 'async_updater') and self.async_updater:
-                # 🔧 檢查異步更新器健康狀態
-                if self.async_updater.running and self.async_updater.worker_thread and self.async_updater.worker_thread.is_alive():
-                    self.multi_group_risk_engine.set_async_updater(self.async_updater)
-                    print("[MULTI_GROUP] 🔗 風險管理引擎已連接全局異步更新器")
-                else:
-                    print("[MULTI_GROUP] ⚠️ 異步更新器未正常運行，嘗試重啟...")
-                    self.async_updater.start()  # 重新啟動
-                    if self.async_updater.running:
-                        self.multi_group_risk_engine.set_async_updater(self.async_updater)
-                        print("[MULTI_GROUP] 🔗 風險管理引擎已連接重啟後的異步更新器")
-                    else:
-                        print("[MULTI_GROUP] ❌ 異步更新器重啟失敗")
+            print("[MULTI_GROUP] 🔄 風險管理已統一到 OptimizedRiskManager")
 
             # 🔧 設置停損執行器到風險管理引擎（如果已創建）
             if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
@@ -4199,29 +4223,9 @@ class SimpleIntegratedApp:
                     self.optimized_risk_manager.set_stop_loss_executor(self.stop_loss_executor)
                     print("[MULTI_GROUP] 🔗 停損執行器已設置到優化風險管理器")
 
-            # 🔍 DEBUG: 設定console開關給風險管理引擎
-            if hasattr(self.multi_group_risk_engine, 'console_enabled'):
-                # 確保console_enabled屬性存在
-                if not hasattr(self, 'console_enabled'):
-                    self.console_enabled = True  # 預設啟用console模式
-
-                self.multi_group_risk_engine.console_enabled = self.console_enabled
-                if self.console_enabled:
-                    print("[MULTI_GROUP] 🔍 風險管理引擎DEBUG模式已啟用")
-
-                    # 🔍 立即測試風險管理引擎
-                    try:
-                        test_price = 22300.0
-                        test_time = "16:00:00"
-                        print(f"[MULTI_GROUP] 🧪 測試風險管理引擎: {test_price} @{test_time}")
-
-                        exit_actions = self.multi_group_risk_engine.check_all_exit_conditions(test_price, test_time)
-                        print(f"[MULTI_GROUP] ✅ 風險管理引擎測試成功: {len(exit_actions)}個出場動作")
-
-                    except Exception as test_error:
-                        print(f"[MULTI_GROUP] ❌ 風險管理引擎測試失敗: {test_error}")
-                        import traceback
-                        traceback.print_exc()
+            # 任務4：移除冗餘的 RiskManagementEngine 測試代碼
+            # 風險管理測試已統一到 OptimizedRiskManager
+            print("[MULTI_GROUP] 🧪 風險管理測試已統一到 OptimizedRiskManager")
 
             # 🎯 設定預設配置 - 改用1組3口模式 (對應回測程式)
             presets = create_preset_configs()
@@ -4387,6 +4391,50 @@ class SimpleIntegratedApp:
 
             # 註冊回調函數
             self.stop_loss_monitor.add_stop_loss_callback(on_stop_loss_triggered)
+
+            # 🚀 任務3新增：註冊平倉成功回呼函式
+            def on_exit_success(position_id: int, execution_result, trigger_info):
+                """平倉成功回呼函式 - 負責異步更新資料庫"""
+                try:
+                    if self.console_enabled:
+                        print(f"[STOP_LOSS] 📞 平倉成功回呼觸發: 部位{position_id}")
+
+                    # 使用異步更新器更新資料庫
+                    if hasattr(self, 'async_updater') and self.async_updater:
+                        # 標準化 exit_reason
+                        from stop_loss_executor import standardize_exit_reason
+                        raw_exit_reason = getattr(trigger_info, 'trigger_reason', '手動出場')
+                        standardized_reason = standardize_exit_reason(raw_exit_reason)
+
+                        self.async_updater.schedule_position_exit_update(
+                            position_id=position_id,
+                            exit_price=execution_result.execution_price,
+                            exit_time=execution_result.execution_time,
+                            exit_reason=standardized_reason,
+                            order_id=execution_result.order_id,
+                            pnl=execution_result.pnl
+                        )
+
+                        if self.console_enabled:
+                            print(f"[STOP_LOSS] 🚀 平倉狀態已排程異步更新: 部位{position_id}")
+                    else:
+                        # 回退到同步更新
+                        if hasattr(self.stop_loss_executor, '_update_position_exit_status_sync'):
+                            self.stop_loss_executor._update_position_exit_status_sync(
+                                position_id, execution_result, trigger_info
+                            )
+                            if self.console_enabled:
+                                print(f"[STOP_LOSS] 🛡️ 平倉狀態已同步更新: 部位{position_id}")
+
+                except Exception as e:
+                    logger.error(f"平倉成功回呼處理失敗: {e}")
+                    if self.console_enabled:
+                        print(f"[STOP_LOSS] ❌ 平倉回呼處理失敗: {e}")
+
+            # 註冊平倉成功回呼
+            self.stop_loss_executor.add_exit_success_callback(on_exit_success)
+            if self.console_enabled:
+                print("[STOP_LOSS] 📞 平倉成功回呼已註冊")
 
             # 🎯 初始化移動停利系統
             self._init_trailing_stop_system()
@@ -5003,6 +5051,9 @@ class SimpleIntegratedApp:
     def prepare_multi_group_monitoring(self):
         """準備多組策略監控（不立即創建策略組）"""
         try:
+            # 🔧 新增：在區間監控開始前清除所有過期鎖定
+            self._clear_expired_exit_locks()
+
             # 設定多組策略為監控狀態
             self.multi_group_running = True
             self.multi_group_monitoring_ready = True  # 新增監控準備狀態
@@ -5023,6 +5074,21 @@ class SimpleIntegratedApp:
             print(f"❌ [STRATEGY] 準備多組策略監控失敗: {e}")
             if self.multi_group_logger:
                 self.multi_group_logger.system_error(f"準備監控失敗: {e}")
+
+    def _clear_expired_exit_locks(self):
+        """清除過期的平倉鎖定"""
+        try:
+            if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
+                if hasattr(self.optimized_risk_manager, 'global_exit_manager'):
+                    manager = self.optimized_risk_manager.global_exit_manager
+                    cleared_count = manager.clear_all_exits()
+                    print(f"🧹 [STRATEGY] 區間監控開始前清除了 {cleared_count} 個遺留鎖定")
+                    if self.multi_group_logger:
+                        self.multi_group_logger.system_info(f"清除了 {cleared_count} 個遺留鎖定")
+        except Exception as e:
+            print(f"⚠️ [STRATEGY] 清除過期鎖定失敗: {e}")
+            if self.multi_group_logger:
+                self.multi_group_logger.system_warning(f"清除過期鎖定失敗: {e}")
 
     def on_multi_group_frequency_changed(self, event=None):
         """多組策略執行頻率變更事件"""

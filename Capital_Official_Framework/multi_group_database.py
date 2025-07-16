@@ -386,8 +386,36 @@ class MultiGroupDatabaseManager:
                              rule_config: Optional[str] = None, order_id: Optional[str] = None,
                              api_seq_no: Optional[str] = None, order_status: str = 'PENDING',
                              retry_count: int = 0, max_slippage_points: int = 5) -> int:
-        """創建部位記錄 - 支援訂單追蹤，包含group_id驗證"""
+        """
+        創建部位記錄 - 支援訂單追蹤，包含group_id驗證
+
+        包含防禦性檢查以確保數字參數不會是 None，避免後續的 TypeError。
+
+        Args:
+            group_id: 組別ID
+            lot_id: 口數ID
+            direction: 交易方向
+            entry_price: 進場價格（可選）
+            entry_time: 進場時間（可選）
+            rule_config: 規則配置（可選）
+            order_id: 訂單ID（可選）
+            api_seq_no: API序號（可選）
+            order_status: 訂單狀態，默認為 'PENDING'
+            retry_count: 重試次數，默認為 0
+            max_slippage_points: 最大滑價點數，默認為 5
+
+        Returns:
+            int: 創建的部位記錄ID
+        """
         try:
+            # 🛡️ 根源性修復：確保數字參數不是 None，避免後續比較操作出現 TypeError
+            if retry_count is None:
+                retry_count = 0
+                logger.warning(f"retry_count為None，設為默認值0")
+            if max_slippage_points is None:
+                max_slippage_points = 5
+                logger.warning(f"max_slippage_points為None，設為默認值5")
+
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
@@ -607,7 +635,7 @@ class MultiGroupDatabaseManager:
             return False
 
     def get_active_positions_by_group(self, group_id: int) -> List[Dict]:
-        """取得指定組的活躍部位 - 🔧 修復：包含策略組信息"""
+        """取得指定組的活躍部位 - 🔧 修復：正確關聯邏輯組ID"""
         try:
             from datetime import date
             with self.get_connection() as conn:
@@ -628,7 +656,7 @@ class MultiGroupDatabaseManager:
                         FROM strategy_groups
                         WHERE date = ?
                         ORDER BY id DESC
-                    ) sg ON p.group_id = sg.group_pk
+                    ) sg ON p.group_id = sg.logical_group_id
                     WHERE p.group_id = ? AND p.status = 'ACTIVE'
                     ORDER BY p.lot_id
                 ''', (date.today().isoformat(), group_id))
@@ -869,15 +897,31 @@ class MultiGroupDatabaseManager:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+
+                # 任務4診斷：檢查更新前的狀態
+                cursor.execute('SELECT entry_price, status FROM position_records WHERE id = ?', (position_id,))
+                before_update = cursor.fetchone()
+                if before_update:
+                    logger.info(f"[DB] 部位{position_id}更新前: entry_price={before_update[0]}, status={before_update[1]}")
+
                 cursor.execute('''
                     UPDATE position_records
                     SET entry_price = ?, entry_time = ?, status = 'ACTIVE',
                         order_status = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                 ''', (actual_fill_price, fill_time, order_status, position_id))
+
+                # 檢查是否有行被更新
+                rows_affected = cursor.rowcount
                 conn.commit()
-                logger.info(f"✅ 確認部位{position_id}成交: @{actual_fill_price}")
-                return True
+
+                if rows_affected > 0:
+                    logger.info(f"✅ 確認部位{position_id}成交: entry_price={actual_fill_price}, 影響行數={rows_affected}")
+                    return True
+                else:
+                    logger.warning(f"⚠️ 部位{position_id}成交確認: 沒有行被更新")
+                    return False
+
         except Exception as e:
             logger.error(f"確認部位成交失敗: {e}")
             return False

@@ -16,6 +16,27 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+# 🚀 【Task 2 新增】直接導入核心回測引擎（處理特殊字符檔名）
+import importlib.util
+spec = importlib.util.spec_from_file_location(
+    "rev_multi_module",
+    "rev_multi_Profit-Funded Risk_多口.py"
+)
+rev_multi_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rev_multi_module)
+
+# 導入所需的函數（重命名以避免與Flask路由衝突）
+core_run_backtest = rev_multi_module.run_backtest
+
+# 🚀 【重構】導入統一的配置工廠
+from strategy_config_factory import create_web_gui_compatible_config
+
+# 🔍 調試：檢查函數簽名
+import inspect
+print(f"🔍 DEBUG: core_run_backtest 函數簽名: {inspect.signature(core_run_backtest)}")
+print(f"🔍 DEBUG: core_run_backtest 函數: {core_run_backtest}")
+print(f"🔍 DEBUG: 函數所在模組: {core_run_backtest.__module__}")
+
 app = Flask(__name__)
 
 # 全局變數存儲回測狀態
@@ -242,7 +263,7 @@ HTML_TEMPLATE = '''
             <div class="section">
                 <h3>停損模式設定</h3>
                 <div class="checkbox-group">
-                    <input type="checkbox" name="fixed_stop_mode" id="fixed_stop_mode">
+                    <input type="checkbox" name="fixed_stop_mode" id="fixed_stop_mode" checked>
                     <label for="fixed_stop_mode">🎯 啟用固定停損模式</label>
                     <div class="help-text">
                         啟用後：觸發點數將作為固定停損點，回檔比例設為0%，停用保護性停損
@@ -337,6 +358,42 @@ HTML_TEMPLATE = '''
                 </div>
             </div>
 
+            <!-- 進場價格模式設定 -->
+            <div class="section">
+                <h3>🎯 進場價格模式設定</h3>
+                <div class="form-row">
+                    <label>進場價格模式:</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="entry_price_mode" value="range_boundary" checked> 區間邊緣進場</label>
+                        <label><input type="radio" name="entry_price_mode" value="breakout_low"> 最低點+5點進場</label>
+                    </div>
+                </div>
+                <div class="help-text">
+                    <strong>進場模式說明：</strong><br>
+                    • <strong>區間邊緣進場：</strong> 當K棒跌破區間低點時，使用區間下邊緣價格進場（保守，執行確定性高）<br>
+                    • <strong>最低點+5點進場：</strong> 當K棒跌破區間低點時，使用該K棒的最低價+5點進場（避免極端價格，平衡執行風險）
+                </div>
+            </div>
+
+            <!-- 🚀 【新增】交易方向設定 -->
+            <div class="section">
+                <h3>📈 交易方向設定</h3>
+                <div class="form-row">
+                    <label>交易方向:</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="trading_direction" value="BOTH" checked> 多空都做</label>
+                        <label><input type="radio" name="trading_direction" value="LONG_ONLY"> 只做多</label>
+                        <label><input type="radio" name="trading_direction" value="SHORT_ONLY"> 只做空</label>
+                    </div>
+                </div>
+                <div class="help-text">
+                    <strong>交易方向說明：</strong><br>
+                    • <strong>多空都做：</strong> 當出現多頭或空頭訊號時都會進場（預設模式，完整策略）<br>
+                    • <strong>只做多：</strong> 只在多頭訊號出現時進場，忽略空頭訊號（適合多頭市場分析）<br>
+                    • <strong>只做空：</strong> 只在空頭訊號出現時進場，忽略多頭訊號（適合空頭市場分析）
+                </div>
+            </div>
+
             <!-- 濾網設定 -->
             <div class="section">
                 <h3>濾網設定</h3>
@@ -356,22 +413,7 @@ HTML_TEMPLATE = '''
                     <label>每日獲利目標:</label>
                     <input type="number" name="profit_target" value="200" step="0.1">
                 </div>
-                <div class="checkbox-group">
-                    <input type="checkbox" name="stop_loss_filter_enabled" id="stop_loss_filter">
-                    <label for="stop_loss_filter">停利策略濾網 (反轉策略：原停損點變停利點)</label>
-                </div>
-                <div class="form-row" style="margin-left: 20px;">
-                    <label>停利策略:</label>
-                    <div class="radio-group">
-                        <label><input type="radio" name="stop_loss_type" value="range_boundary" checked> 區間邊緣</label>
-                        <label><input type="radio" name="stop_loss_type" value="range_midpoint"> 區間中點</label>
-                        <label><input type="radio" name="stop_loss_type" value="fixed_points"> 固定點數</label>
-                    </div>
-                </div>
-                <div class="form-row" style="margin-left: 20px;">
-                    <label>固定停利點數:</label>
-                    <input type="number" name="fixed_stop_loss_points" value="15" step="0.1">
-                </div>
+
             </div>
 
             <!-- 控制按鈕 -->
@@ -492,8 +534,7 @@ HTML_TEMPLATE = '''
             // 處理未勾選的checkbox
             if (!config.range_filter_enabled) config.range_filter_enabled = false;
             if (!config.risk_filter_enabled) config.risk_filter_enabled = false;
-            if (!config.stop_loss_filter_enabled) config.stop_loss_filter_enabled = false;
-            if (!config.fixed_stop_mode) config.fixed_stop_mode = false;
+            if (!config.fixed_stop_mode) config.fixed_stop_mode = true;  // 🚀 固定停損模式預設啟用
             if (!config.individual_take_profit_enabled) config.individual_take_profit_enabled = false;
 
             // 更新UI狀態
@@ -853,11 +894,13 @@ def execute_backtest_thread(config_data):
             "end_date": config_data.get("end_date", "2024-11-30"),
             "range_start_time": config_data.get("range_start_time", "08:46"),
             "range_end_time": config_data.get("range_end_time", "08:47"),
-            "fixed_stop_mode": config_data.get("fixed_stop_mode", False),  # 🎯 新增固定停損模式
+            "fixed_stop_mode": config_data.get("fixed_stop_mode", True),  # 🎯 固定停損模式預設啟用
             "individual_take_profit_enabled": config_data.get("individual_take_profit_enabled", False),  # 🎯 每口停利設定
+            "entry_price_mode": config_data.get("entry_price_mode", "range_boundary"),  # 🎯 新增進場價格模式
+            "trading_direction": config_data.get("trading_direction", "BOTH"),  # 🚀 【新增】交易方向設定
             "lot_settings": {
                 "lot1": {
-                    "trigger": config_data.get("lot1_trigger", 15),
+                    "trigger": config_data.get("lot1_trigger", 14),  # 🔧 修復：與HTML表單一致
                     "trailing": config_data.get("lot1_trailing", 20),
                     "take_profit": config_data.get("lot1_take_profit", 60)  # 🎯 每口停利點數
                 },
@@ -868,7 +911,7 @@ def execute_backtest_thread(config_data):
                     "take_profit": config_data.get("lot2_take_profit", 80)  # 🎯 每口停利點數
                 },
                 "lot3": {
-                    "trigger": config_data.get("lot3_trigger", 65),
+                    "trigger": config_data.get("lot3_trigger", 41),  # 🔧 修復：與基準測試一致
                     "trailing": config_data.get("lot3_trailing", 20),
                     "protection": config_data.get("lot3_protection", 2.0),
                     "take_profit": config_data.get("lot3_take_profit", 100)  # 🎯 每口停利點數
@@ -885,177 +928,133 @@ def execute_backtest_thread(config_data):
                     "profit_target": config_data.get("profit_target", 200)
                 },
                 "stop_loss_filter": {
-                    "enabled": config_data.get("stop_loss_filter_enabled", False),
-                    "stop_loss_type": config_data.get("stop_loss_type", "range_boundary"),
-                    "fixed_stop_loss_points": config_data.get("fixed_stop_loss_points", 15.0)
+                    "enabled": False,  # 🚀 移除停利策略濾網，簡化配置
+                    "stop_loss_type": "range_boundary",
+                    "fixed_stop_loss_points": 15.0
                 }
             }
         }
 
-        # 構建命令行參數
-        cmd = [
-            sys.executable,
-            "rev_multi_Profit-Funded Risk_多口.py",
-            "--start-date", gui_config["start_date"],
-            "--end-date", gui_config["end_date"],
-            "--gui-mode",
-            "--config", json.dumps(gui_config, ensure_ascii=False)
-        ]
+        # 🚀 【Task 2 重構】直接調用核心回測引擎，移除 subprocess
+        print(f"🚀 直接調用回測引擎，配置: {gui_config}")
 
-        print(f"🚀 執行命令: {' '.join(cmd)}")
+        # 🚀 【重構】使用與 Web GUI 兼容的配置工廠創建策略配置
+        strategy_config = create_web_gui_compatible_config(gui_config)
 
-        # 執行回測 - 改進輸出捕獲
-        result = subprocess.run(
-            cmd,
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace'  # 處理編碼錯誤
-        )
+        # 提取時間參數
+        start_date = gui_config["start_date"]
+        end_date = gui_config["end_date"]
+        range_start_time = gui_config.get("range_start_time")
+        range_end_time = gui_config.get("range_end_time")
 
-        # 輸出詳細結果到控制台
+        # 🚀 【新增】設置日誌捕獲器來收集詳細日誌
+        import logging
+        import io
+
+        # 創建字符串緩衝區來捕獲日誌
+        log_capture_string = io.StringIO()
+        log_handler = logging.StreamHandler(log_capture_string)
+        log_handler.setLevel(logging.INFO)
+
+        # 設置日誌格式（與核心引擎一致）
+        formatter = logging.Formatter('[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s',
+                                    datefmt='%Y-%m-%dT%H:%M:%S%z')
+        log_handler.setFormatter(formatter)
+
+        # 獲取核心引擎的 logger 並添加我們的 handler
+        core_logger = logging.getLogger('rev_multi_module')
+        core_logger.addHandler(log_handler)
+        core_logger.setLevel(logging.INFO)
+
+        print(f"🔍 DEBUG: 調用前檢查 core_run_backtest 函數: {core_run_backtest}")
+        print(f"🔍 DEBUG: 函數簽名: {inspect.signature(core_run_backtest)}")
+        print(f"🔍 DEBUG: 參數值 - start_date: {start_date}, end_date: {end_date}")
+
+        try:
+            # 🚀 【Task 2 關鍵】直接調用 core_run_backtest 函數，啟用日誌捕獲
+            backtest_results_dict = core_run_backtest(
+                strategy_config,  # 第一個參數是位置參數
+                start_date=start_date,
+                end_date=end_date,
+                range_start_time=range_start_time,
+                range_end_time=range_end_time,
+                enable_console_log=True  # 🚀 【修改】啟用日誌以便捕獲
+            )
+
+            # 獲取捕獲的日誌內容
+            captured_logs = log_capture_string.getvalue()
+
+        finally:
+            # 清理：移除我們添加的 handler
+            core_logger.removeHandler(log_handler)
+            log_handler.close()
+
         print("=" * 60)
         print("📊 回測執行結果")
         print("=" * 60)
-        print(f"🔧 返回碼: {result.returncode}")
-        print(f"📏 stdout 長度: {len(result.stdout) if result.stdout else 0}")
-        print(f"📏 stderr 長度: {len(result.stderr) if result.stderr else 0}")
-
-        if result.stdout:
-            print("📈 回測輸出:")
-            print(result.stdout)
-        if result.stderr:
-            print("⚠️ 錯誤訊息:")
-            print(result.stderr)
+        print(f"✅ 回測完成，結果: {backtest_results_dict}")
         print("=" * 60)
 
-        if result.returncode == 0:
+        # 🚀 【Task 2 重構】直接使用回測結果，無需檢查 returncode
+        if backtest_results_dict:
             backtest_status['running'] = False
             backtest_status['completed'] = True
-            # 只儲存可序列化的結果數據，而不是完整的CompletedProcess對象
-            backtest_status['result'] = {
-                'stdout': result.stdout,
-                'stderr': result.stderr,
-                'returncode': result.returncode
-            }
+            # 🚀 【Task 2 關鍵】直接儲存結構化的回測結果
+            backtest_status['result'] = backtest_results_dict
+            # 🚀 【新增】儲存捕獲的詳細日誌
+            backtest_status['detailed_logs'] = captured_logs
 
-            # 嘗試生成增強報告
+            print("\n" + "=" * 100)
+            print("🔍 【Task 2 重構】直接獲得的結構化數據")
+            print("=" * 100)
+            print(f"📊 回測結果字典: {backtest_results_dict}")
+            print(f"📋 捕獲日誌長度: {len(captured_logs)} 字符")
+            print("=" * 100)
+
+            # 🚀 【Task 2 重構】直接生成HTML報告，移除 enhanced_report_generator
             try:
-                print("🚀 嘗試生成增強分析報告...")
-                from enhanced_report_generator import generate_comprehensive_report
+                print("📊 開始生成分析報告...")
 
-                enhanced_report = generate_comprehensive_report(
-                    log_content=result.stderr,
-                    config_data=config_data
-                )
+                # 🚀 【Task 2 重構】直接使用結構化數據，移除所有日誌解析邏輯
+                stats = {
+                    'trading_days': backtest_results_dict.get('trade_days', 'N/A'),
+                    'total_trades': backtest_results_dict.get('total_trades', 'N/A'),
+                    'winning_trades': backtest_results_dict.get('winning_trades', 'N/A'),
+                    'losing_trades': backtest_results_dict.get('losing_trades', 'N/A'),
+                    'win_rate': f"{backtest_results_dict.get('win_rate', 0) * 100:.2f}%" if backtest_results_dict.get('win_rate') is not None else 'N/A',
+                    'total_pnl': f"{backtest_results_dict.get('total_pnl', 0):.2f}",
+                    'max_drawdown': f"{backtest_results_dict.get('max_drawdown', 0):.2f}",  # 🚀 【Task 2 新增】MDD
+                    'long_trading_days': backtest_results_dict.get('long_trades', 'N/A'),
+                    'long_pnl': f"{backtest_results_dict.get('long_pnl', 0):.2f}",
+                    'long_win_rate': f"{backtest_results_dict.get('long_win_rate', 0) * 100:.2f}%" if backtest_results_dict.get('long_win_rate') is not None else 'N/A',
+                    'short_trading_days': backtest_results_dict.get('short_trades', 'N/A'),
+                    'short_pnl': f"{backtest_results_dict.get('short_pnl', 0):.2f}",
+                    'short_win_rate': f"{backtest_results_dict.get('short_win_rate', 0) * 100:.2f}%" if backtest_results_dict.get('short_win_rate') is not None else 'N/A',
+                    # 🚀 【新增】各口PnL統計
+                    'lot1_pnl': f"{backtest_results_dict.get('lot1_pnl', 0):.2f}",
+                    'lot2_pnl': f"{backtest_results_dict.get('lot2_pnl', 0):.2f}",
+                    'lot3_pnl': f"{backtest_results_dict.get('lot3_pnl', 0):.2f}"
+                }
 
-                if enhanced_report:
-                    print("✅ 增強報告生成成功")
-                    backtest_status['report_ready'] = True
-                    backtest_status['report_file'] = enhanced_report
-                    print(f"📋 增強報告文件: {enhanced_report}")
-                    return  # 成功生成增強報告，直接返回
-                else:
-                    print("⚠️ 增強報告生成失敗，回退到簡單報告")
+                print(f"📊 使用結構化數據: {stats}")
 
-            except Exception as enhanced_error:
-                print(f"⚠️ 增強報告生成錯誤: {enhanced_error}")
-                print("🔄 回退到簡單報告生成...")
+                # 🚀 【新增】輔助函數：根據PnL數值決定CSS類別
+                def get_pnl_class(pnl_str):
+                    try:
+                        pnl_value = float(pnl_str)
+                        if pnl_value > 0:
+                            return "positive"
+                        elif pnl_value < 0:
+                            return "negative"
+                        else:
+                            return ""
+                    except (ValueError, TypeError):
+                        return ""
 
-            # 回退：生成簡化的HTML報告
-            try:
-                print("📊 開始生成簡單分析報告...")
-
-                # 從回測輸出中提取關鍵統計資料
-                full_output = result.stdout + "\n" + result.stderr  # 合併stdout和stderr
-                output_lines = full_output.split('\n')
-                stats = {}
-
-                # 調試：打印所有包含關鍵字的行
-                print("🔍 搜尋統計數據...")
-                for i, line in enumerate(output_lines):
-                    if any(keyword in line for keyword in ['總交易天數', '總交易次數', '獲利次數', '虧損次數', '勝率', '總損益']):
-                        print(f"第{i}行: {line}")
-
-                # 改進的統計數據提取邏輯
-                for line in output_lines:
-                    original_line = line.strip()
-
-                    # 處理不同的日誌格式，更精確地提取內容
-                    clean_line = original_line
-                    if '] INFO [' in line:
-                        # 分割日誌格式: [時間] INFO [模組:行號] 內容
-                        parts = line.split('] ')
-                        if len(parts) >= 3:  # 確保有足夠的部分
-                            clean_line = parts[2].strip()  # 取第三部分作為實際內容
-
-                    # 使用更精確的匹配模式
-                    if '總交易天數:' in clean_line:
-                        try:
-                            value = clean_line.split('總交易天數:')[1].strip()
-                            stats['trading_days'] = value
-                            print(f"✅ 找到總交易天數: {value}")
-                        except Exception as e:
-                            print(f"❌ 解析總交易天數失敗: {e}")
-                            stats['trading_days'] = 'N/A'
-                    elif '總交易次數:' in clean_line:
-                        try:
-                            value = clean_line.split('總交易次數:')[1].strip()
-                            stats['total_trades'] = value
-                            print(f"✅ 找到總交易次數: {value}")
-                        except Exception as e:
-                            print(f"❌ 解析總交易次數失敗: {e}")
-                            stats['total_trades'] = 'N/A'
-                    elif '獲利次數:' in clean_line:
-                        try:
-                            value = clean_line.split('獲利次數:')[1].strip()
-                            stats['winning_trades'] = value
-                            print(f"✅ 找到獲利次數: {value}")
-                        except Exception as e:
-                            print(f"❌ 解析獲利次數失敗: {e}")
-                            stats['winning_trades'] = 'N/A'
-                    elif '虧損次數:' in clean_line:
-                        try:
-                            value = clean_line.split('虧損次數:')[1].strip()
-                            stats['losing_trades'] = value
-                            print(f"✅ 找到虧損次數: {value}")
-                        except Exception as e:
-                            print(f"❌ 解析虧損次數失敗: {e}")
-                            stats['losing_trades'] = 'N/A'
-                    elif '勝率:' in clean_line:
-                        try:
-                            value = clean_line.split('勝率:')[1].strip()
-                            stats['win_rate'] = value
-                            print(f"✅ 找到勝率: {value}")
-                        except Exception as e:
-                            print(f"❌ 解析勝率失敗: {e}")
-                            stats['win_rate'] = 'N/A'
-                    elif '總損益(' in clean_line and '口):' in clean_line:
-                        try:
-                            value = clean_line.split('):')[1].strip()
-                            stats['total_pnl'] = value
-                            print(f"✅ 找到總損益: {value}")
-                        except Exception as e:
-                            print(f"❌ 解析總損益失敗: {e}")
-                            stats['total_pnl'] = 'N/A'
-
-                # 調試：打印提取的統計數據
-                print(f"📊 提取的統計數據: {stats}")
-
-                # 如果沒有提取到統計數據，設置預設值
-                if not any(stats.values()):
-                    print("⚠️ 未能提取到統計數據，使用預設值")
-                    stats = {
-                        'trading_days': 'N/A',
-                        'total_trades': 'N/A',
-                        'winning_trades': 'N/A',
-                        'losing_trades': 'N/A',
-                        'win_rate': 'N/A',
-                        'total_pnl': 'N/A'
-                    }
-
-
+                # 🚀 【新增】獲取詳細日誌並進行HTML轉義
+                import html  # 🚀 【修復】將 html 導入移到使用之前
+                detailed_logs = backtest_status.get('detailed_logs', '')
+                escaped_logs = html.escape(detailed_logs) if detailed_logs else "無詳細日誌記錄"
 
                 # 生成簡化的HTML報告
                 from datetime import datetime
@@ -1064,10 +1063,7 @@ def execute_backtest_thread(config_data):
 
                 os.makedirs("reports", exist_ok=True)
 
-                # 轉義HTML內容
-                import html
-                escaped_stdout = html.escape(result.stdout) if result.stdout else "無輸出內容"
-                escaped_stderr = html.escape(result.stderr) if result.stderr else ""
+                # 🚀 【Task 2 重構】移除對 result.stdout/stderr 的引用
 
                 # 生成簡單HTML報告
                 html_content = f"""
@@ -1083,10 +1079,43 @@ def execute_backtest_thread(config_data):
         .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }}
         .stat-card {{ background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; }}
         .stat-value {{ font-size: 24px; font-weight: bold; color: #2e7d32; }}
+        .stat-value.positive {{ color: #2e7d32; }}
+        .stat-value.negative {{ color: #d32f2f; }}
         .stat-label {{ font-size: 14px; color: #666; margin-top: 5px; }}
         .log-section {{ margin-top: 30px; }}
         .log-content {{ background: #f8f9fa; padding: 15px; border-radius: 5px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; font-size: 12px; }}
         .debug-section {{ margin-top: 20px; background: #fff3cd; padding: 15px; border-radius: 5px; }}
+
+        /* 🚀 【新增】詳細日誌區塊樣式 */
+        .log-container {{
+            margin-top: 30px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fafafa;
+        }}
+        .log-header {{
+            background: #f0f0f0;
+            padding: 12px 15px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+        }}
+        #logToggleBtn {{
+            background: #1976d2;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }}
+        #logToggleBtn:hover {{
+            background: #1565c0;
+        }}
+
         h1, h2 {{ color: #333; }}
     </style>
 </head>
@@ -1113,7 +1142,11 @@ def execute_backtest_thread(config_data):
             </div>
             <div class="stat-card">
                 <div class="stat-value">{stats.get('total_pnl', 'N/A')}</div>
-                <div class="stat-label">總損益</div>
+                <div class="stat-label">總損益 (TOTAL P&L)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value negative">{stats.get('max_drawdown', 'N/A')}</div>
+                <div class="stat-label">最大回撤 (MAX DRAWDOWN)</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">{stats.get('winning_trades', 'N/A')}</div>
@@ -1125,20 +1158,88 @@ def execute_backtest_thread(config_data):
             </div>
         </div>
 
+        <!-- 🚀 【新增】各口PnL分析 -->
+        <h2>🎯 各口損益分析</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value {get_pnl_class(stats.get('lot1_pnl', '0.00'))}">{stats.get('lot1_pnl', 'N/A')}</div>
+                <div class="stat-label">第一口累積損益</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value {get_pnl_class(stats.get('lot2_pnl', '0.00'))}">{stats.get('lot2_pnl', 'N/A')}</div>
+                <div class="stat-label">第二口累積損益</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value {get_pnl_class(stats.get('lot3_pnl', '0.00'))}">{stats.get('lot3_pnl', 'N/A')}</div>
+                <div class="stat-label">第三口累積損益</div>
+            </div>
+        </div>
+        <div class="help-text" style="margin-top: 10px;">
+            <strong>各口損益說明：</strong><br>
+            • <strong>第一口：</strong> 最先進場的部位，通常風險較低<br>
+            • <strong>第二口：</strong> 第二個進場的部位，可能有保護性停損<br>
+            • <strong>第三口：</strong> 最後進場的部位，通常風險較高<br>
+            • 透過比較各口表現，可以判斷是否要使用三口策略還是兩口多組策略
+        </div>
+
+        <h2>📊 多空部位分析</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">{stats.get('long_trading_days', 'N/A')}</div>
+                <div class="stat-label">LONG 交易天數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats.get('long_pnl', 'N/A')}</div>
+                <div class="stat-label">LONG TOTAL P&L</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats.get('short_trading_days', 'N/A')}</div>
+                <div class="stat-label">SHORT 交易天數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{stats.get('short_pnl', 'N/A')}</div>
+                <div class="stat-label">SHORT TOTAL P&L</div>
+            </div>
+        </div>
+
         <div class="debug-section">
-            <h3>🔧 除錯資訊</h3>
-            <p><strong>返回碼:</strong> {result.returncode}</p>
-            <p><strong>stdout 長度:</strong> {len(result.stdout) if result.stdout else 0}</p>
-            <p><strong>stderr 長度:</strong> {len(result.stderr) if result.stderr else 0}</p>
+            <h3>🔧 數據驗證資訊</h3>
+            <p><strong>數據來源:</strong> 直接API調用 (無subprocess)</p>
+            <hr>
+            <h4>📊 交易統計驗證</h4>
+            <p><strong>總交易次數:</strong> {stats.get('total_trades', 'N/A')}</p>
+            <p><strong>多頭交易天數:</strong> {stats.get('long_trading_days', 'N/A')}</p>
+            <p><strong>空頭交易天數:</strong> {stats.get('short_trading_days', 'N/A')}</p>
+            <p><strong>最大回撤:</strong> {stats.get('max_drawdown', 'N/A')} 點</p>
         </div>
-
-        <div class="log-section">
-            <h2>📋 詳細回測日誌 (stdout)</h2>
-            <div class="log-content">{escaped_stdout}</div>
-        </div>
-
-        {f'<div class="log-section"><h2>⚠️ 錯誤訊息 (stderr)</h2><div class="log-content">{escaped_stderr}</div></div>' if escaped_stderr else ''}
     </div>
+
+    <!-- 🚀 【新增】詳細日誌區塊 -->
+    <h2>📋 詳細執行日誌</h2>
+    <div class="log-container">
+        <div class="log-header">
+            <span>回測執行過程詳細記錄</span>
+            <button onclick="toggleLogExpand()" id="logToggleBtn">展開全部</button>
+        </div>
+        <div class="log-content" id="logContent">
+            <pre>{escaped_logs}</pre>
+        </div>
+    </div>
+
+    <script>
+        function toggleLogExpand() {{
+            const logContent = document.getElementById('logContent');
+            const toggleBtn = document.getElementById('logToggleBtn');
+
+            if (logContent.style.maxHeight === 'none') {{
+                logContent.style.maxHeight = '400px';
+                toggleBtn.textContent = '展開全部';
+            }} else {{
+                logContent.style.maxHeight = 'none';
+                toggleBtn.textContent = '收合';
+            }}
+        }}
+    </script>
 </body>
 </html>
                 """
@@ -1157,9 +1258,10 @@ def execute_backtest_thread(config_data):
                 traceback.print_exc()
 
         else:
+            # 🚀 【Task 2 重構】處理回測失敗情況
             backtest_status['running'] = False
-            backtest_status['error'] = result.stderr or f"回測執行失敗 (返回碼: {result.returncode})"
-            print(f"❌ 回測執行失敗，返回碼: {result.returncode}")
+            backtest_status['error'] = "回測執行失敗：未獲得有效結果"
+            print(f"❌ 回測執行失敗：未獲得有效結果")
 
     except Exception as e:
         backtest_status['running'] = False

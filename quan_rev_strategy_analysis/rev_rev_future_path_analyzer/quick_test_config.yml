@@ -1,0 +1,97 @@
+# 快速測試配置 - 用於開發和快速驗證
+# 適用於測試新功能或快速檢查結果
+
+# ==============================================================================
+# 🎲 蒙地卡羅模擬參數 (快速測試)
+# ==============================================================================
+simulation_params:
+  num_simulations: 500              # 最少模擬次數，快速執行
+  num_future_days: 20               # 最短預測期間
+  initial_capital: 50000            # 較小的起始資金
+  profit_target_pct: 0.10           # 較低的獲利目標 10%
+  risk_limit_pct: 0.08              # 較嚴格的風險底線 8%
+  enable_progress_display: true
+  chart_dpi: 150                    # 較低解析度，加快生成速度
+  chart_alpha: 0.15
+
+# ==============================================================================
+# 📊 回測參數
+# ==============================================================================
+backtest_params:
+  start_date: "2025-05-01"          # 最短的回測期間
+  end_date: "2025-06-28"
+  range_start_time: "08:46"
+  range_end_time: "08:47"
+  silent_mode: false
+  enable_console_log: true
+  use_sqlite: true
+
+# ==============================================================================
+# ⚙️ 簡化策略參數
+# ==============================================================================
+strategy_params:
+  trade_size_in_lots: 2             # 減少口數，簡化測試
+  trading_direction: "BOTH"
+  stop_loss_type: "RANGE_BOUNDARY"
+  fixed_stop_loss_points: 15
+  entry_price_mode: "range_boundary"
+  
+  # 簡化的各口設定
+  lot_rules:
+    # 第1口：基本設定
+    - lot_number: 1
+      use_trailing_stop: true
+      trailing_activation: 15
+      trailing_pullback: 0.10
+      protective_stop_multiplier: null
+      fixed_stop_loss_points: null
+      fixed_tp_points: null
+    
+    # 第2口：基本設定
+    - lot_number: 2
+      use_trailing_stop: true
+      trailing_activation: 35
+      trailing_pullback: 0.15
+      protective_stop_multiplier: 2.0
+      fixed_stop_loss_points: null
+      fixed_tp_points: null
+  
+  # 標準區間過濾
+  range_filter:
+    use_range_size_filter: true
+    max_range_points: 160
+  
+  # 不啟用風險管理，簡化測試
+  risk_config:
+    use_risk_filter: false
+    daily_loss_limit: 100
+    profit_target: 150
+  
+  stop_loss_config:
+    stop_loss_type: "RANGE_BOUNDARY"
+    fixed_stop_loss_points: 15
+    use_range_midpoint: false
+
+# ==============================================================================
+# 📁 輸出設定
+# ==============================================================================
+output_params:
+  base_report_dir: "test_reports"
+  use_timestamp_folder: true
+  chart_filename_prefix: "test_future_paths"
+  summary_filename: "test_analysis_summary.txt"
+  chart_format: "png"
+  chart_size_width: 10              # 較小的圖表尺寸
+  chart_size_height: 6
+  font_family: ['Arial Unicode MS', 'SimHei', 'DejaVu Sans']
+
+# ==============================================================================
+# 🔧 進階設定
+# ==============================================================================
+advanced_params:
+  random_seed: 123                  # 固定隨機種子，確保測試結果一致
+  batch_size: 250
+  enable_multiprocessing: false
+  num_processes: 2
+  debug_mode: true                  # 啟用調試模式
+  save_intermediate_results: false

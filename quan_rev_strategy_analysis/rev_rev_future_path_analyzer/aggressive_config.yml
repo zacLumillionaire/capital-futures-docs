@@ -1,0 +1,106 @@
+# 積極型配置 - 追求更高收益，承擔較高風險
+# 適用於風險偏好較高的投資者
+
+# ==============================================================================
+# 🎲 蒙地卡羅模擬參數 (積極設定)
+# ==============================================================================
+simulation_params:
+  num_simulations: 5000             # 更多模擬次數，提高精度
+  num_future_days: 120              # 較長的預測期間
+  initial_capital: 100000           # 起始資金
+  profit_target_pct: 0.30           # 較高的獲利目標 30%
+  risk_limit_pct: 0.20              # 較寬鬆的風險底線 20%
+  enable_progress_display: true
+  chart_dpi: 300
+  chart_alpha: 0.08                 # 較低透明度，更清晰顯示路徑
+
+# ==============================================================================
+# 📊 回測參數
+# ==============================================================================
+backtest_params:
+  start_date: "2024-01-01"          # 更長的回測期間
+  end_date: "2025-06-28"
+  range_start_time: "08:45"         # 稍微擴大開盤區間
+  range_end_time: "08:48"
+  silent_mode: false
+  enable_console_log: true
+  use_sqlite: true
+
+# ==============================================================================
+# ⚙️ 積極型策略參數
+# ==============================================================================
+strategy_params:
+  trade_size_in_lots: 3             # 保持3口交易
+  trading_direction: "BOTH"
+  stop_loss_type: "RANGE_BOUNDARY"
+  fixed_stop_loss_points: 20
+  entry_price_mode: "range_boundary"
+  
+  # 積極型各口設定
+  lot_rules:
+    # 第1口：較大觸發點，較小回檔比例
+    - lot_number: 1
+      use_trailing_stop: true
+      trailing_activation: 25        # 較大的觸發點數
+      trailing_pullback: 0.05        # 較小的回檔比例
+      protective_stop_multiplier: null
+      fixed_stop_loss_points: null
+      fixed_tp_points: null
+    
+    # 第2口：積極設定
+    - lot_number: 2
+      use_trailing_stop: true
+      trailing_activation: 55        # 較大的觸發點數
+      trailing_pullback: 0.08        # 較小的回檔比例
+      protective_stop_multiplier: 3.0  # 較大的保護倍數
+      fixed_stop_loss_points: null
+      fixed_tp_points: null
+    
+    # 第3口：最積極設定
+    - lot_number: 3
+      use_trailing_stop: true
+      trailing_activation: 65        # 較大的觸發點數
+      trailing_pullback: 0.12        # 中等回檔比例
+      protective_stop_multiplier: 3.0  # 較大的保護倍數
+      fixed_stop_loss_points: null
+      fixed_tp_points: null
+  
+  # 較寬鬆的區間過濾
+  range_filter:
+    use_range_size_filter: true
+    max_range_points: 250            # 較大的區間上限
+  
+  # 不啟用風險管理，追求最大收益
+  risk_config:
+    use_risk_filter: false
+    daily_loss_limit: 200
+    profit_target: 300
+  
+  stop_loss_config:
+    stop_loss_type: "RANGE_BOUNDARY"
+    fixed_stop_loss_points: 20
+    use_range_midpoint: false
+
+# ==============================================================================
+# 📁 輸出設定
+# ==============================================================================
+output_params:
+  base_report_dir: "aggressive_reports"
+  use_timestamp_folder: true
+  chart_filename_prefix: "aggressive_future_paths"
+  summary_filename: "aggressive_analysis_summary.txt"
+  chart_format: "png"
+  chart_size_width: 16              # 較大的圖表尺寸
+  chart_size_height: 12
+  font_family: ['Arial Unicode MS', 'SimHei', 'DejaVu Sans']
+
+# ==============================================================================
+# 🔧 進階設定
+# ==============================================================================
+advanced_params:
+  random_seed: null                 # 不固定隨機種子，每次結果不同
+  batch_size: 1000
+  enable_multiprocessing: false     # 可考慮啟用以加速大量模擬
+  num_processes: 6
+  debug_mode: false
+  save_intermediate_results: false

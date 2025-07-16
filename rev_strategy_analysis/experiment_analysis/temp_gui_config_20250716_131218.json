@@ -1,0 +1,65 @@
+{
+  "analysis_mode": "per_time_interval",
+  "stop_loss_ranges": {
+    "lot1": [
+      15,
+      25
+    ],
+    "lot2": [
+      25,
+      30,
+      35
+    ],
+    "lot3": [
+      40,
+      50
+    ]
+  },
+  "take_profit_modes": [
+    "unified_fixed",
+    "individual_fixed",
+    "range_boundary"
+  ],
+  "take_profit_ranges": {
+    "unified": [
+      55
+    ],
+    "individual": [
+      30,
+      40,
+      50
+    ]
+  },
+  "time_intervals": [
+    [
+      "11:00",
+      "11:15"
+    ],
+    [
+      "11:15",
+      "11:30"
+    ],
+    [
+      "11:30",
+      "11:45"
+    ],
+    [
+      "11:45",
+      "12:00"
+    ],
+    [
+      "12:00",
+      "12:15"
+    ]
+  ],
+  "entry_price_mode": "breakout_low",
+  "trading_directions": [
+    "BOTH",
+    "LONG_ONLY",
+    "SHORT_ONLY"
+  ],
+  "estimated_combinations": {
+    "per_interval_analysis": 900,
+    "breakdown": "12 停損組合 × 5 停利模式 × 5 時間區間 × 3 交易方向 (全模式) = 900 總組合 (進場模式: breakout_low) (GUI 自定義)"
+  }
+}

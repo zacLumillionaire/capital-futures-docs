@@ -1,9 +1,27 @@
-# 回測_Profit-Funded Risk_多口.py
+# rev_strategy_core.py
+"""
+反轉策略核心模組 - 包含所有可複用的回測組件
+從 rev_multi_Profit-Funded Risk_多口.py 提取的核心功能
+"""
+
 import logging
 from datetime import time, date
 from decimal import Decimal
 from dataclasses import dataclass, field
 from enum import Enum, auto
+import sys
+import os
+
+# 添加專案根目錄到路徑以導入共享模組
+# 當前文件路徑: quan_rev_strategy_analysis/rev_rev_future_path_analyzer/rev_strategy_core.py
+# 需要添加到: /Users/z/big/my-capital-project/
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(project_root)
+
+# 添加 rev_strategy_analysis 目錄到路徑以導入 sqlite_connection
+rev_strategy_path = os.path.join(project_root, 'rev_strategy_analysis')
+sys.path.append(rev_strategy_path)
+
 from app_setup import init_all_db_pools
 import shared
 
@@ -56,7 +74,7 @@ class StopLossConfig:
 
 @dataclass
 class StrategyConfig:
-    """策略設定的中央控制面板。"""
+    """反轉策略設定的中央控制面板。"""
     trade_size_in_lots: int = 3
     stop_loss_type: StopLossType = StopLossType.RANGE_BOUNDARY
     fixed_stop_loss_points: Decimal = Decimal(15)
@@ -67,6 +85,12 @@ class StrategyConfig:
     risk_config: RiskConfig = field(default_factory=RiskConfig)
     stop_loss_config: StopLossConfig = field(default_factory=StopLossConfig)
 
+    # === 新增進場價格模式配置 (預設使用區間邊緣，保持向後相容) ===
+    entry_price_mode: str = "range_boundary"  # "range_boundary" 或 "breakout_low"
+
+    # === 新增交易方向配置 (預設多空都做，保持向後相容) ===
+    trading_direction: str = "BOTH"  # "LONG_ONLY", "SHORT_ONLY", "BOTH"
+
 def format_config_summary(config: StrategyConfig) -> str:
     """將 StrategyConfig 物件格式化為人類易讀的摘要字串。"""
     summary_lines = [f"\n📋======= 🔄反轉策略設定摘要 (交易口數: {config.trade_size_in_lots}) =======📋"]
@@ -76,26 +100,8 @@ def format_config_summary(config: StrategyConfig) -> str:
     fixed_points = config.stop_loss_config.fixed_stop_loss_points if hasattr(config, 'stop_loss_config') else config.fixed_stop_loss_points
 
     # 🔄 反轉策略：修正術語描述
-    # 🚀 【修復】使用更健壯的字典查找，支援枚舉值比較
-    sl_type_descriptions = {
-        StopLossType.RANGE_BOUNDARY: "區間邊緣",
-        StopLossType.OPENING_PRICE: "8:46開盤價",
-        StopLossType.FIXED_POINTS: "固定點數"
-    }
-
-    # 嘗試直接查找，如果失敗則使用枚舉值查找
-    try:
-        sl_description = sl_type_descriptions[stop_loss_type]
-    except KeyError:
-        # 如果直接查找失敗，嘗試按枚舉值查找
-        sl_description = "未知停損類型"
-        for enum_key, description in sl_type_descriptions.items():
-            if enum_key.value == stop_loss_type.value:
-                sl_description = description
-                break
-        print(f"🔍 DEBUG: 停損類型查找 - 輸入: {stop_loss_type}, 類型: {type(stop_loss_type)}, 值: {stop_loss_type.value}")
-
-    sl_line = f"  - 停利目標設定：{sl_description} (反轉策略：原停損點變停利點)"
+    sl_type_map = { StopLossType.RANGE_BOUNDARY: "區間邊緣", StopLossType.OPENING_PRICE: "8:46開盤價", StopLossType.FIXED_POINTS: "固定點數" }
+    sl_line = f"  - 停利目標設定：{sl_type_map[stop_loss_type]} (反轉策略：原停損點變停利點)"
     if stop_loss_type == StopLossType.FIXED_POINTS:
         sl_line += f" ({fixed_points} 點)"
 
@@ -129,14 +135,23 @@ def format_config_summary(config: StrategyConfig) -> str:
     for i, rule in enumerate(config.lot_rules):
         lot_num = i + 1
         summary_lines.append(f"  - [第 {lot_num} 口單]")
-        if rule.use_trailing_stop and rule.trailing_activation is not None and rule.trailing_pullback is not None:
-            summary_lines.append(f"    - 停利: 移動停利 (觸發:{rule.trailing_activation}點, 回檔:{rule.trailing_pullback:%})")
-        elif rule.fixed_tp_points is not None:
+
+        # 🚀 修復：正確顯示停損模式
+        if rule.fixed_stop_loss_points is not None:
+            summary_lines.append(f"    - 停損: 固定停損 ({rule.fixed_stop_loss_points}點)")
+        elif rule.use_trailing_stop and rule.trailing_activation is not None and rule.trailing_pullback is not None:
+            summary_lines.append(f"    - 停損: 移動停損 (觸發:{rule.trailing_activation}點, 回檔:{rule.trailing_pullback:%})")
+        else:
+            summary_lines.append(f"    - 停損: 區間邊緣停損")
+
+        # 🚀 修復：正確顯示停利模式
+        if rule.fixed_tp_points is not None:
             summary_lines.append(f"    - 停利: 固定停利 ({rule.fixed_tp_points}點)")
         else:
-            summary_lines.append(f"    - 停利: 持有至收盤")
+            summary_lines.append(f"    - 停利: 區間邊緣停利")
 
-        if rule.protective_stop_multiplier is not None:
+        # 🚀 修復：只在有保護性停損時才顯示
+        if rule.protective_stop_multiplier is not None and rule.protective_stop_multiplier > 0:
              summary_lines.append(f"    - 保護性停損: 前序累積獲利 * {rule.protective_stop_multiplier}")
     return "\n".join(summary_lines)
 
@@ -232,28 +247,43 @@ def get_initial_stop_loss(config: StrategyConfig, range_high: Decimal, range_low
 # ==============================================================================
 # 3. 核心交易邏輯函式
 # ==============================================================================
-def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config: StrategyConfig, range_high, range_low) -> tuple[Decimal, str]:
+def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config: StrategyConfig, range_high, range_low) -> tuple[Decimal, str, dict]:
     """支援任意口數，並使用正確序列檢查的邏輯 - 反轉策略版本"""
     position, entry_price, entry_time, entry_candle_index = None, Decimal(0), None, -1
 
-    # 🔄 【反轉策略】進場邏輯完全反轉
+    # 🔄 【反轉策略】進場邏輯完全反轉 + 🚀 【新增】交易方向過濾
     for i, candle in enumerate(trade_candles):
-        if candle['close_price'] > range_high:
-            # 原本做多的點改為做空
+        # 🚀 【新增】檢查交易方向配置，只在允許的方向進場
+        trading_direction = getattr(config, 'trading_direction', 'BOTH')  # 向後相容
+
+        if candle['close_price'] > range_high and trading_direction in ["SHORT_ONLY", "BOTH"]:
+            # 原本做多的點改為做空（反轉策略）
             position, entry_price, entry_time, entry_candle_index = 'SHORT', candle['close_price'], candle['trade_datetime'].time(), i
             break
-        elif candle['low_price'] < range_low:
-            # 原本做空的點改為做多
-            position, entry_price, entry_time, entry_candle_index = 'LONG', candle['low_price'], candle['trade_datetime'].time(), i
+        elif candle['low_price'] < range_low and trading_direction in ["LONG_ONLY", "BOTH"]:
+            # 原本做空的點改為做多（反轉策略） - 根據 entry_price_mode 選擇進場價格
+            if hasattr(config, 'entry_price_mode') and config.entry_price_mode == "range_boundary":
+                # 使用區間下邊緣作為進場價格
+                entry_price = range_low
+            else:
+                # 預設或 "breakout_low" 模式：使用跌破時的最低點+5點
+                entry_price = candle['low_price'] + 5
+
+            position, entry_time, entry_candle_index = 'LONG', candle['trade_datetime'].time(), i
             break
 
-    if not position: return Decimal(0), ""
+    if not position: return Decimal(0), "", {}
 
-    # 🚀 【移除舊邏輯】不再使用累積虧損檢查，改用風控停損點方式
+    # 🔄 【反轉策略】日誌顯示反轉後的實際進場方向和進場價格模式
+    entry_mode_desc = ""
+    if hasattr(config, 'entry_price_mode'):
+        if config.entry_price_mode == "range_boundary":
+            entry_mode_desc = " [區間邊緣進場]"
+        elif config.entry_price_mode == "breakout_low":
+            entry_mode_desc = " [最低點+5點進場]"
 
-    # 🔄 【反轉策略】日誌顯示反轉後的實際進場方向
-    logger.info(f"  📈 LONG  | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))} (原策略做空點)" if position == 'LONG'
-                else f"  📉 SHORT | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))} (原策略做多點)")
+    logger.info(f"  📈 LONG  | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))}{entry_mode_desc} (原策略做空點)" if position == 'LONG'
+                else f"  📉 SHORT | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))}{entry_mode_desc} (原策略做多點)")
 
     lots = []
     # 🎯 取得停利目標點（雖然函數名稱是 get_initial_stop_loss，但實際返回停利目標）
@@ -431,12 +461,12 @@ def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config:
                 exited_in_this_candle = True
 
         if exited_in_this_candle: continue
-            
+
         cumulative_pnl_before_candle = sum(l['pnl'] for l in lots if l['status'] == 'exited')
 
         for lot in lots:
             if lot['status'] != 'active': continue
-            
+
             rule = lot['rule']
             # 🔄 反轉策略：移動停損邏輯（原移動停利邏輯反轉）
             exited_by_sl = False
@@ -469,7 +499,7 @@ def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config:
                         logger.info(f"  ❌ 第{lot['id']}口移動停損 | 時間: {current_time}, 價格: {int(round(exit_p))}, 損益: {int(round(lot['pnl'])):+d}")
                     else:
                         logger.info(f"  ✅ 第{lot['id']}口移動停利 | 時間: {current_time}, 價格: {int(round(exit_p))}, 損益: {int(round(lot['pnl'])):+d}")
-            
+
             if exited_by_sl:
                 # 🚀 【新增】第一口出場時，移除所有剩餘口數的風控停損，改回停利目標
                 if lot['id'] == 1:  # 第一口出場
@@ -492,8 +522,6 @@ def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config:
         # 🐛 修正：只有在風險管理啟用且設定了獲利目標時才檢查
         if (hasattr(config, 'risk_config') and config.risk_config.use_risk_filter and
             config.risk_config.profit_target > 0):
-            # 🔍 DEBUG: 添加調試信息
-            # logger.debug(f"  🔍 執行風險管理獲利目標檢查 | 時間: {current_time}")
 
             active_lots = [l for l in lots if l['status'] == 'active']
 
@@ -523,27 +551,48 @@ def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config:
             eod_pnl = (exit_price - entry_price) if position == 'LONG' else (entry_price - exit_price)
             for lot in active_lots: lot['pnl'], lot['status'] = eod_pnl, 'exited'
             logger.info(f"  ⚪️ 收盤平倉剩餘 {len(active_lots)} 口 | 損益: {int(round(eod_pnl)):+d}")
-    
-    return Decimal(sum(l['pnl'] for l in lots)) if lots else Decimal(0), position or ""
+
+    # 🚀 【新增】計算各口PnL統計
+    total_pnl = Decimal(sum(l['pnl'] for l in lots)) if lots else Decimal(0)
+
+    # 建立各口PnL字典（最多支援3口）
+    lot_pnl_details = {
+        'lot1_pnl': Decimal(0),
+        'lot2_pnl': Decimal(0),
+        'lot3_pnl': Decimal(0)
+    }
+
+    # 填入實際的各口PnL
+    for lot in lots:
+        lot_id = lot['id']
+        if lot_id == 1:
+            lot_pnl_details['lot1_pnl'] = lot['pnl']
+        elif lot_id == 2:
+            lot_pnl_details['lot2_pnl'] = lot['pnl']
+        elif lot_id == 3:
+            lot_pnl_details['lot3_pnl'] = lot['pnl']
+
+    return total_pnl, position or "", lot_pnl_details
 
 # ==============================================================================
-# 3. 主回測函式
+# 4. 主回測函式
 # ==============================================================================
-def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date: str | None = None, silent: bool = False,
-                 range_start_time: str | None = None, range_end_time: str | None = None):
+def run_rev_backtest(config: StrategyConfig, start_date: str | None = None, end_date: str | None = None, silent: bool = False,
+                 range_start_time: str | None = None, range_end_time: str | None = None, enable_console_log: bool = True):
     """
-    執行回測
+    執行反轉策略回測
 
     Args:
-        config: 策略配置
+        config: 反轉策略配置
         start_date: 開始日期 (格式: 'YYYY-MM-DD')，可選
         end_date: 結束日期 (格式: 'YYYY-MM-DD')，可選
         silent: 是否靜默模式（不輸出日誌）
         range_start_time: 開盤區間開始時間 (格式: 'HH:MM')，可選，預設08:46
         range_end_time: 開盤區間結束時間 (格式: 'HH:MM')，可選，預設08:47
+        enable_console_log: 是否啟用主控台日誌輸出（預設True）
 
     Returns:
-        dict: 回測結果統計
+        dict: 回測結果統計，包含 daily_pnl_list 用於未來路徑分析
     """
     # 處理自定義開盤區間時間
     range_start_hour, range_start_min = 8, 46  # 預設值
@@ -607,10 +656,20 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
             total_pnl, winning_trades, losing_trades = Decimal(0), 0, 0
             cumulative_pnl = Decimal(0)  # 🚀 新增：追蹤累積損益
 
+            # 🚀 【Task 1 新增】MDD計算變數
+            peak_pnl = Decimal(0)  # 資金曲線峰值
+            max_drawdown = Decimal(0)  # 最大回撤
+
             # 🚀 【新增】多空分別統計
             long_pnl, short_pnl = Decimal(0), Decimal(0)
             long_trades, short_trades = 0, 0
             long_wins, short_wins = 0, 0
+
+            # 🚀 【新增】各口PnL累積統計
+            total_lot1_pnl, total_lot2_pnl, total_lot3_pnl = Decimal(0), Decimal(0), Decimal(0)
+
+            # 🚀 【新增】每日損益列表，用於未來路徑分析
+            daily_pnl_list = []
 
             for day in trade_days:
                 cur.execute("SELECT * FROM stock_prices WHERE trade_datetime::date = %s ORDER BY trade_datetime;", (day,))
@@ -630,30 +689,19 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
                         logger.warning(f"⚠️ {day}: 找不到開盤區間K棒 ({range_start_hour:02d}:{range_start_min:02d}-{range_end_hour:02d}:{range_end_min:02d})")
                     continue
 
-                # 🔍 【新增】詳細LOG顯示區間計算過程
-                if not silent:
-                    logger.info(f"📊 {day} 開盤區間計算詳情:")
-                    logger.info(f"   時間範圍: {range_start_hour:02d}:{range_start_min:02d} - {range_end_hour:02d}:{range_end_min:02d}")
-                    logger.info(f"   找到 {len(candles_range)} 根K棒:")
-                    for i, candle in enumerate(candles_range):
-                        logger.info(f"     K棒{i+1}: {candle['trade_datetime'].time()} | 高:{candle['high_price']} 低:{candle['low_price']} 收:{candle['close_price']}")
-
                 # 計算區間高低點
                 range_high = max(c['high_price'] for c in candles_range)
                 range_low = min(c['low_price'] for c in candles_range)
 
-                # 🔍 【新增】顯示區間計算結果
-                if not silent:
-                    logger.info(f"   ➡️ 計算結果: 區間高點 {range_high} | 區間低點 {range_low} | 區間大小 {range_high - range_low} 點")
-
                 # === 套用區間過濾濾網 ===
                 range_passed, range_msg = apply_range_filter(config, range_high, range_low, day)
                 if not range_passed:
-                    logger.info(f"--- {day} | 開盤區間: {range_low} - {range_high} | {range_msg} | 跳過交易 ---")
+                    if not silent:
+                        logger.info(f"--- {day} | 開盤區間: {range_low} - {range_high} | {range_msg} | 跳過交易 ---")
                     continue
 
-                # 🔍 【修正】更清楚的區間顯示
-                logger.info(f"--- {day} | 開盤區間: {range_low} - {range_high} | {range_msg} ---")
+                if not silent:
+                    logger.info(f"--- {day} | 開盤區間: {range_low} - {range_high} | {range_msg} ---")
 
                 # 交易開始時間設為開盤區間結束後1分鐘
                 trade_start_hour = range_end_hour
@@ -664,8 +712,11 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
 
                 trade_candles = [c for c in day_session_candles if c['trade_datetime'].time() >= time(trade_start_hour, trade_start_min)]
 
-                # 🚀 【新邏輯】使用風控停損點方式，不再需要累積損益參數
-                day_pnl, trade_direction = _run_multi_lot_logic(day_session_candles, trade_candles, config, range_high, range_low)
+                # 執行交易邏輯
+                day_pnl, trade_direction, lot_pnl_details = _run_multi_lot_logic(day_session_candles, trade_candles, config, range_high, range_low)
+
+                # 記錄每日損益
+                daily_pnl_list.append(float(day_pnl))
 
                 if day_pnl != 0:
                     is_long_trade = (trade_direction == 'LONG')
@@ -685,8 +736,20 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
                         short_trades += 1
                         short_pnl += day_pnl
 
+                    # 🚀 【新增】累積各口PnL統計
+                    total_lot1_pnl += lot_pnl_details['lot1_pnl']
+                    total_lot2_pnl += lot_pnl_details['lot2_pnl']
+                    total_lot3_pnl += lot_pnl_details['lot3_pnl']
+
                 total_pnl += day_pnl
                 cumulative_pnl += day_pnl  # 🚀 更新累積損益
+
+                # 🚀 【Task 1 新增】更新MDD計算
+                if cumulative_pnl > peak_pnl:
+                    peak_pnl = cumulative_pnl
+                current_drawdown = peak_pnl - cumulative_pnl
+                if current_drawdown > max_drawdown:
+                    max_drawdown = current_drawdown
 
             # 計算統計數據
             trade_count = winning_trades + losing_trades
@@ -694,22 +757,27 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
             long_win_rate = (long_wins / long_trades * 100) if long_trades > 0 else 0
             short_win_rate = (short_wins / short_trades * 100) if short_trades > 0 else 0
 
-            if not silent:
-                logger.info("====== 回測結果總結 ======")
+            # 🚀 【Task 1 修改】使用 enable_console_log 控制日誌輸出
+            if not silent and enable_console_log:
+                logger.info("====== 反轉策略回測結果總結 ======")
                 logger.info(f"總交易天數: {len(trade_days)}")
                 logger.info(f"總交易次數: {trade_count}")
                 logger.info(f"獲利次數: {winning_trades}")
                 logger.info(f"虧損次數: {losing_trades}")
                 logger.info(f"勝率: {win_rate:.2f}%")
                 logger.info(f"總損益({config.trade_size_in_lots}口): {total_pnl:.2f}")
-                logger.info(format_config_summary(config))
+                logger.info(f"最大回撤: {max_drawdown:.2f}")
                 logger.info("===========================")
 
-            # 返回結構化結果
+            # 🚀 【Task 1 修改】返回結構化結果，新增 daily_pnl_list 用於未來路徑分析
             return {
                 'total_pnl': float(total_pnl),
                 'long_pnl': float(long_pnl),
                 'short_pnl': float(short_pnl),
+                'max_drawdown': float(max_drawdown),
+                'lot1_pnl': float(total_lot1_pnl),
+                'lot2_pnl': float(total_lot2_pnl),
+                'lot3_pnl': float(total_lot3_pnl),
                 'total_trades': trade_count,
                 'long_trades': long_trades,
                 'short_trades': short_trades,
@@ -720,513 +788,18 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
                 'win_rate': win_rate / 100,
                 'long_win_rate': long_win_rate / 100,
                 'short_win_rate': short_win_rate / 100,
-                'trade_days': len(trade_days)
+                'trade_days': len(trade_days),
+                'daily_pnl_list': daily_pnl_list  # 🚀 【新增】每日損益列表
             }
 
     except Exception as e:
         if not silent:
             logger.error(f"❌ 執行回測時發生錯誤: {e}", exc_info=True)
         return {
-            'total_pnl': 0.0, 'long_pnl': 0.0, 'short_pnl': 0.0,
+            'total_pnl': 0.0, 'long_pnl': 0.0, 'short_pnl': 0.0, 'max_drawdown': 0.0,
+            'lot1_pnl': 0.0, 'lot2_pnl': 0.0, 'lot3_pnl': 0.0,
             'total_trades': 0, 'long_trades': 0, 'short_trades': 0,
             'winning_trades': 0, 'losing_trades': 0, 'long_wins': 0, 'short_wins': 0,
-            'win_rate': 0.0, 'long_win_rate': 0.0, 'short_win_rate': 0.0, 'trade_days': 0
+            'win_rate': 0.0, 'long_win_rate': 0.0, 'short_win_rate': 0.0, 'trade_days': 0,
+            'daily_pnl_list': []  # 🚀 【新增】空的每日損益列表
         }
-
-
-
-def create_strategy_config_from_gui(gui_config):
-    """從GUI配置創建策略配置對象"""
-    trade_lots = gui_config["trade_lots"]
-    lot_settings = gui_config["lot_settings"]
-    filters = gui_config["filters"]
-
-    # 🔧 檢查是否啟用簡化模式（停用移動停損和保護性停損）
-    simplified_mode = gui_config.get("simplified_mode", False)
-    # 🎯 檢查是否啟用固定停損模式（使用觸發點數作為固定停損點）
-    fixed_stop_mode = gui_config.get("fixed_stop_mode", False)
-    # 🎯 檢查是否啟用每口獨立停利設定
-    individual_take_profit_enabled = gui_config.get("individual_take_profit_enabled", False)
-
-    # 創建口數規則
-    lot_rules = []
-
-    # 第1口
-    if fixed_stop_mode:
-        # 🎯 固定停損模式：使用觸發點數作為固定停損點
-        lot1_rule = LotRule(
-            use_trailing_stop=False,
-            trailing_activation=Decimal(str(lot_settings["lot1"]["trigger"])),
-            trailing_pullback=Decimal(str(lot_settings["lot1"]["trailing"])) / 100,
-            fixed_stop_loss_points=Decimal(str(lot_settings["lot1"]["trigger"]))  # 使用觸發點數作為固定停損
-        )
-    else:
-        # 原始邏輯
-        lot1_rule = LotRule(
-            use_trailing_stop=not simplified_mode,  # 簡化模式時停用移動停損
-            trailing_activation=Decimal(str(lot_settings["lot1"]["trigger"])),
-            trailing_pullback=Decimal(str(lot_settings["lot1"]["trailing"])) / 100
-        )
-
-    # 🎯 如果啟用每口獨立停利，設定固定停利點數
-    if individual_take_profit_enabled and "take_profit" in lot_settings["lot1"]:
-        lot1_rule.fixed_tp_points = Decimal(str(lot_settings["lot1"]["take_profit"]))
-
-    lot_rules.append(lot1_rule)
-
-    # 第2口 (如果有)
-    if trade_lots >= 2:
-        if fixed_stop_mode:
-            # 🎯 固定停損模式：使用觸發點數作為固定停損點，停用保護性停損
-            lot2_rule = LotRule(
-                use_trailing_stop=False,
-                trailing_activation=Decimal(str(lot_settings["lot2"]["trigger"])),
-                trailing_pullback=Decimal(str(lot_settings["lot2"]["trailing"])) / 100,
-                protective_stop_multiplier=None,  # 固定停損模式時停用保護性停損
-                fixed_stop_loss_points=Decimal(str(lot_settings["lot2"]["trigger"]))  # 使用觸發點數作為固定停損
-            )
-        else:
-            # 原始邏輯
-            lot2_rule = LotRule(
-                use_trailing_stop=not simplified_mode,  # 簡化模式時停用移動停損
-                trailing_activation=Decimal(str(lot_settings["lot2"]["trigger"])),
-                trailing_pullback=Decimal(str(lot_settings["lot2"]["trailing"])) / 100,
-                protective_stop_multiplier=None if simplified_mode else Decimal(str(lot_settings["lot2"]["protection"]))  # 簡化模式時停用保護性停損
-            )
-
-        # 🎯 如果啟用每口獨立停利，設定固定停利點數
-        if individual_take_profit_enabled and "take_profit" in lot_settings["lot2"]:
-            lot2_rule.fixed_tp_points = Decimal(str(lot_settings["lot2"]["take_profit"]))
-
-        lot_rules.append(lot2_rule)
-
-    # 第3口 (如果有)
-    if trade_lots >= 3:
-        if fixed_stop_mode:
-            # 🎯 固定停損模式：使用觸發點數作為固定停損點，停用保護性停損
-            lot3_rule = LotRule(
-                use_trailing_stop=False,
-                trailing_activation=Decimal(str(lot_settings["lot3"]["trigger"])),
-                trailing_pullback=Decimal(str(lot_settings["lot3"]["trailing"])) / 100,
-                protective_stop_multiplier=None,  # 固定停損模式時停用保護性停損
-                fixed_stop_loss_points=Decimal(str(lot_settings["lot3"]["trigger"]))  # 使用觸發點數作為固定停損
-            )
-        else:
-            # 原始邏輯
-            lot3_rule = LotRule(
-                use_trailing_stop=not simplified_mode,  # 簡化模式時停用移動停損
-                trailing_activation=Decimal(str(lot_settings["lot3"]["trigger"])),
-                trailing_pullback=Decimal(str(lot_settings["lot3"]["trailing"])) / 100,
-                protective_stop_multiplier=None if simplified_mode else Decimal(str(lot_settings["lot3"]["protection"]))  # 簡化模式時停用保護性停損
-            )
-
-        # 🎯 如果啟用每口獨立停利，設定固定停利點數
-        if individual_take_profit_enabled and "take_profit" in lot_settings["lot3"]:
-            lot3_rule.fixed_tp_points = Decimal(str(lot_settings["lot3"]["take_profit"]))
-
-        lot_rules.append(lot3_rule)
-
-    # 創建濾網配置
-    range_filter = RangeFilter(
-        use_range_size_filter=filters["range_filter"]["enabled"],
-        max_range_points=Decimal(str(filters["range_filter"].get("max_range_points", 50)))
-    )
-
-    risk_config = RiskConfig(
-        use_risk_filter=filters["risk_filter"]["enabled"],
-        daily_loss_limit=Decimal(str(filters["risk_filter"].get("daily_loss_limit", 150))),
-        profit_target=Decimal(str(filters["risk_filter"].get("profit_target", 200)))
-    )
-
-    # 停損配置 (根據GUI設定決定)
-    if filters["stop_loss_filter"]["enabled"]:
-        stop_loss_type_str = filters["stop_loss_filter"].get("stop_loss_type", "range_boundary")
-        use_range_midpoint = False
-
-        if stop_loss_type_str == "range_boundary":
-            stop_loss_type = StopLossType.RANGE_BOUNDARY
-        elif stop_loss_type_str == "range_midpoint":
-            stop_loss_type = StopLossType.RANGE_BOUNDARY  # 使用區間邊緣類型但啟用中點
-            use_range_midpoint = True
-        elif stop_loss_type_str == "fixed_points":
-            stop_loss_type = StopLossType.FIXED_POINTS
-        else:
-            stop_loss_type = StopLossType.RANGE_BOUNDARY
-
-        stop_loss_config = StopLossConfig(
-            stop_loss_type=stop_loss_type,
-            fixed_stop_loss_points=Decimal(str(filters["stop_loss_filter"].get("fixed_stop_loss_points", 15))),
-            use_range_midpoint=use_range_midpoint
-        )
-    else:
-        stop_loss_config = StopLossConfig()
-
-    # 創建策略配置
-    strategy_config = StrategyConfig(
-        trade_size_in_lots=trade_lots,
-        stop_loss_type=stop_loss_config.stop_loss_type,
-        lot_rules=lot_rules,
-        range_filter=range_filter,
-        risk_config=risk_config,
-        stop_loss_config=stop_loss_config
-    )
-
-    return strategy_config
-
-
-def main():
-    import argparse
-    import json
-
-    # 添加命令行參數支持
-    parser = argparse.ArgumentParser(description='Profit-Funded Risk 多口交易策略回測')
-    parser.add_argument('--start-date', type=str, help='2024-08-01')
-    parser.add_argument('--end-date', type=str, help='2024-08-31')
-    parser.add_argument('--gui-mode', action='store_true', help='GUI模式執行')
-    parser.add_argument('--config', type=str, help='GUI配置JSON字串')
-    args = parser.parse_args()
-
-    # 處理GUI模式
-    if args.gui_mode and args.config:
-        try:
-            # 初始化資料庫連線池
-            logger.info("🎮 GUI模式：初始化資料庫連線池...")
-            init_all_db_pools()
-            logger.info("✅ GUI模式：資料庫連線池初始化成功。")
-
-            gui_config = json.loads(args.config)
-            start_date = gui_config["start_date"]
-            end_date = gui_config["end_date"]
-            range_start_time = gui_config.get("range_start_time")  # 可選參數
-            range_end_time = gui_config.get("range_end_time")      # 可選參數
-
-            # 從GUI配置創建策略配置
-            strategy_config = create_strategy_config_from_gui(gui_config)
-
-            # 執行回測
-            logger.info("🎮 GUI模式：開始執行回測...")
-            run_backtest(strategy_config, start_date, end_date, False, range_start_time, range_end_time)
-            return
-
-        except Exception as e:
-            logger.error(f"❌ GUI模式執行失敗：{e}")
-            return
-
-    # 驗證日期格式
-    start_date, end_date = args.start_date, args.end_date
-    if start_date:
-        try:
-            from datetime import datetime
-            datetime.strptime(start_date, '%Y-%m-%d')
-        except ValueError:
-            logger.error("❌ 開始日期格式錯誤，請使用 YYYY-MM-DD 格式")
-            return
-
-    if end_date:
-        try:
-            from datetime import datetime
-            datetime.strptime(end_date, '%Y-%m-%d')
-        except ValueError:
-            logger.error("❌ 結束日期格式錯誤，請使用 YYYY-MM-DD 格式")
-            return
-
-    logger.info("▶️  回測程式開始執行...")
-
-    # 🚀 根據配置初始化數據源
-    if USE_SQLITE:
-        try:
-            sqlite_connection.init_sqlite_connection()
-            logger.info("✅ SQLite連接初始化成功。")
-        except Exception as e:
-            logger.error(f"❌ SQLite連接初始化失敗: {e}", exc_info=True)
-            return
-    else:
-        try:
-            init_all_db_pools()
-            logger.info("✅ PostgreSQL連線池初始化成功。")
-        except Exception as e:
-            logger.error(f"❌ PostgreSQL連線池初始化失敗: {e}", exc_info=True)
-            return
-
-    # --- 策略實驗室 ---
-
-    # 正確的【單口移動停利】設定範例
-    config_single_lot_trailing_tp = StrategyConfig(
-        trade_size_in_lots=1,
-        stop_loss_type=StopLossType.RANGE_BOUNDARY, # 假設初始停損不變
-        lot_rules=[
-            LotRule(
-                # 明確指令
-                use_trailing_stop=True,
-                fixed_tp_points=None,  # 確保不使用固定停利
-
-                # 提供移動停利所需參數
-                trailing_activation=Decimal(15),
-                trailing_pullback=Decimal('0.20')
-            )
-        ]
-    )
-    
-
-
-    # 【新範例】：雙口交易，兩口都使用移動停利
-    config_two_lots_trailing_tp = StrategyConfig(
-        trade_size_in_lots=2,
-        stop_loss_type=StopLossType.RANGE_BOUNDARY,
-        lot_rules=[
-            # 第 1 口規則
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(15),
-                trailing_pullback=Decimal('0.20')
-            ),
-            # 第 2 口規則
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(40),
-                trailing_pullback=Decimal('0.20'),
-                protective_stop_multiplier=Decimal('2.0') # 使用第一口的獲利來保護
-            )
-        ]
-    )
-
-    # 範例3：我們之前設計的複雜三口單策略
-    config_three_lots = StrategyConfig(
-        trade_size_in_lots=3,
-        stop_loss_type=StopLossType.RANGE_BOUNDARY,
-        lot_rules=[
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(15),
-                trailing_pullback=Decimal('0.20')
-            ),
-            # 第 2 口規則
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(40),
-                trailing_pullback=Decimal('0.20'),
-                protective_stop_multiplier=Decimal('2.0') # 使用第一口的獲利來保護
-            ),
-            # 第 3 口規則
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(65),
-                trailing_pullback=Decimal('0.20'),
-                protective_stop_multiplier=Decimal('2.0') # 使用第二口的獲利來保護
-            )
-        ]
-    )
-
-    config_4_lots = StrategyConfig(
-        trade_size_in_lots=4,
-        stop_loss_type=StopLossType.RANGE_BOUNDARY,
-        lot_rules=[
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(15),
-                trailing_pullback=Decimal('0.20')
-            ),
-            # 第 2 口規則
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(40),
-                trailing_pullback=Decimal('0.20'),
-                protective_stop_multiplier=Decimal('2.0') # 使用累積獲利來保護
-            ),
-            # 第 3 口規則
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(65),
-                trailing_pullback=Decimal('0.20'),
-                protective_stop_multiplier=Decimal('2.0') # 使用累積獲利來保護
-            ),
-            # 第 4 口規則
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(80),
-                trailing_pullback=Decimal('0.40'),
-                protective_stop_multiplier=Decimal('1.0') # 使用累積獲利來保護
-            )
-        ]
-    )
-    
-    # === 新增濾網測試配置 ===
-    config_with_filters = StrategyConfig(
-        trade_size_in_lots=3,
-        stop_loss_type=StopLossType.RANGE_BOUNDARY,
-        lot_rules=[
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(15),
-                trailing_pullback=Decimal('0.20')
-            ),
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(40),
-                trailing_pullback=Decimal('0.20'),
-                protective_stop_multiplier=Decimal('2.0')
-            ),
-            LotRule(
-                use_trailing_stop=True,
-                trailing_activation=Decimal(65),
-                trailing_pullback=Decimal('0.20'),
-                protective_stop_multiplier=Decimal('2.0')
-            )
-        ],
-        # 啟用濾網
-        range_filter=RangeFilter(
-            use_range_size_filter=True,
-            max_range_points=Decimal(50)
-        ),
-        risk_config=RiskConfig(
-            use_risk_filter=True,  # 明確啟用風險濾網
-            daily_loss_limit=Decimal(150),
-            profit_target=Decimal(200)
-        ),
-        stop_loss_config=StopLossConfig(
-            stop_loss_type=StopLossType.RANGE_BOUNDARY,
-            use_range_midpoint=False
-        )
-    )
-
-    # --- 選擇要執行的測試 ---
-    # logger.info("\n---------- [測試] 執行單口固定停利設定 ----------")
-    # run_backtest(config_single_lot_trailing_tp, start_date, end_date)
-
-    # logger.info("\n---------- [測試] 執行單口移動停利設定 ----------")
-    # run_backtest(config_two_lots_trailing_tp, start_date, end_date)
-
-    # 第三階段：驗證測試 - 先執行原始配置確認結果一致
-    logger.info("\n---------- [驗證] 執行原始三口交易設定 (無濾網) ----------")
-    run_backtest(config_three_lots, start_date, end_date)
-
-    logger.info("\n---------- [測試] 執行三口交易設定 (啟用濾網) ----------")
-    run_backtest(config_with_filters, start_date, end_date)
-
-    # 🚀 第三階段B：測試風險管理濾網觸發
-    logger.info("\n---------- [測試] 風險管理濾網觸發測試 ----------")
-    config_strict_risk = StrategyConfig(
-        trade_size_in_lots=3,
-        stop_loss_type=StopLossType.RANGE_BOUNDARY,
-        lot_rules=[
-            LotRule(trailing_activation=Decimal('15'), trailing_pullback=Decimal('0.2')),
-            LotRule(trailing_activation=Decimal('40'), trailing_pullback=Decimal('0.2'), protective_stop_multiplier=Decimal('2.0')),
-            LotRule(trailing_activation=Decimal('65'), trailing_pullback=Decimal('0.2'), protective_stop_multiplier=Decimal('2.0'))
-        ],
-        risk_config=RiskConfig(
-            use_risk_filter=True,
-            daily_loss_limit=Decimal('100'),  # 設定較低限制來測試觸發
-            profit_target=Decimal('200')
-        )
-    )
-    run_backtest(config_strict_risk, start_date, end_date)
-
-    # === 🔧 新增：簡化策略測試配置 ===
-    logger.info("\n---------- [測試] 簡化策略 (停用移動停損和保護性停損) ----------")
-    config_simplified_test = StrategyConfig(
-        trade_size_in_lots=3,
-        stop_loss_type=StopLossType.RANGE_BOUNDARY,
-        lot_rules=[
-            # 第1口：無移動停損，無保護性停損
-            LotRule(
-                use_trailing_stop=False,
-                trailing_activation=Decimal(14),  # 保留數值但不使用
-                trailing_pullback=Decimal('0.10')
-            ),
-            # 第2口：無移動停損，無保護性停損
-            LotRule(
-                use_trailing_stop=False,
-                trailing_activation=Decimal(40),  # 保留數值但不使用
-                trailing_pullback=Decimal('0.20'),
-                protective_stop_multiplier=None  # 明確關閉保護性停損
-            ),
-            # 第3口：無移動停損，無保護性停損
-            LotRule(
-                use_trailing_stop=False,
-                trailing_activation=Decimal(41),  # 保留數值但不使用
-                trailing_pullback=Decimal('0.20'),
-                protective_stop_multiplier=None  # 明確關閉保護性停損
-            ),
-        ]
-    )
-    run_backtest(config_simplified_test, start_date, end_date)
-
-    # === 🎯 新增：固定停損模式測試配置 ===
-    logger.info("\n---------- [測試] 固定停損模式 (使用GUI觸發點數作為固定停損點) ----------")
-    config_fixed_stop_test = StrategyConfig(
-        trade_size_in_lots=3,
-        stop_loss_type=StopLossType.RANGE_BOUNDARY,
-        lot_rules=[
-            # 第1口：14點固定停損
-            LotRule(
-                use_trailing_stop=False,
-                trailing_activation=Decimal(14),  # 保留數值但不使用
-                trailing_pullback=Decimal('0.00'),  # 0%回檔
-                fixed_stop_loss_points=Decimal(14)  # 14點固定停損
-            ),
-            # 第2口：40點固定停損，無保護性停損
-            LotRule(
-                use_trailing_stop=False,
-                trailing_activation=Decimal(40),  # 保留數值但不使用
-                trailing_pullback=Decimal('0.00'),  # 0%回檔
-                protective_stop_multiplier=None,  # 停用保護性停損
-                fixed_stop_loss_points=Decimal(40)  # 40點固定停損
-            ),
-            # 第3口：41點固定停損，無保護性停損
-            LotRule(
-                use_trailing_stop=False,
-                trailing_activation=Decimal(41),  # 保留數值但不使用
-                trailing_pullback=Decimal('0.00'),  # 0%回檔
-                protective_stop_multiplier=None,  # 停用保護性停損
-                fixed_stop_loss_points=Decimal(41)  # 41點固定停損
-            ),
-        ]
-    )
-    run_backtest(config_fixed_stop_test, start_date, end_date)
-
-    # 第四階段：凱利公式分析
-    logger.info("\n---------- [分析] 凱利公式資金管理分析 ----------")
-    try:
-        from kelly_formula_analyzer import analyze_backtest_results
-
-        # 從原始配置的回測結果進行凱利分析
-        # 這裡我們手動提取交易結果進行分析
-        sample_log_content = """
---- 2024-11-01 | 開盤區間: 22345 - 22407 | 區間濾網未啟用 ---
-損益: +13
-損益: +35
-損益: +64
---- 2024-11-06 | 開盤區間: 23116 - 23273 | 區間濾網未啟用 ---
-損益: +25
-損益: +35
-損益: +58
---- 2024-11-07 | 開盤區間: 23124 - 23191 | 區間濾網未啟用 ---
-損益: +15
-損益: +37
-損益: -104
---- 2024-11-08 | 開盤區間: 23746 - 23793 | 區間濾網未啟用 ---
-損益: -48
-損益: -48
-損益: -48
---- 2024-11-11 | 開盤區間: 23537 - 23585 | 區間濾網未啟用 ---
-損益: -68
-損益: -68
-損益: -68
---- 2024-11-12 | 開盤區間: 22985 - 23062 | 區間濾網未啟用 ---
-損益: +21
-損益: +62
-損益: +62
-"""
-
-        kelly_report = analyze_backtest_results(log_content=sample_log_content, max_lots=10)
-        logger.info(kelly_report)
-
-    except ImportError:
-        logger.warning("⚠️ 無法導入凱利公式分析模組，跳過分析")
-    except Exception as e:
-        logger.error(f"❌ 凱利公式分析時發生錯誤：{e}")
-
-    logger.info("⏹️  回測程式執行完畢。")
-
-if __name__ == '__main__':
-    main()

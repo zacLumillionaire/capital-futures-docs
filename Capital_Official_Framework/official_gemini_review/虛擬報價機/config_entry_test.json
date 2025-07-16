@@ -1,0 +1,56 @@
+{
+    "scenario": "建倉測試",
+    "description": "穩定價格環境，適合測試進場建倉邏輯",
+    "virtual_quote_config": {
+        "base_price": 21500,
+        "price_range": 10,
+        "spread": 2,
+        "quote_interval": 0.5,
+        "fill_probability": 0.95,
+        "fill_delay_ms": 100,
+        "volatility": 0.005,
+        "trend_factor": 0.0
+    },
+    "market_config": {
+        "product": "MTX00",
+        "market_no": 1,
+        "stock_idx": 0,
+        "trading_hours": {
+            "start": "00:00:00",
+            "end": "23:59:59",
+            "24h_mode": true
+        }
+    },
+    "order_config": {
+        "default_account": "F0200006363839",
+        "order_types": ["ROD", "IOC", "FOK"],
+        "default_order_type": "FOK",
+        "max_quantity": 10,
+        "min_quantity": 1
+    },
+    "best5_config": {
+        "enabled": true,
+        "depth_levels": 5,
+        "quantity_range": [20, 100],
+        "price_step": 2
+    },
+    "logging_config": {
+        "enabled": true,
+        "level": "INFO",
+        "console_output": true,
+        "file_output": false,
+        "log_file": "entry_test.log"
+    },
+    "performance_config": {
+        "max_memory_mb": 100,
+        "max_cpu_percent": 5,
+        "quote_buffer_size": 1000,
+        "order_buffer_size": 500
+    },
+    "test_features": {
+        "stable_price": true,
+        "quick_fill": true,
+        "minimal_slippage": true,
+        "high_liquidity": true
+    }
+}

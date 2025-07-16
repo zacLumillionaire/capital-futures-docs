@@ -25,8 +25,8 @@ class MockVirtualRealOrderManager:
         self.order_counter = 1
         self.console_enabled = True
         
-    def execute_strategy_order(self, direction, quantity, signal_source, 
-                             order_type="FOK", price=None, new_close=0):
+    def execute_strategy_order(self, direction, signal_source="strategy_breakout",
+                             product=None, price=None, quantity=None, new_close=0):
         """模擬下單，可以控制成功/失敗"""
         
         class MockOrderResult:

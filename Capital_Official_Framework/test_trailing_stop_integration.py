@@ -27,8 +27,8 @@ class MockVirtualRealOrderManager:
         self.order_counter = 1
         self.console_enabled = True
         
-    def execute_strategy_order(self, direction, quantity, signal_source, 
-                             order_type="FOK", price=None, new_close=0):
+    def execute_strategy_order(self, direction, signal_source="strategy_breakout",
+                             product=None, price=None, quantity=None, new_close=0):
         """模擬下單，測試移動停利平倉和追價"""
         
         class MockOrderResult:
@@ -223,8 +223,8 @@ def test_trailing_stop_with_retry():
                 super().__init__()
                 self.trailing_attempts = 0
             
-            def execute_strategy_order(self, direction, quantity, signal_source, 
-                                     order_type="FOK", price=None, new_close=0):
+            def execute_strategy_order(self, direction, signal_source="strategy_breakout",
+                                     product=None, price=None, quantity=None, new_close=0):
                 if "trailing_stop" in signal_source:
                     self.trailing_attempts += 1
                     if self.trailing_attempts == 1:
@@ -236,7 +236,7 @@ def test_trailing_stop_with_retry():
                         print(f"[MOCK_ORDER] ✅ 移動停利追價成功")
                         return super().MockOrderResult(True, f"TRAILING_RETRY_{self.order_counter}", None, True)
                 
-                return super().execute_strategy_order(direction, quantity, signal_source, order_type, price, new_close)
+                return super().execute_strategy_order(direction, signal_source, product, price, quantity, new_close)
         
         mock_order_manager = RetryMockOrderManager()
         

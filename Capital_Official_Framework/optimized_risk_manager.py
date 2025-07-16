@@ -342,7 +342,7 @@ class OptimizedRiskManager:
                 if self.console_enabled:
                     direction = position_dict.get('direction', 'UNKNOWN')
                     entry_price = position_dict.get('entry_price', 0)
-                    print(f"[OPTIMIZED_RISK] 🎯 新部位監控: {position_id} {direction} @{entry_price}")
+                    print(f"[OPTIMIZED_RISK] 🎯 新部位監控 (內存更新): {position_id} {direction} @{entry_price}")
 
         except Exception as e:
             logger.error(f"新部位事件處理失敗: {e}")
@@ -535,7 +535,8 @@ class OptimizedRiskManager:
                 positions_to_exit = []  # 存儲需要平倉的部位信息
 
                 # 第一階段：遍歷所有部位，收集觸發信息但不立即執行平倉
-                for position_id, position_data in self.position_cache.items():
+                # 🔧 任務2修復：使用 list() 創建副本，避免在迭代時修改字典
+                for position_id, position_data in list(self.position_cache.items()):
                     try:
                         # 🔧 任務2核心：終極保險 - 跳過正在處理中的部位
                         if position_id in self.exiting_positions:
@@ -543,7 +544,7 @@ class OptimizedRiskManager:
                                 print(f"[OPTIMIZED_RISK] 🔒 跳過處理中部位: {position_id} (線程: {threading.current_thread().name})")
                             continue
 
-                        # 🛡️ 檢查初始停損
+                        # 🛡️ 第一優先級：檢查初始停損（最高優先級）
                         stop_loss_trigger_info = self._check_stop_loss_trigger_info(position_id, current_price)
                         if stop_loss_trigger_info:
                             # 🔧 立即標記為處理中
@@ -555,29 +556,30 @@ class OptimizedRiskManager:
                                 'current_price': current_price
                             })
                             results['stop_loss_triggers'] += 1
-                            continue  # 一旦觸發停損，跳過其他檢查
+                            continue  # 🔧 任務2關鍵：一旦觸發停損，立即跳到下一個部位
 
-                        # 🎯 檢查移動停利啟動
-                        elif self._check_activation_trigger(position_id, current_price):
+                        # 🎯 第二優先級：檢查移動停利觸發（僅在沒有停損觸發時）
+                        trailing_trigger_info = self._check_trailing_stop_trigger_info(position_id, current_price)
+                        if trailing_trigger_info:
+                            # 🔧 立即標記為處理中
+                            self.exiting_positions.add(position_id)
+                            positions_to_exit.append({
+                                'position_id': position_id,
+                                'trigger_type': 'trailing_stop',
+                                'trigger_info': trailing_trigger_info,
+                                'current_price': current_price
+                            })
+                            results['drawdown_triggers'] += 1
+                            continue  # 🔧 任務2關鍵：一旦觸發移動停利，立即跳到下一個部位
+
+                        # 🔄 第三優先級：檢查移動停利啟動（僅在沒有任何觸發時）
+                        if self._check_activation_trigger(position_id, current_price):
                             results['trailing_activations'] += 1
+                            continue  # 🔧 任務2關鍵：啟動後跳到下一個部位
 
-                        # 📈 更新已啟動的移動停利並檢查觸發
-                        else:
-                            trailing_trigger_info = self._check_trailing_stop_trigger_info(position_id, current_price)
-                            if trailing_trigger_info:
-                                # 🔧 立即標記為處理中
-                                self.exiting_positions.add(position_id)
-                                positions_to_exit.append({
-                                    'position_id': position_id,
-                                    'trigger_type': 'trailing_stop',
-                                    'trigger_info': trailing_trigger_info,
-                                    'current_price': current_price
-                                })
-                                results['drawdown_triggers'] += 1
-                            else:
-                                # 只是峰值更新，沒有觸發
-                                if self._update_trailing_peak_only(position_id, current_price):
-                                    results['peak_updates'] += 1
+                        # 📈 最低優先級：只是峰值更新（僅在沒有任何其他動作時）
+                        if self._update_trailing_peak_only(position_id, current_price):
+                            results['peak_updates'] += 1
 
                     except Exception as position_error:
                         # 🔧 任務1修復：單個部位處理失敗不影響其他部位
@@ -1330,7 +1332,7 @@ class OptimizedRiskManager:
                                 sync_count += 1
 
                                 if self.console_enabled:
-                                    print(f"[OPTIMIZED_RISK] 🚀 推送部位 {position_id} 到資料庫: entry_price={position_data['entry_price']}")
+                                    print(f"[OPTIMIZED_RISK] 💾 推送內存狀態到資料庫: 部位{position_id}")
 
                         except Exception as push_error:
                             logger.error(f"推送部位 {position_id} 到資料庫失敗: {push_error}")
@@ -1346,85 +1348,86 @@ class OptimizedRiskManager:
                 print(f"[OPTIMIZED_RISK] ❌ 內存推送異常: {e}")
 
     def _sync_with_database(self):
-        """與資料庫同步 - 備份機制（任務2修復：單向同步，從內存到資料庫）"""
+        """與資料庫同步 - 備份機制（任務1修復：徹底改為單向同步，從內存到資料庫）"""
         try:
             # 🚀 第一步：將內存中需要同步的數據推送到資料庫
             self._push_memory_to_database()
 
-            # 🔄 第二步：重新載入活躍部位（僅用於驗證和補充）
+            # 🔄 第二步：僅檢查新部位和已平倉部位，不覆蓋內存數據
             with self.db_manager.get_connection() as conn:
                 # 🔧 修復：確保 row_factory 設置正確
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT pr.*, sg.range_high, sg.range_low
+                    SELECT pr.id, pr.group_id, pr.lot_id, pr.status
                     FROM position_records pr
-                    JOIN strategy_groups sg ON pr.group_id = sg.group_id AND sg.date = date('now')
                     WHERE pr.status = 'ACTIVE'
                     ORDER BY pr.group_id, pr.lot_id
                 ''')
 
                 rows = cursor.fetchall()
 
-                # 🔄 更新緩存
-                current_positions = {}
+                # 🔄 僅用於檢測新部位和已平倉部位
+                db_active_positions = set()
+                new_positions = []
+
                 for row in rows:
-                    # 🔧 修復：安全地轉換 sqlite3.Row 為 dict
                     try:
                         position_data = dict(row)
                     except Exception as row_error:
-                        # 如果 dict(row) 失敗，手動轉換
                         columns = [description[0] for description in cursor.description]
                         position_data = dict(zip(columns, row))
                         if self.console_enabled:
                             print(f"[OPTIMIZED_RISK] 🔧 手動轉換 Row 對象: {row_error}")
 
-                    # 🔧 修復：使用正確的鍵名
-                    position_id = position_data.get('id')  # 資料庫查詢返回的是 id 欄位
+                    position_id = position_data.get('id')
                     if position_id:
-                        current_positions[str(position_id)] = position_data  # 確保鍵為字串
+                        position_key = str(position_id)
+                        db_active_positions.add(position_key)
 
-                        # 如果是新部位，預計算點位
-                        if str(position_id) not in self.position_cache:
-                            self._precalculate_levels(position_data)
-                
-                # 🗑️ 移除已平倉的部位
-                closed_positions = set(self.position_cache.keys()) - set(current_positions.keys())
+                        # 🆕 檢測新部位：如果資料庫有但內存沒有，需要載入
+                        if position_key not in self.position_cache:
+                            new_positions.append(position_id)
+
+                # 🗑️ 移除已平倉的部位（資料庫沒有但內存有的）
+                memory_positions = set(self.position_cache.keys())
+                closed_positions = memory_positions - db_active_positions
                 for position_id in closed_positions:
+                    if self.console_enabled:
+                        print(f"[OPTIMIZED_RISK] 🗑️ 移除已平倉部位: {position_id}")
                     self.on_position_closed(position_id)
-                
-                # 📊 智能更新緩存 - 🔧 任務2修復：強化內存保護機制
-                for position_id, db_data in current_positions.items():
-                    # 🔧 修復：確保 position_id 類型一致
-                    position_key = str(position_id)
-                    cached_data = self.position_cache.get(position_key)
 
-                    # 🛡️ 強化保護邏輯：優先保護內存中的有效數據
-                    if cached_data:
-                        # 創建合併數據，優先使用內存中的有效值
-                        merged_data = db_data.copy()
+                # 🆕 載入新部位（僅載入新發現的部位，不覆蓋現有內存數據）
+                if new_positions:
+                    for position_id in new_positions:
+                        cursor.execute('''
+                            SELECT pr.*, sg.range_high, sg.range_low
+                            FROM position_records pr
+                            JOIN strategy_groups sg ON pr.group_id = sg.group_id AND sg.date = date('now')
+                            WHERE pr.id = ? AND pr.status = 'ACTIVE'
+                        ''', (position_id,))
 
-                        # 保護 entry_price：如果內存有效而資料庫無效，保留內存值
-                        if cached_data.get('entry_price') and not db_data.get('entry_price'):
-                            merged_data['entry_price'] = cached_data['entry_price']
+                        new_row = cursor.fetchone()
+                        if new_row:
+                            try:
+                                new_position_data = dict(new_row)
+                            except Exception:
+                                columns = [description[0] for description in cursor.description]
+                                new_position_data = dict(zip(columns, new_row))
+
+                            position_key = str(position_id)
+                            self.position_cache[position_key] = new_position_data
+                            self._precalculate_levels(new_position_data)
+
                             if self.console_enabled:
-                                print(f"[OPTIMIZED_RISK] 🛡️ 保護部位 {position_id} 內存進場價 {cached_data['entry_price']}")
+                                print(f"[OPTIMIZED_RISK] 🆕 載入新部位: {position_id}")
 
-                        # 保護其他關鍵字段（如果需要）
-                        for key in ['status', 'direction', 'group_id']:
-                            if cached_data.get(key) and not merged_data.get(key):
-                                merged_data[key] = cached_data[key]
-                                if self.console_enabled:
-                                    print(f"[OPTIMIZED_RISK] 🛡️ 保護部位 {position_id} 內存 {key}: {cached_data[key]}")
+                if self.console_enabled:
+                    active_count = len(db_active_positions)
+                    new_count = len(new_positions)
+                    closed_count = len(closed_positions)
+                    print(f"[OPTIMIZED_RISK] 💾 內存優先同步完成: 活躍{active_count}個, 新增{new_count}個, 移除{closed_count}個")
 
-                        self.position_cache[position_key] = merged_data
-                    else:
-                        # 新部位：直接使用資料庫數據
-                        self.position_cache[position_key] = db_data
-                
-                if self.console_enabled and len(rows) > 0:
-                    print(f"[OPTIMIZED_RISK] 🔄 備份同步完成: {len(rows)} 個活躍部位")
-                    
         except Exception as e:
             logger.error(f"資料庫同步失敗: {e}")
             if self.console_enabled:

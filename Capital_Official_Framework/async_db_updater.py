@@ -670,7 +670,7 @@ class AsyncDatabaseUpdater:
                 # ✅ 任務1：添加成功日誌，確認異步資料庫寫入任務最終成功執行
                 if success:
                     if self.console_enabled:
-                        print(f"✅ [ASYNC_DB] 部位 {task.position_id} 已成功更新為ACTIVE，entry_price={task.data['fill_price']}")
+                        print(f"✅ [ASYNC_DB] 資料庫寫入成功: 部位 {task.position_id}，entry_price 更新為 {task.data['fill_price']}")
                 else:
                     if self.console_enabled:
                         print(f"❌ [ASYNC_DB] 部位 {task.position_id} 成交確認失敗")

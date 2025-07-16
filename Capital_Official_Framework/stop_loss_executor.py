@@ -299,7 +299,7 @@ class StopLossExecutor:
 
         # 🔍 DEBUG: 停損執行開始 (重要事件，立即輸出)
         if self.console_enabled:
-            print(f"[STOP_EXECUTOR] 🚨 開始執行停損平倉")
+            print(f"[STOP_EXECUTOR] 🚨 開始執行停損平倉 (數據源: TriggerInfo)")
             print(f"[STOP_EXECUTOR]   部位ID: {position_id}")
             print(f"[STOP_EXECUTOR]   觸發價格: {current_price}")
             print(f"[STOP_EXECUTOR]   方向: {trigger_info.direction}")
@@ -928,7 +928,7 @@ class StopLossExecutor:
 
     def _check_duplicate_exit_protection(self, position_id: int) -> dict:
         """
-        檢查重複平倉防護 - 🔧 新增：防止重複平倉的核心機制
+        檢查重複平倉防護 - 🔧 任務3修復：移除資料庫依賴，純基於緩存和追蹤器
 
         Args:
             position_id: 部位ID
@@ -937,25 +937,20 @@ class StopLossExecutor:
             dict: {'can_execute': bool, 'reason': str}
         """
         try:
-            # 1. 檢查資料庫部位狀態
-            position_info = self._get_position_info(position_id)
-            if not position_info:
-                return {'can_execute': False, 'reason': '找不到部位資訊'}
+            # 🔧 任務3：移除資料庫查詢，改為基於內存狀態檢查
+            # 原因：觸發器已經包含了所有必要的部位信息，無需再次查詢資料庫
 
-            if position_info.get('status') == 'EXITED':
-                return {'can_execute': False, 'reason': '部位已平倉'}
-
-            # 2. 檢查異步緩存狀態 (如果可用)
+            # 1. 檢查異步緩存狀態 (如果可用)
             if self.async_updater and hasattr(self.async_updater, 'is_position_exited_in_cache'):
                 if self.async_updater.is_position_exited_in_cache(position_id):
                     return {'can_execute': False, 'reason': '部位已平倉(緩存)'}
 
-            # 3. 檢查簡化追蹤器中的平倉狀態
+            # 2. 檢查簡化追蹤器中的平倉狀態
             if self.simplified_tracker and hasattr(self.simplified_tracker, 'has_exit_order_for_position'):
                 if self.simplified_tracker.has_exit_order_for_position(position_id):
                     return {'can_execute': False, 'reason': '追蹤器中已有平倉訂單'}
 
-            # 4. 檢查專門平倉追蹤器中的狀態（參考建倉機制）
+            # 3. 檢查專門平倉追蹤器中的狀態（參考建倉機制）
             if self.exit_tracker and hasattr(self.exit_tracker, 'has_exit_order_for_position'):
                 if self.exit_tracker.has_exit_order_for_position(position_id):
                     return {'can_execute': False, 'reason': '專門追蹤器中已有平倉訂單'}

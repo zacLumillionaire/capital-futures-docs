@@ -463,23 +463,42 @@ class OptimizedRiskManager:
                     print(f"[OPTIMIZED_RISK] ⚠️ 部位 {position_id} 進場價格無效 ({entry_price})，跳過預計算")
                 return
 
-            # 🔧 修復：安全的數學運算
+            # 🔧 修復：從規則配置中讀取正確的啟動點位
             try:
+                # 解析規則配置獲取移動停利啟動點位
+                trailing_activation = 15.0  # 預設值
+                rule_config = position_data.get('rule_config')
+                if rule_config:
+                    try:
+                        import json
+                        if isinstance(rule_config, str):
+                            rule_dict = json.loads(rule_config)
+                        else:
+                            rule_dict = rule_config
+
+                        trailing_activation = float(rule_dict.get('trailing_activation', 15.0))
+                        if self.console_enabled:
+                            print(f"[OPTIMIZED_RISK] 📋 部位 {position_id} 使用規則啟動點位: {trailing_activation}點")
+                    except Exception as parse_error:
+                        if self.console_enabled:
+                            print(f"[OPTIMIZED_RISK] ⚠️ 部位 {position_id} 規則解析失敗，使用預設15點: {parse_error}")
+
                 if direction == 'LONG':
                     stop_loss = float(range_low)
-                    activation_price = float(entry_price) + 15  # 15點啟動移動停利
+                    activation_price = float(entry_price) + trailing_activation
                 elif direction == 'SHORT':
                     stop_loss = float(range_high)
-                    activation_price = float(entry_price) - 15
+                    activation_price = float(entry_price) - trailing_activation
                 else:
                     if self.console_enabled:
                         print(f"[OPTIMIZED_RISK] ⚠️ 部位 {position_id} 方向無效 ({direction})，跳過預計算")
                     return
 
-                # 💾 存儲到緩存
-                self.stop_loss_cache[position_id] = stop_loss
-                self.activation_cache[position_id] = activation_price
-                self.trailing_cache[position_id] = {
+                # 💾 存儲到緩存 - 🔧 修復：確保鍵為字串類型
+                cache_key = str(position_id)
+                self.stop_loss_cache[cache_key] = stop_loss
+                self.activation_cache[cache_key] = activation_price
+                self.trailing_cache[cache_key] = {
                     'activated': False,
                     'peak_price': float(entry_price),
                     'direction': direction

@@ -3339,14 +3339,28 @@ class SimpleIntegratedApp:
                                                         print(f"[OPTIMIZED_RISK] ⚠️ 無法安全訪問部位數據")
 
                                             if range_high and range_low:  # 只有在有效區間時才處理
-                                                # 構建部位數據
+                                                # 🔧 修復：從資料庫獲取完整的部位數據，包含 rule_config
+                                                try:
+                                                    cursor.execute("""
+                                                        SELECT rule_config FROM position_records
+                                                        WHERE id = ?
+                                                    """, (position_id,))
+                                                    rule_result = cursor.fetchone()
+                                                    rule_config = rule_result[0] if rule_result else None
+                                                except Exception as rule_error:
+                                                    rule_config = None
+                                                    if self.console_enabled:
+                                                        print(f"[OPTIMIZED_RISK] ⚠️ 無法獲取規則配置: {rule_error}")
+
+                                                # 構建完整的部位數據
                                                 position_data = {
                                                     'id': position_id,
                                                     'direction': direction,
                                                     'entry_price': price,
                                                     'range_high': range_high,
                                                     'range_low': range_low,
-                                                    'group_id': group_db_id
+                                                    'group_id': group_db_id,
+                                                    'rule_config': rule_config  # 🔧 新增：包含規則配置
                                                 }
                                                 # 🎯 事件觸發：立即加入監控
                                                 self.optimized_risk_manager.on_new_position(position_data)

@@ -327,6 +327,11 @@ class SimpleIntegratedApp:
                 self.optimized_risk_manager.set_stop_loss_executor(self.stop_loss_executor)
                 print("[OPTIMIZED_RISK] 🔗 停損執行器已設置到優化風險管理器")
 
+            # 🚀 任務2新增：設置異步更新器到優化風險管理器
+            if hasattr(self, 'async_updater') and self.async_updater:
+                self.optimized_risk_manager.set_async_updater(self.async_updater)
+                print("[OPTIMIZED_RISK] 🚀 異步更新器已設置到優化風險管理器")
+
             # ✅ 設定啟用狀態
             self.optimized_risk_enabled = True
 
@@ -3516,14 +3521,28 @@ class SimpleIntegratedApp:
                                                         print(f"[OPTIMIZED_RISK] ⚠️ 無法安全訪問部位數據")
 
                                             if range_high and range_low:  # 只有在有效區間時才處理
-                                                # 構建部位數據
+                                                # 🔧 修復：從資料庫獲取完整的部位數據，包含 rule_config
+                                                try:
+                                                    cursor.execute("""
+                                                        SELECT rule_config FROM position_records
+                                                        WHERE id = ?
+                                                    """, (position_id,))
+                                                    rule_result = cursor.fetchone()
+                                                    rule_config = rule_result[0] if rule_result else None
+                                                except Exception as rule_error:
+                                                    rule_config = None
+                                                    if self.console_enabled:
+                                                        print(f"[OPTIMIZED_RISK] ⚠️ 無法獲取規則配置: {rule_error}")
+
+                                                # 構建完整的部位數據
                                                 position_data = {
                                                     'id': position_id,
                                                     'direction': direction,
                                                     'entry_price': price,
                                                     'range_high': range_high,
                                                     'range_low': range_low,
-                                                    'group_id': group_db_id
+                                                    'group_id': group_db_id,
+                                                    'rule_config': rule_config  # 🔧 新增：包含規則配置
                                                 }
                                                 # 🎯 事件觸發：立即加入監控
                                                 self.optimized_risk_manager.on_new_position(position_data)
@@ -4611,6 +4630,50 @@ class SimpleIntegratedApp:
 
             # 註冊回調函數
             self.stop_loss_monitor.add_stop_loss_callback(on_stop_loss_triggered)
+
+            # 🚀 任務3新增：註冊平倉成功回呼函式
+            def on_exit_success(position_id: int, execution_result, trigger_info):
+                """平倉成功回呼函式 - 負責異步更新資料庫"""
+                try:
+                    if self.console_enabled:
+                        print(f"[STOP_LOSS] 📞 平倉成功回呼觸發: 部位{position_id}")
+
+                    # 使用異步更新器更新資料庫
+                    if hasattr(self, 'async_updater') and self.async_updater:
+                        # 標準化 exit_reason
+                        from stop_loss_executor import standardize_exit_reason
+                        raw_exit_reason = getattr(trigger_info, 'trigger_reason', '手動出場')
+                        standardized_reason = standardize_exit_reason(raw_exit_reason)
+
+                        self.async_updater.schedule_position_exit_update(
+                            position_id=position_id,
+                            exit_price=execution_result.execution_price,
+                            exit_time=execution_result.execution_time,
+                            exit_reason=standardized_reason,
+                            order_id=execution_result.order_id,
+                            pnl=execution_result.pnl
+                        )
+
+                        if self.console_enabled:
+                            print(f"[STOP_LOSS] 🚀 平倉狀態已排程異步更新: 部位{position_id}")
+                    else:
+                        # 回退到同步更新
+                        if hasattr(self.stop_loss_executor, '_update_position_exit_status_sync'):
+                            self.stop_loss_executor._update_position_exit_status_sync(
+                                position_id, execution_result, trigger_info
+                            )
+                            if self.console_enabled:
+                                print(f"[STOP_LOSS] 🛡️ 平倉狀態已同步更新: 部位{position_id}")
+
+                except Exception as e:
+                    logger.error(f"平倉成功回呼處理失敗: {e}")
+                    if self.console_enabled:
+                        print(f"[STOP_LOSS] ❌ 平倉回呼處理失敗: {e}")
+
+            # 註冊平倉成功回呼
+            self.stop_loss_executor.add_exit_success_callback(on_exit_success)
+            if self.console_enabled:
+                print("[STOP_LOSS] 📞 平倉成功回呼已註冊")
 
             # 🎯 初始化移動停利系統
             self._init_trailing_stop_system()
@@ -6003,11 +6066,40 @@ def add_config_management_methods():
         widget.bind("<Enter>", on_enter)
         widget.bind("<Leave>", on_leave)
 
+    def debug_optimized_risk_manager(self):
+        """調試優化風險管理器狀態 - 診斷移動停利問題"""
+        if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
+            print("\n🧠 OptimizedRiskManager 內存狀態調試:")
+            print("=" * 60)
+
+            with self.optimized_risk_manager.cache_lock:
+                print(f"📊 position_cache 數量: {len(self.optimized_risk_manager.position_cache)}")
+                for pos_id, pos_data in self.optimized_risk_manager.position_cache.items():
+                    print(f"  部位 {pos_id}: entry_price={pos_data.get('entry_price')}, direction={pos_data.get('direction')}")
+
+                print(f"🎯 activation_cache 數量: {len(self.optimized_risk_manager.activation_cache)}")
+                for pos_id, activation_price in self.optimized_risk_manager.activation_cache.items():
+                    print(f"  部位 {pos_id}: 啟動點位={activation_price}")
+
+                print(f"📈 trailing_cache 數量: {len(self.optimized_risk_manager.trailing_cache)}")
+                for pos_id, trailing_data in self.optimized_risk_manager.trailing_cache.items():
+                    print(f"  部位 {pos_id}: activated={trailing_data.get('activated')}, peak={trailing_data.get('peak_price')}")
+
+            # 手動觸發價格更新測試
+            test_prices = [21507.0, 21525.0, 21549.0]
+            for test_price in test_prices:
+                print(f"\n🧪 測試價格 {test_price}:")
+                result = self.optimized_risk_manager.update_price(test_price)
+                print(f"  結果: {result}")
+        else:
+            print("❌ OptimizedRiskManager 未初始化")
+
     # 將方法添加到類中
     SimpleIntegratedApp.load_config_options = load_config_options
     SimpleIntegratedApp.update_current_config_display = update_current_config_display
     SimpleIntegratedApp.switch_quote_config = switch_quote_config
     SimpleIntegratedApp.create_tooltip = create_tooltip
+    SimpleIntegratedApp.debug_optimized_risk_manager = debug_optimized_risk_manager
 
 # 執行方法添加
 add_config_management_methods()

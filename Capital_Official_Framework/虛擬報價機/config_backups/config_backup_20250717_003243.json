@@ -1,0 +1,68 @@
+{
+    "scenario": "移動停利測試",
+    "description": "趨勢性價格變動，測試移動停利啟動與平倉",
+    "virtual_quote_config": {
+        "base_price": 21500,
+        "price_range": 80,
+        "spread": 3,
+        "quote_interval": 0.01,
+        "fill_probability": 0.9,
+        "fill_delay_ms": 150,
+        "volatility": 0.01,
+        "trend_factor": 0.3
+    },
+    "market_config": {
+        "product": "MTX00",
+        "market_no": 1,
+        "stock_idx": 0,
+        "trading_hours": {
+            "start": "00:00:00",
+            "end": "23:59:59",
+            "24h_mode": true
+        }
+    },
+    "order_config": {
+        "default_account": "F0200006363839",
+        "order_types": ["ROD", "IOC", "FOK"],
+        "default_order_type": "FOK",
+        "max_quantity": 10,
+        "min_quantity": 1
+    },
+    "best5_config": {
+        "enabled": true,
+        "depth_levels": 5,
+        "quantity_range": [15, 80],
+        "price_step": 3
+    },
+    "logging_config": {
+        "enabled": true,
+        "level": "INFO",
+        "console_output": true,
+        "file_output": true,
+        "log_file": "trailing_stop_test.log"
+    },
+    "performance_config": {
+        "max_memory_mb": 100,
+        "max_cpu_percent": 5,
+        "quote_buffer_size": 1000,
+        "order_buffer_size": 500
+    },
+    "test_features": {
+        "trending_market": true,
+        "profit_accumulation": true,
+        "trailing_activation": true,
+        "pullback_simulation": true
+    },
+    "trend_simulation": {
+        "direction": "up",
+        "strength": 0.3,
+        "duration_minutes": 10,
+        "pullback_probability": 0.2,
+        "pullback_strength": 0.15
+    },
+    "profit_targets": {
+        "first_lot": 15,
+        "second_lot": 40,
+        "third_lot": 65
+    }
+}

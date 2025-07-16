@@ -818,8 +818,8 @@ class SimplifiedOrderTracker:
                     if self.console_enabled:
                         print(f"[SIMPLIFIED_TRACKER] ⚠️ 新倉成交處理失敗: {qty}口 @{price:.0f}")
                         print(f"[SIMPLIFIED_TRACKER] 📊 當前策略組狀態:")
-                        for gid, g in self.strategy_groups.items():
-                            print(f"  組{gid}: {g.filled_lots}/{g.total_lots}, 完成={g.is_complete()}, 目標價={g.target_price}")
+                        for group_id, group_info in self.strategy_groups.items():
+                            print(f"  組{group_id}: {group_info.filled_lots}/{group_info.total_lots}, 完成={group_info.is_complete()}, 目標價={group_info.target_price}")
                         print(f"[SIMPLIFIED_TRACKER] 💡 建議檢查價格容差設定或市場滑價情況")
                     return False  # 明確返回失敗，避免其他系統接手
 
@@ -918,8 +918,8 @@ class SimplifiedOrderTracker:
                               f"{qty}口 @{price:.0f}")
                         # 輸出當前所有策略組狀態
                         print(f"[SIMPLIFIED_TRACKER] 📊 當前策略組狀態:")
-                        for gid, g in self.strategy_groups.items():
-                            print(f"  組{gid}: {g.filled_lots}/{g.total_lots}, 完成={g.is_complete()}, 目標價={g.target_price}")
+                        for group_id, group_info in self.strategy_groups.items():
+                            print(f"  組{group_id}: {group_info.filled_lots}/{group_info.total_lots}, 完成={group_info.is_complete()}, 目標價={group_info.target_price}")
                     return False
 
                 # 記錄更新前狀態

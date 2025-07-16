@@ -330,7 +330,7 @@ class StopLossExecutor:
             lock_age = time.time() - lock_info.get('timestamp', 0) if lock_info else 0
 
             if self.console_enabled:
-                print(f"[STOP_EXECUTOR] 🔒 停損被全局管理器阻止: 部位{position_id}")
+                print(f"[STOP_EXECUTOR] 🔒 停損被全局管理器阻止: 部位{position_id} (線程: {threading.current_thread().name})")
                 print(f"[STOP_EXECUTOR]   鎖定原因: {lock_reason}")
                 print(f"[STOP_EXECUTOR]   鎖定時間: {lock_age:.1f}秒前")
                 print(f"[STOP_EXECUTOR]   觸發源: {lock_info.get('trigger_source', 'unknown')}")
@@ -389,7 +389,7 @@ class StopLossExecutor:
                 # 清除全局鎖定（因為實際無法執行）
                 self.global_exit_manager.clear_exit(str(position_id))
                 if self.console_enabled:
-                    print(f"[STOP_EXECUTOR] ⚠️ 重複平倉防護: {protection_result['reason']}")
+                    print(f"[STOP_EXECUTOR] ⚠️ 重複平倉防護: {protection_result['reason']} (線程: {threading.current_thread().name}, 資料庫狀態: 檢查中)")
                 return StopLossExecutionResult(position_id, False,
                                              error_message=protection_result['reason'])
 

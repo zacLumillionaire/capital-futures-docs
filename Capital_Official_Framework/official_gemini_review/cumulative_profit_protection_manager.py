@@ -120,42 +120,72 @@ class CumulativeProfitProtectionManager:
     def _calculate_cumulative_profit(self, group_id: int, successful_exit_position_id: int) -> float:
         """
         計算累積獲利
-        
+
         Args:
             group_id: 策略組ID
             successful_exit_position_id: 成功平倉的部位ID
-            
+
         Returns:
             float: 累積獲利點數
         """
         try:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
-                
-                # 查詢該組所有已平倉部位的獲利
+
+                # 🔧 修復：查詢該組所有已平倉部位的獲利（包含當前剛平倉的部位）
+                # 移除 id <= ? 的限制，改為查詢所有已平倉的部位
                 cursor.execute('''
-                    SELECT realized_pnl 
-                    FROM position_records 
-                    WHERE group_id = ? 
-                      AND status = 'EXITED' 
+                    SELECT id, realized_pnl, lot_id
+                    FROM position_records
+                    WHERE group_id = ?
+                      AND status = 'EXITED'
                       AND realized_pnl IS NOT NULL
-                      AND id <= ?
                     ORDER BY id
-                ''', (group_id, successful_exit_position_id))
-                
-                profits = [row[0] for row in cursor.fetchall() if row[0] is not None]
+                ''', (group_id,))
+
+                rows = cursor.fetchall()
+                profits = []
+                position_details = []
+
+                for row in rows:
+                    position_id, pnl, lot_id = row
+                    if pnl is not None:
+                        profits.append(pnl)
+                        position_details.append({
+                            'id': position_id,
+                            'pnl': pnl,
+                            'lot_id': lot_id
+                        })
+
                 cumulative_profit = sum(profits)
-                
+
                 if self.console_enabled:
-                    print(f"[PROTECTION] 📊 累積獲利計算:")
-                    for i, profit in enumerate(profits, 1):
-                        print(f"[PROTECTION]   第{i}口獲利: {profit:.1f} 點")
+                    print(f"[PROTECTION] 📊 累積獲利計算 (group_id={group_id}):")
+                    print(f"[PROTECTION]   查詢到 {len(position_details)} 個已平倉部位")
+                    for detail in position_details:
+                        print(f"[PROTECTION]   部位{detail['id']} (lot_{detail['lot_id']}): {detail['pnl']:.1f} 點")
                     print(f"[PROTECTION]   總累積獲利: {cumulative_profit:.1f} 點")
-                
+
+                    # 🔍 診斷：如果累積獲利為0，額外檢查
+                    if cumulative_profit == 0.0:
+                        print(f"[PROTECTION] 🔍 診斷：累積獲利為0，檢查資料庫狀態...")
+                        cursor.execute('''
+                            SELECT id, status, realized_pnl, lot_id
+                            FROM position_records
+                            WHERE group_id = ?
+                            ORDER BY id
+                        ''', (group_id,))
+                        all_positions = cursor.fetchall()
+                        print(f"[PROTECTION] 🔍 該組所有部位狀態:")
+                        for pos in all_positions:
+                            print(f"[PROTECTION]     部位{pos[0]} (lot_{pos[3]}): status={pos[1]}, pnl={pos[2]}")
+
                 return cumulative_profit
-                
+
         except Exception as e:
             logger.error(f"計算累積獲利失敗: {e}")
+            if self.console_enabled:
+                print(f"[PROTECTION] ❌ 計算累積獲利異常: {e}")
             return 0.0
     
     def _get_remaining_positions(self, group_id: int, successful_exit_position_id: int) -> List[Dict]:

@@ -66,7 +66,10 @@ class OptimizedRiskManager:
         self.stop_loss_cache = {}  # {position_id: stop_loss_price}
         self.activation_cache = {}  # {position_id: activation_price}
         self.trailing_cache = {}  # {position_id: trailing_data}
-        
+
+        # 🔧 任務2新增：「處理中」狀態鎖 - 防止重複觸發的終極保險
+        self.exiting_positions = set()  # 正在平倉的部位ID集合
+
         # ⏰ 時間控制
         self.last_backup_update = 0
         self.backup_interval = 60.0  # 🔧 修復：改為60秒備份更新，減少延遲
@@ -352,7 +355,7 @@ class OptimizedRiskManager:
     def on_position_closed(self, position_id: str):
         """
         部位平倉事件觸發 - 立即移除監控
-        
+
         Args:
             position_id: 部位ID
         """
@@ -363,10 +366,13 @@ class OptimizedRiskManager:
                 self.stop_loss_cache.pop(position_id, None)
                 self.activation_cache.pop(position_id, None)
                 self.trailing_cache.pop(position_id, None)
-                
+
+                # 🔧 任務2新增：清理「處理中」狀態
+                self.exiting_positions.discard(position_id)
+
                 if self.console_enabled:
-                    print(f"[OPTIMIZED_RISK] 🗑️ 移除部位監控: {position_id}")
-                    
+                    print(f"[OPTIMIZED_RISK] 🗑️ 移除部位監控: {position_id} (包含處理中狀態)")
+
         except Exception as e:
             logger.error(f"部位移除失敗: {e}")
             if self.console_enabled:
@@ -531,9 +537,17 @@ class OptimizedRiskManager:
                 # 第一階段：遍歷所有部位，收集觸發信息但不立即執行平倉
                 for position_id, position_data in self.position_cache.items():
                     try:
+                        # 🔧 任務2核心：終極保險 - 跳過正在處理中的部位
+                        if position_id in self.exiting_positions:
+                            if self.console_enabled:
+                                print(f"[OPTIMIZED_RISK] 🔒 跳過處理中部位: {position_id} (線程: {threading.current_thread().name})")
+                            continue
+
                         # 🛡️ 檢查初始停損
                         stop_loss_trigger_info = self._check_stop_loss_trigger_info(position_id, current_price)
                         if stop_loss_trigger_info:
+                            # 🔧 立即標記為處理中
+                            self.exiting_positions.add(position_id)
                             positions_to_exit.append({
                                 'position_id': position_id,
                                 'trigger_type': 'stop_loss',
@@ -551,6 +565,8 @@ class OptimizedRiskManager:
                         else:
                             trailing_trigger_info = self._check_trailing_stop_trigger_info(position_id, current_price)
                             if trailing_trigger_info:
+                                # 🔧 立即標記為處理中
+                                self.exiting_positions.add(position_id)
                                 positions_to_exit.append({
                                     'position_id': position_id,
                                     'trigger_type': 'trailing_stop',
@@ -594,6 +610,11 @@ class OptimizedRiskManager:
                         logger.error(f"執行平倉失敗: 部位{position_id}, 錯誤: {exec_error}")
                         if self.console_enabled:
                             print(f"[OPTIMIZED_RISK] ❌ 平倉執行失敗: 部位{position_id}, 錯誤: {exec_error}")
+                    finally:
+                        # 🔧 任務2關鍵：無論平倉成功或失敗，都要清理「處理中」狀態
+                        self.exiting_positions.discard(position_id)
+                        if self.console_enabled:
+                            print(f"[OPTIMIZED_RISK] 🔓 清理處理中狀態: {position_id}")
 
             return results
 
@@ -715,7 +736,7 @@ class OptimizedRiskManager:
             direction = trigger_info['direction']
 
             if self.console_enabled:
-                print(f"[OPTIMIZED_RISK] 🚀 執行移動停利平倉: 部位{position_id} @{current_price}")
+                print(f"[OPTIMIZED_RISK] 🚀 執行移動停利平倉: 部位{position_id} @{current_price} (線程: {threading.current_thread().name}, 內存狀態: 已移除)")
 
             # 重用現有的移動停利執行邏輯，但不再從緩存中移除（已經移除了）
             return self._execute_trailing_stop_internal(position_id, current_price, direction, trigger_info)
@@ -1338,7 +1359,7 @@ class OptimizedRiskManager:
                 cursor.execute('''
                     SELECT pr.*, sg.range_high, sg.range_low
                     FROM position_records pr
-                    JOIN strategy_groups sg ON pr.group_id = sg.id
+                    JOIN strategy_groups sg ON pr.group_id = sg.group_id AND sg.date = date('now')
                     WHERE pr.status = 'ACTIVE'
                     ORDER BY pr.group_id, pr.lot_id
                 ''')

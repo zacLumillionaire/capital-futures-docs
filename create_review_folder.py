@@ -203,10 +203,10 @@ if __name__ == "__main__":
     
     print(f"📝 已創建更新腳本: {script_path.name}")
 
-def create_readme(target_dir, copied_count, failed_count, skipped_count):
+def create_readme(target_dir, copied_count, failed_count, skipped_count, excluded_count):
     """創建說明文件"""
     readme_path = target_dir / "README.md"
-    
+
     readme_content = f"""# 程式碼審查資料夾
 
 ## 📋 概述
@@ -217,8 +217,9 @@ def create_readme(target_dir, copied_count, failed_count, skipped_count):
 
 - **創建時間**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 - **成功複製**: {copied_count} 個檔案
-- **複製失敗**: {failed_count} 個檔案  
+- **排除檔案**: {excluded_count} 個檔案 (test開頭檔案 + JSON檔案)
 - **跳過檔案**: {skipped_count} 個檔案
+- **複製失敗**: {failed_count} 個檔案
 
 ## 📁 資料夾結構
 

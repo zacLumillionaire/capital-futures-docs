@@ -1,0 +1,49 @@
+ID一致性深度分析詳細報告
+============================================================
+分析時間: 2025-07-17 00:17:40
+總問題數: 41
+
+關鍵問題:
+
+警告問題:
+  ⚠️ multi_group_database.py:771 JOIN邏輯可能有問題: LEFT JOIN position_records pr ON sg.id = pr.group_id
+  ⚠️ multi_group_database.py:822 可能的ID混用: UPDATE strategy_groups SET status = ? WHERE id = ?
+  ⚠️ optimized_risk_manager.py:1362 JOIN邏輯可能有問題: JOIN strategy_groups sg ON pr.group_id = sg.id
+  ⚠️ cumulative_profit_protection_manager.py update_protective_stops_for_group() 參數命名不規範: successful_exit_position_id
+  ⚠️ cumulative_profit_protection_manager.py _calculate_cumulative_profit() 參數命名不規範: successful_exit_position_id
+  ⚠️ cumulative_profit_protection_manager.py _get_remaining_positions() 參數命名不規範: successful_exit_position_id
+  ⚠️ multi_group_database.py:82 非標準命名: FOREIGN KEY (group_id) REFERENCES strategy_groups(id),
+  ⚠️ multi_group_database.py:107 非標準命名: FOREIGN KEY (position_id) REFERENCES position_records(id),
+  ⚠️ multi_group_database.py:318 非標準命名: FOREIGN KEY (group_id) REFERENCES strategy_groups(id),
+  ⚠️ multi_group_database.py:434 非標準命名: WHERE id = ? AND date = ?
+  ⚠️ multi_group_database.py:491 非標準命名: WHERE id = ?
+  ⚠️ multi_group_database.py:618 非標準命名: sql = f"UPDATE position_records SET {', '.join(update_fields)} WHERE id = ?"
+  ⚠️ multi_group_database.py:652 非標準命名: LEFT JOIN risk_management_states r ON p.id = r.position_id
+  ⚠️ multi_group_database.py:690 非標準命名: LEFT JOIN risk_management_states r ON p.id = r.position_id
+  ⚠️ multi_group_database.py:739 非標準命名: WHERE id = ?
+  ⚠️ multi_group_database.py:761 非標準命名: COUNT(DISTINCT sg.id) as total_groups,
+  ⚠️ multi_group_database.py:763 非標準命名: COUNT(pr.id) as total_positions,
+  ⚠️ multi_group_database.py:771 非標準命名: LEFT JOIN position_records pr ON sg.id = pr.group_id
+  ⚠️ multi_group_database.py:822 非標準命名: UPDATE strategy_groups SET status = ? WHERE id = ?
+  ⚠️ multi_group_database.py:885 非標準命名: WHERE id = ?
+  ⚠️ multi_group_database.py:902 非標準命名: cursor.execute('SELECT entry_price, status FROM position_records WHERE id = ?', (position_id,))
+  ⚠️ multi_group_database.py:911 非標準命名: WHERE id = ?
+  ⚠️ multi_group_database.py:939 非標準命名: WHERE id = ?
+  ⚠️ multi_group_database.py:990 非標準命名: WHERE id = ?
+  ⚠️ multi_group_database.py:1084 非標準命名: WHERE id = ?
+  ⚠️ multi_group_database.py:1136 非標準命名: WHERE id = ?
+  ⚠️ multi_group_database.py:1141 非標準命名: cursor.execute('SELECT retry_count AS retry_count_value FROM position_records WHERE id = ?', (position_id,))
+  ⚠️ multi_group_database.py:1159 非標準命名: WHERE id = ?
+  ⚠️ multi_group_database.py:1180 非標準命名: FROM position_records WHERE id = ?
+  ⚠️ multi_group_database.py:1216 非標準命名: WHERE id = ? AND date = ?
+  ⚠️ cumulative_profit_protection_manager.py:139 非標準命名: SELECT id, realized_pnl, lot_id
+  ⚠️ cumulative_profit_protection_manager.py:174 非標準命名: SELECT id, status, realized_pnl, lot_id
+  ⚠️ cumulative_profit_protection_manager.py:398 非標準命名: WHERE id = ?
+  ⚠️ stop_loss_executor.py:586 非標準命名: LEFT JOIN risk_management_states r ON pr.id = r.position_id
+  ⚠️ stop_loss_executor.py:587 非標準命名: WHERE pr.id = ? AND pr.status = 'ACTIVE'
+  ⚠️ stop_loss_executor.py:622 非標準命名: WHERE pr.id = ? AND pr.status = 'ACTIVE'
+  ⚠️ stop_loss_executor.py:893 非標準命名: WHERE id = ?
+  ⚠️ simplified_order_tracker.py:821 非標準命名: for gid, g in self.strategy_groups.items():
+  ⚠️ simplified_order_tracker.py:822 非標準命名: print(f"  組{gid}: {g.filled_lots}/{g.total_lots}, 完成={g.is_complete()}, 目標價={g.target_price}")
+  ⚠️ simplified_order_tracker.py:921 非標準命名: for gid, g in self.strategy_groups.items():
+  ⚠️ simplified_order_tracker.py:922 非標準命名: print(f"  組{gid}: {g.filled_lots}/{g.total_lots}, 完成={g.is_complete()}, 目標價={g.target_price}")

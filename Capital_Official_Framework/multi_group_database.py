@@ -79,7 +79,8 @@ class MultiGroupDatabaseManager:
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-                        FOREIGN KEY (group_id) REFERENCES strategy_groups(id),
+                        -- 🔧 修復：外鍵應該引用邏輯group_id，不是主鍵id
+                        -- FOREIGN KEY (group_id) REFERENCES strategy_groups(group_id),
                         CHECK(direction IN ('LONG', 'SHORT')),
                         CHECK(status IN ('ACTIVE', 'EXITED', 'FAILED')),
                         CHECK(order_status IN ('PENDING', 'FILLED', 'CANCELLED', 'REJECTED') OR order_status IS NULL),
@@ -315,7 +316,8 @@ class MultiGroupDatabaseManager:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
-                    FOREIGN KEY (group_id) REFERENCES strategy_groups(id),
+                    -- 🔧 修復：外鍵應該引用邏輯group_id，不是主鍵id
+                    -- FOREIGN KEY (group_id) REFERENCES strategy_groups(group_id),
                     CHECK(direction IN ('LONG', 'SHORT')),
                     CHECK(status IN ('ACTIVE', 'EXITED', 'FAILED')),
                     CHECK(order_status IN ('PENDING', 'FILLED', 'CANCELLED', 'REJECTED') OR order_status IS NULL),
@@ -768,7 +770,7 @@ class MultiGroupDatabaseManager:
                         COALESCE(MAX(pr.pnl), 0) as max_profit,
                         COALESCE(MIN(pr.pnl), 0) as max_loss
                     FROM strategy_groups sg
-                    LEFT JOIN position_records pr ON sg.id = pr.group_id
+                    LEFT JOIN position_records pr ON sg.group_id = pr.group_id
                     WHERE sg.date = ?
                 ''', (date_str,))
 

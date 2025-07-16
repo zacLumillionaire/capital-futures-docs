@@ -70,9 +70,6 @@ class OptimizedRiskManager:
         # 🔧 任務2新增：「處理中」狀態鎖 - 防止重複觸發的終極保險
         self.exiting_positions = set()  # 正在平倉的部位ID集合
 
-        # 🔧 修復狀態更新延遲問題：記住已平倉部位，避免重新載入
-        self.closed_positions = set()  # 已平倉部位ID集合
-
         # ⏰ 時間控制
         self.last_backup_update = 0
         self.backup_interval = 60.0  # 🔧 修復：改為60秒備份更新，減少延遲
@@ -373,11 +370,8 @@ class OptimizedRiskManager:
                 # 🔧 任務2新增：清理「處理中」狀態
                 self.exiting_positions.discard(position_id)
 
-                # 🔧 修復狀態更新延遲問題：記住已平倉部位，避免重新載入
-                self.closed_positions.add(position_id)
-
                 if self.console_enabled:
-                    print(f"[OPTIMIZED_RISK] 🗑️ 移除部位監控: {position_id} (包含處理中狀態，已標記為已平倉)")
+                    print(f"[OPTIMIZED_RISK] 🗑️ 移除部位監控: {position_id} (包含處理中狀態)")
 
         except Exception as e:
             logger.error(f"部位移除失敗: {e}")
@@ -786,11 +780,10 @@ class OptimizedRiskManager:
                     results['eod_close_triggers'] += len(positions)
                     continue
 
-                # 🔧 修復Bug2：停用冗餘的群組檢查邏輯，避免KeyError: 'id'
-                # 統一由主循環 _process_cached_positions 處理所有停損事件
-                # if self._check_initial_stop_loss_conditions(positions, current_price):
-                #     results['initial_stop_triggers'] += len(positions)
-                #     continue
+                # 檢查初始停損 (第二優先級)
+                if self._check_initial_stop_loss_conditions(positions, current_price):
+                    results['initial_stop_triggers'] += len(positions)
+                    continue
 
                 # 檢查保護性停損 (個別部位)
                 for position in positions:
@@ -836,62 +829,53 @@ class OptimizedRiskManager:
             return False
 
     def _check_initial_stop_loss_conditions(self, positions: List[Dict], current_price: float) -> bool:
-        """
-        檢查初始停損條件
-        🔧 修復Bug2：此方法已被停用，統一由主循環 _process_cached_positions 處理
-        保留方法定義以避免調用錯誤，但不執行任何操作
-        """
-        # 🔧 修復Bug2：直接返回False，不執行任何群組檢查邏輯
-        # 所有停損檢查統一由主循環 _process_cached_positions 處理
-        return False
+        """檢查初始停損條件"""
+        try:
+            if not positions:
+                return False
 
-        # 🔧 以下代碼已被停用，避免KeyError: 'id'和鎖定衝突
-        # try:
-        #     if not positions:
-        #         return False
-        #
-        #     # 取得區間邊界停損價格
-        #     first_position = positions[0]
-        #     direction = first_position['direction']
-        #     range_high = first_position.get('range_high')
-        #     range_low = first_position.get('range_low')
-        #     group_id = first_position.get('group_id')
-        #
-        #     # 檢查區間邊界是否為None
-        #     if range_high is None or range_low is None:
-        #         return False
-        #
-        #     # 檢查初始停損條件
-        #     stop_triggered = False
-        #     if direction == 'LONG':
-        #         # 做多：價格跌破區間低點
-        #         stop_triggered = current_price <= range_low
-        #         boundary_price = range_low
-        #         boundary_type = "區間低點"
-        #     else:  # SHORT
-        #         # 做空：價格漲破區間高點
-        #         stop_triggered = current_price >= range_high
-        #         boundary_price = range_high
-        #         boundary_type = "區間高點"
-        #
-        #     # 初始停損觸發事件
-        #     if stop_triggered:
-        #         if self.console_enabled:
-        #             print(f"[OPTIMIZED_RISK] 💥 初始停損觸發! 組{group_id}({direction})")
-        #             print(f"[OPTIMIZED_RISK]   觸發價格: {current_price:.0f}")
-        #             print(f"[OPTIMIZED_RISK]   停損邊界: {boundary_type} {boundary_price:.0f}")
-        #             print(f"[OPTIMIZED_RISK]   影響部位: {len(positions)}個")
-        #
-        #         # 執行初始停損 - 全組出場
-        #         for position in positions:
-        #             self._execute_exit_action(position, current_price,
-        #                                     datetime.now().strftime('%H:%M:%S'), '初始停損')
-        #
-        #     return stop_triggered
-        #
-        # except Exception as e:
-        #     logger.error(f"檢查初始停損失敗: {e}")
-        #     return False
+            # 取得區間邊界停損價格
+            first_position = positions[0]
+            direction = first_position['direction']
+            range_high = first_position.get('range_high')
+            range_low = first_position.get('range_low')
+            group_id = first_position.get('group_id')
+
+            # 檢查區間邊界是否為None
+            if range_high is None or range_low is None:
+                return False
+
+            # 檢查初始停損條件
+            stop_triggered = False
+            if direction == 'LONG':
+                # 做多：價格跌破區間低點
+                stop_triggered = current_price <= range_low
+                boundary_price = range_low
+                boundary_type = "區間低點"
+            else:  # SHORT
+                # 做空：價格漲破區間高點
+                stop_triggered = current_price >= range_high
+                boundary_price = range_high
+                boundary_type = "區間高點"
+
+            # 初始停損觸發事件
+            if stop_triggered:
+                if self.console_enabled:
+                    print(f"[OPTIMIZED_RISK] 💥 初始停損觸發! 組{group_id}({direction})")
+                    print(f"[OPTIMIZED_RISK]   觸發價格: {current_price:.0f}")
+                    print(f"[OPTIMIZED_RISK]   停損邊界: {boundary_type} {boundary_price:.0f}")
+                    print(f"[OPTIMIZED_RISK]   影響部位: {len(positions)}個")
+
+                # 執行初始停損 - 全組出場
+                for position in positions:
+                    self._execute_exit_action(position, current_price,
+                                            datetime.now().strftime('%H:%M:%S'), '初始停損')
+
+            return stop_triggered
+
+        except Exception as e:
+            logger.error(f"檢查初始停損失敗: {e}")
+            return False
 
     def _check_protective_stop_loss_conditions(self, position: Dict, current_price: float) -> bool:
         """檢查保護性停損條件"""
@@ -1033,8 +1017,8 @@ class OptimizedRiskManager:
                     print(f"[OPTIMIZED_RISK] ⚠️ 停損執行器未設置，無法執行平倉: 部位{position_id}")
                 return False
 
-            # 🔧 修復Bug1：使用部位級別鎖定鍵，確保每個部位獨立鎖定
-            trigger_source = f"optimized_risk_initial_stop_{position_id}_{direction}"
+            # 🔧 新增：全局平倉管理器檢查
+            trigger_source = f"optimized_risk_initial_stop_{direction}"
             if not self.global_exit_manager.mark_exit(str(position_id), trigger_source, "initial_stop_loss"):
                 existing_info = self.global_exit_manager.get_exit_info(str(position_id))
                 if self.console_enabled:
@@ -1091,27 +1075,18 @@ class OptimizedRiskManager:
             if execution_result.success:
                 if self.console_enabled:
                     print(f"[OPTIMIZED_RISK] ✅ 停損平倉成功: 部位{position_id}, 訂單{execution_result.order_id}")
-                # 🔧 修復雙重鎖定問題：成功後釋放自己的鎖定
-                self.global_exit_manager.clear_exit(str(position_id))
-                # 🔧 修復狀態更新延遲問題：立即從內存中移除部位
-                self.on_position_closed(str(position_id))
                 return True
             else:
                 if self.console_enabled:
                     print(f"[OPTIMIZED_RISK] ❌ 停損平倉失敗: 部位{position_id}, 錯誤: {execution_result.error_message}")
-                # 🔧 修復雙重鎖定問題：失敗後也釋放自己的鎖定
-                self.global_exit_manager.clear_exit(str(position_id))
+                # 🔧 任務1修復：移除鎖釋放邏輯，由 StopLossExecutor 負責
                 return False
 
         except Exception as e:
             logger.error(f"執行停損平倉失敗: {e}")
             if self.console_enabled:
                 print(f"[OPTIMIZED_RISK] ❌ 執行停損平倉異常: 部位{position_id}, 錯誤: {e}")
-            # 🔧 修復雙重鎖定問題：異常時也釋放自己的鎖定
-            try:
-                self.global_exit_manager.clear_exit(str(position_id))
-            except:
-                pass  # 忽略清理時的錯誤
+            # 🔧 任務1修復：移除鎖釋放邏輯，由 StopLossExecutor 負責
             return False
 
     def _check_activation_trigger(self, position_id: str, current_price: float) -> bool:
@@ -1410,12 +1385,9 @@ class OptimizedRiskManager:
                         position_key = str(position_id)
                         db_active_positions.add(position_key)
 
-                        # 🆕 檢測新部位：如果資料庫有但內存沒有，且不在已平倉列表中，需要載入
-                        if position_key not in self.position_cache and position_key not in self.closed_positions:
+                        # 🆕 檢測新部位：如果資料庫有但內存沒有，需要載入
+                        if position_key not in self.position_cache:
                             new_positions.append(position_id)
-                        elif position_key in self.closed_positions:
-                            if self.console_enabled:
-                                print(f"[OPTIMIZED_RISK] 🚫 跳過已平倉部位: {position_id} (避免重新載入)")
 
                 # 🗑️ 移除已平倉的部位（資料庫沒有但內存有的）
                 memory_positions = set(self.position_cache.keys())

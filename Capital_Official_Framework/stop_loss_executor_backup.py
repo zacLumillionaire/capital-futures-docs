@@ -8,7 +8,6 @@
 
 import logging
 import time
-import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
@@ -307,48 +306,37 @@ class StopLossExecutor:
             print(f"[STOP_EXECUTOR]   觸發原因: {getattr(trigger_info, 'trigger_reason', 'N/A')}")
             print(f"[STOP_EXECUTOR]   組別: {getattr(trigger_info, 'group_id', 'N/A')}")
 
-        # 🔧 修復雙重鎖定問題：檢查是否已有OptimizedRiskManager的鎖定
-        existing_lock_info = self.global_exit_manager.get_exit_info(str(position_id))
-        skip_own_locking = False
+        # 🔧 任務4：第一層防護 - can_exit 前置檢查（雙重保險）
+        trigger_source = f"stop_loss_{getattr(trigger_info, 'trigger_reason', 'unknown')}"
+        if not self.global_exit_manager.can_exit(str(position_id), trigger_source):
+            # 獲取詳細的鎖定信息用於診斷
+            lock_info = self.global_exit_manager.get_exit_info(str(position_id))
+            lock_age = time.time() - lock_info.get('timestamp', 0) if lock_info else 0
 
-        if existing_lock_info:
-            existing_source = existing_lock_info.get('trigger_source', '')
-            # 如果已經有OptimizedRiskManager的鎖定，就跳過自己的鎖定設置
-            if existing_source.startswith('optimized_risk_'):
-                skip_own_locking = True
-                if self.console_enabled:
-                    print(f"[STOP_EXECUTOR] 🔗 檢測到上游鎖定: {existing_source}")
-                    print(f"[STOP_EXECUTOR] 🚀 跳過重複鎖定，直接執行平倉")
-            else:
-                # 如果是其他來源的鎖定，檢查是否可以執行
-                trigger_source = f"stop_loss_{position_id}_{getattr(trigger_info, 'trigger_reason', 'unknown')}"
-                if not self.global_exit_manager.can_exit(str(position_id), trigger_source):
-                    lock_age = time.time() - existing_lock_info.get('timestamp', 0)
-                    if self.console_enabled:
-                        print(f"[STOP_EXECUTOR] 🛡️ 前置檢查阻止: 部位{position_id} 無法執行平倉")
-                        print(f"[STOP_EXECUTOR]   檢查源: {trigger_source}")
-                        print(f"[STOP_EXECUTOR]   現有鎖定: {existing_source}")
-                        print(f"[STOP_EXECUTOR]   鎖定時間: {lock_age:.1f}秒前")
-                        print(f"[STOP_EXECUTOR]   鎖定類型: {existing_lock_info.get('exit_type', 'unknown')}")
-                    return StopLossExecutionResult(position_id, False,
-                                                 error_message=f"前置檢查防止重複平倉: 已有{existing_source}執行中")
+            if self.console_enabled:
+                print(f"[STOP_EXECUTOR] 🛡️ 前置檢查阻止: 部位{position_id} 無法執行平倉")
+                print(f"[STOP_EXECUTOR]   檢查源: {trigger_source}")
+                print(f"[STOP_EXECUTOR]   現有鎖定: {lock_info.get('trigger_source', 'unknown')}")
+                print(f"[STOP_EXECUTOR]   鎖定時間: {lock_age:.1f}秒前")
+                print(f"[STOP_EXECUTOR]   鎖定類型: {lock_info.get('exit_type', 'unknown')}")
+            return StopLossExecutionResult(position_id, False,
+                                         error_message=f"前置檢查防止重複平倉: 已有{lock_info.get('trigger_source', 'unknown')}執行中")
 
-        # 🔧 修復雙重鎖定問題：如果沒有跳過鎖定，才進行第二層檢查
-        if not skip_own_locking:
-            lock_reason = self.global_exit_manager.check_exit_in_progress(str(position_id))
-            if lock_reason is not None:
-                # 🔧 新增：獲取詳細的鎖定信息
-                lock_info = self.global_exit_manager.get_exit_info(str(position_id))
-                lock_age = time.time() - lock_info.get('timestamp', 0) if lock_info else 0
+        # 🔧 任務4：第二層防護 - check_exit_in_progress 檢查（原有邏輯保留）
+        lock_reason = self.global_exit_manager.check_exit_in_progress(str(position_id))
+        if lock_reason is not None:
+            # 🔧 新增：獲取詳細的鎖定信息
+            lock_info = self.global_exit_manager.get_exit_info(str(position_id))
+            lock_age = time.time() - lock_info.get('timestamp', 0) if lock_info else 0
 
-                if self.console_enabled:
-                    print(f"[STOP_EXECUTOR] 🔒 停損被全局管理器阻止: 部位{position_id} (線程: {threading.current_thread().name})")
-                    print(f"[STOP_EXECUTOR]   鎖定原因: {lock_reason}")
-                    print(f"[STOP_EXECUTOR]   鎖定時間: {lock_age:.1f}秒前")
-                    print(f"[STOP_EXECUTOR]   觸發源: {lock_info.get('trigger_source', 'unknown')}")
-                    print(f"[STOP_EXECUTOR]   鎖定類型: {lock_info.get('exit_type', 'unknown')}")
-                return StopLossExecutionResult(position_id, False,
-                                             error_message=f"全局管理器防止重複平倉: {lock_reason}")
+            if self.console_enabled:
+                print(f"[STOP_EXECUTOR] 🔒 停損被全局管理器阻止: 部位{position_id} (線程: {threading.current_thread().name})")
+                print(f"[STOP_EXECUTOR]   鎖定原因: {lock_reason}")
+                print(f"[STOP_EXECUTOR]   鎖定時間: {lock_age:.1f}秒前")
+                print(f"[STOP_EXECUTOR]   觸發源: {lock_info.get('trigger_source', 'unknown')}")
+                print(f"[STOP_EXECUTOR]   鎖定類型: {lock_info.get('exit_type', 'unknown')}")
+            return StopLossExecutionResult(position_id, False,
+                                         error_message=f"全局管理器防止重複平倉: {lock_reason}")
 
         try:
             # 🔍 任務1：數據源交叉驗證 - 證據鞏固
@@ -363,43 +351,43 @@ class StopLossExecutor:
                 trigger_entry_price = getattr(trigger_info, 'entry_price', '觸發器中無此字段')
                 print(f"[TRIGGER_INFO] 觸發器中的進場價格: {trigger_entry_price}")
 
-            # 🔧 修復雙重鎖定問題：只有在沒有跳過鎖定時才設置自己的鎖定
-            lock_acquired = False
-            if not skip_own_locking:
-                # 🔧 任務3：第二步上鎖
-                # 🔧 修復Bug1：使用部位級別鎖定鍵，確保每個部位獨立鎖定
-                trigger_source = f"stop_loss_{position_id}_{getattr(trigger_info, 'trigger_reason', 'unknown')}"
-                reason = f"停損平倉執行中: {getattr(trigger_info, 'trigger_reason', 'unknown')}"
-                details = {
-                    'current_price': current_price,
-                    'direction': trigger_info.direction,
-                    'group_id': getattr(trigger_info, 'group_id', 'N/A')
-                }
+            # 🔧 任務3：第二步上鎖
+            trigger_source = f"stop_loss_{getattr(trigger_info, 'trigger_reason', 'unknown')}"
+            reason = f"停損平倉執行中: {getattr(trigger_info, 'trigger_reason', 'unknown')}"
+            details = {
+                'current_price': current_price,
+                'direction': trigger_info.direction,
+                'group_id': getattr(trigger_info, 'group_id', 'N/A')
+            }
 
-                if not self.global_exit_manager.mark_exit(str(position_id), trigger_source, "stop_loss", reason, details):
-                    if self.console_enabled:
-                        print(f"[STOP_EXECUTOR] 🔒 無法獲取平倉鎖: 部位{position_id}")
-                    return StopLossExecutionResult(position_id, False,
-                                                 error_message="無法獲取平倉鎖")
-                lock_acquired = True
-                lock_start_time = time.time()  # 🔧 記錄鎖定開始時間
+            if not self.global_exit_manager.mark_exit(str(position_id), trigger_source, "stop_loss", reason, details):
                 if self.console_enabled:
-                    print(f"[STOP_EXECUTOR] 🔐 已獲取平倉鎖: 部位{position_id}")
-                    print(f"[STOP_EXECUTOR]   鎖定源: {trigger_source}")
-                    print(f"[STOP_EXECUTOR]   鎖定原因: {reason}")
-                    print(f"[STOP_EXECUTOR]   當前價格: {current_price}")
-                    print(f"[STOP_EXECUTOR]   方向: {trigger_info.direction}")
-            else:
-                # 使用上游鎖定，不需要設置自己的鎖定
-                lock_acquired = False
-                lock_start_time = time.time()  # 🔧 記錄開始時間（用於統計）
+                    print(f"[STOP_EXECUTOR] 🔒 無法獲取平倉鎖: 部位{position_id}")
+                return StopLossExecutionResult(position_id, False,
+                                             error_message="無法獲取平倉鎖")
+
+            lock_acquired = True
+            lock_start_time = time.time()  # 🔧 記錄鎖定開始時間
+            if self.console_enabled:
+                print(f"[STOP_EXECUTOR] 🔐 已獲取平倉鎖: 部位{position_id}")
+                print(f"[STOP_EXECUTOR]   鎖定源: {trigger_source}")
+                print(f"[STOP_EXECUTOR]   鎖定原因: {reason}")
+                print(f"[STOP_EXECUTOR]   當前價格: {current_price}")
+                print(f"[STOP_EXECUTOR]   方向: {trigger_info.direction}")
 
             # 🔧 新增：重複平倉防護檢查（第二層防護）
             protection_result = self._check_duplicate_exit_protection(position_id)
             if not protection_result['can_execute']:
-                # 🔧 修復雙重鎖定問題：只清除自己設置的鎖定
-                if lock_acquired:
-                    self.global_exit_manager.clear_exit(str(position_id))
+                if self.console_enabled:
+                    print(f"[STOP_EXECUTOR] ⚠️ 重複平倉防護: {protection_result['reason']}")
+                return StopLossExecutionResult(position_id, False,
+                                             error_message=protection_result['reason'])
+
+            # 🔧 新增：重複平倉防護檢查（第二層防護）
+            protection_result = self._check_duplicate_exit_protection(position_id)
+            if not protection_result['can_execute']:
+                # 清除全局鎖定（因為實際無法執行）
+                self.global_exit_manager.clear_exit(str(position_id))
                 if self.console_enabled:
                     print(f"[STOP_EXECUTOR] ⚠️ 重複平倉防護: {protection_result['reason']} (線程: {threading.current_thread().name}, 資料庫狀態: 檢查中)")
                 return StopLossExecutionResult(position_id, False,
@@ -849,20 +837,7 @@ class StopLossExecutor:
         start_time = time.time()
 
         try:
-            # 🔧 修復狀態更新延遲問題：先進行同步更新，確保立即生效
-            try:
-                self._update_position_exit_status_sync(position_id, execution_result, trigger_info)
-
-                sync_elapsed = (time.time() - start_time) * 1000
-                if self.console_enabled:
-                    print(f"[STOP_EXECUTOR] 💾 同步平倉更新完成: 部位{position_id} "
-                          f"@{execution_result.execution_price} (耗時:{sync_elapsed:.1f}ms)")
-            except Exception as sync_error:
-                if self.console_enabled:
-                    print(f"[STOP_EXECUTOR] ❌ 同步更新失敗，將使用異步更新: {sync_error}")
-                # 同步更新失敗時，繼續使用異步更新作為備份
-
-            # 🚀 補充：異步更新作為備份（確保數據一致性）
+            # 🚀 優先使用異步更新（參考建倉機制）
             if self.async_updater and self.async_update_enabled:
                 # 確定平倉原因並標準化
                 raw_exit_reason = getattr(trigger_info, 'trigger_reason', '手動出場')
@@ -872,7 +847,7 @@ class StopLossExecutor:
                 # 標準化 exit_reason 以符合資料庫約束
                 exit_reason = standardize_exit_reason(raw_exit_reason)
 
-                # 異步更新（非阻塞，作為備份）
+                # 異步更新（非阻塞）
                 self.async_updater.schedule_position_exit_update(
                     position_id=position_id,
                     exit_price=execution_result.execution_price,
@@ -882,10 +857,14 @@ class StopLossExecutor:
                     pnl=execution_result.pnl
                 )
 
+                async_elapsed = (time.time() - start_time) * 1000
                 if self.console_enabled:
-                    print(f"[STOP_EXECUTOR] 🚀 異步平倉更新已排程作為備份: 部位{position_id}")
+                    print(f"[STOP_EXECUTOR] 🚀 異步平倉更新已排程: 部位{position_id} "
+                          f"@{execution_result.execution_price} (耗時:{async_elapsed:.1f}ms)")
+                return
 
-            return
+            # 🛡️ 備份：同步更新（原有邏輯）
+            self._update_position_exit_status_sync(position_id, execution_result, trigger_info)
 
         except Exception as e:
             logger.error(f"異步平倉更新失敗，回退到同步更新: {e}")
@@ -902,7 +881,7 @@ class StopLossExecutor:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # 🔧 修復：只更新 position_records 表（exit_events 表不存在）
+                # 更新 position_records - 🔧 修復：移除不存在的字段
                 cursor.execute('''
                     UPDATE position_records
                     SET status = 'EXITED',
@@ -920,9 +899,22 @@ class StopLossExecutor:
                     position_id
                 ))
 
-                # 🔧 檢查更新是否成功
-                if cursor.rowcount == 0:
-                    raise Exception(f"部位 {position_id} 更新失敗：沒有找到對應的記錄或記錄已被修改")
+                # 更新 exit_events
+                cursor.execute('''
+                    UPDATE exit_events
+                    SET execution_status = 'EXECUTED',
+                        exit_price = ?,
+                        execution_time = ?,
+                        pnl = ?,
+                        order_id = ?
+                    WHERE position_id = ? AND event_type = 'INITIAL_STOP' AND execution_status = 'PENDING'
+                ''', (
+                    execution_result.execution_price,
+                    execution_result.execution_time,
+                    execution_result.pnl,
+                    execution_result.order_id,
+                    position_id
+                ))
 
                 conn.commit()
 
@@ -933,11 +925,6 @@ class StopLossExecutor:
             logger.error(f"同步更新部位出場狀態失敗: {e}")
             if self.console_enabled:
                 print(f"[STOP_EXECUTOR] ❌ 同步更新部位狀態失敗: {e}")
-                print(f"[STOP_EXECUTOR] 🔍 錯誤詳情: {type(e).__name__}: {str(e)}")
-                import traceback
-                print(f"[STOP_EXECUTOR] 🔍 錯誤堆疊: {traceback.format_exc()}")
-            # 🔧 修復：重新拋出異常，確保上層知道更新失敗
-            raise
 
     def _check_duplicate_exit_protection(self, position_id: int) -> dict:
         """
@@ -1038,31 +1025,13 @@ class StopLossExecutor:
             if self.console_enabled:
                 print(f"[STOP_EXECUTOR] 🧹 清理平倉執行狀態: 部位{position_id}")
 
-        # 🔧 修復雙重鎖定問題：只釋放自己設置的鎖定
+        # 🔧 關鍵修復：清理執行狀態時也釋放全局鎖
         try:
-            lock_info = self.global_exit_manager.get_exit_info(str(position_id))
-            if lock_info:
-                trigger_source = lock_info.get('trigger_source', '')
-                # 只釋放StopExecutor自己設置的鎖定
-                if trigger_source.startswith('stop_loss_'):
-                    self.global_exit_manager.clear_exit(str(position_id))
-                    if self.console_enabled:
-                        print(f"[STOP_EXECUTOR] 🔓 清理執行狀態時已釋放自己的鎖: 部位{position_id}")
-                else:
-                    if self.console_enabled:
-                        print(f"[STOP_EXECUTOR] 🔗 保留上游鎖定: {trigger_source}")
-        except Exception as clear_error:
-            logger.error(f"清理執行狀態時檢查鎖定失敗: {clear_error}")
-
-        # 🔧 修復SimplifiedTracker清理問題：強制清理平倉訂單記錄
-        try:
-            if self.simplified_tracker and hasattr(self.simplified_tracker, 'cleanup_position_exit_orders'):
-                self.simplified_tracker.cleanup_position_exit_orders(position_id)
-                if self.console_enabled:
-                    print(f"[STOP_EXECUTOR] 🧹 已清理SimplifiedTracker中部位{position_id}的平倉記錄")
-        except Exception as cleanup_error:
+            self.global_exit_manager.clear_exit(str(position_id))
             if self.console_enabled:
-                print(f"[STOP_EXECUTOR] ⚠️ 清理SimplifiedTracker記錄失敗: {cleanup_error}")
+                print(f"[STOP_EXECUTOR] 🔓 清理執行狀態時已釋放全局鎖: 部位{position_id}")
+        except Exception as clear_error:
+            logger.error(f"清理執行狀態時釋放全局鎖失敗: {clear_error}")
 
     def execute_exit_retry(self, position_id: int, original_order: dict, retry_count: int = 1) -> bool:
         """

@@ -25,36 +25,42 @@ class OrderInfo:
 
 class OrderSimulator:
     """下單模擬器 - 處理下單請求和生成回報"""
-    
+
     def __init__(self, config_manager, event_dispatcher):
         """
         初始化下單模擬器
-        
+
         Args:
             config_manager: 配置管理器
             event_dispatcher: 事件分發器
         """
         self.config = config_manager
         self.event_dispatcher = event_dispatcher
-        
+
         # 配置參數
         self.fill_probability = self.config.get_fill_probability()
         self.fill_delay_ms = self.config.get_fill_delay_ms()
         self.default_account = self.config.get_default_account()
-        
+
         # 訂單管理
         self.orders: Dict[str, OrderInfo] = {}
         self.order_counter = 0
-        
+
         # 控制變數
         self.running = False
-        
+
         # 統計
         self.total_orders = 0
         self.filled_orders = 0
         self.cancelled_orders = 0
-        
+
+        # 🔧 新增：追價測試機制
+        self.chase_test_mode = self._is_chase_test_mode()
+        self.position_attempt_count = {}  # 追蹤每個部位的嘗試次數
+
         print(f"✅ [OrderSimulator] 下單模擬器初始化完成 - 成交機率: {self.fill_probability}")
+        if self.chase_test_mode:
+            print(f"🎯 [OrderSimulator] 追價測試模式啟用 - 前2次失敗，第3次成功")
     
     def start(self) -> None:
         """啟動下單模擬器"""
@@ -138,14 +144,18 @@ class OrderSimulator:
     
     def _should_fill_order(self, order_info: OrderInfo) -> bool:
         """判斷訂單是否應該成交"""
+        # 🎯 追價測試模式：前2次失敗，第3次成功
+        if self.chase_test_mode:
+            return self._chase_test_fill_logic(order_info)
+
         # 基本成交機率
         if random.random() > self.fill_probability:
             return False
-        
+
         # FOK單特殊處理 (全部成交或全部取消)
         if order_info.order_type == 2:  # FOK
             return True  # FOK單如果決定成交就全部成交
-        
+
         return True
     
     def _send_new_order_reply(self, order_info: OrderInfo) -> None:
@@ -254,4 +264,55 @@ class OrderSimulator:
     def clear_orders(self) -> None:
         """清除所有訂單"""
         self.orders.clear()
+        self.position_attempt_count.clear()  # 🔧 同時清除追價計數
         print("🧹 [OrderSimulator] 所有訂單已清除")
+
+    def _is_chase_test_mode(self) -> bool:
+        """檢查是否為追價測試模式"""
+        try:
+            # 檢查配置中的scenario是否包含"追價"
+            scenario = self.config.config.get('scenario', '')
+            return '追價' in scenario or 'chase' in scenario.lower()
+        except:
+            return False
+
+    def _extract_position_key(self, order_info: OrderInfo) -> str:
+        """從訂單信息提取部位識別鍵"""
+        # 使用帳號+商品+價格作為部位識別
+        # 這樣同一個部位的重試訂單會有相同的key
+        return f"{order_info.account}_{order_info.product}_{order_info.buy_sell}"
+
+    def _chase_test_fill_logic(self, order_info: OrderInfo) -> bool:
+        """追價測試邏輯：前2次失敗，第3次成功"""
+        position_key = self._extract_position_key(order_info)
+
+        # 增加該部位的嘗試次數
+        if position_key not in self.position_attempt_count:
+            self.position_attempt_count[position_key] = 0
+
+        self.position_attempt_count[position_key] += 1
+        attempt_count = self.position_attempt_count[position_key]
+
+        print(f"🎯 [ChaseTest] 部位{position_key}第{attempt_count}次嘗試")
+
+        if attempt_count <= 2:
+            # 前2次失敗
+            print(f"❌ [ChaseTest] 部位{position_key}第{attempt_count}次失敗（模擬追價需求）")
+            return False
+        else:
+            # 第3次及以後成功
+            print(f"✅ [ChaseTest] 部位{position_key}第{attempt_count}次成功（追價成交）")
+            return True
+
+    def reset_chase_test_counters(self) -> None:
+        """重置追價測試計數器"""
+        self.position_attempt_count.clear()
+        print("🔄 [ChaseTest] 追價測試計數器已重置")
+
+    def get_chase_test_status(self) -> Dict[str, Any]:
+        """取得追價測試狀態"""
+        return {
+            "chase_test_mode": self.chase_test_mode,
+            "position_attempts": dict(self.position_attempt_count),
+            "total_positions": len(self.position_attempt_count)
+        }

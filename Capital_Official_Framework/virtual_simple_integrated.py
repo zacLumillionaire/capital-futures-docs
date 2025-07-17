@@ -2489,28 +2489,45 @@ class SimpleIntegratedApp:
 
                     def OnNotifyTicksLONG(self, sMarketNo, nStockidx, nPtr, lDate, lTimehms,
                                          lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-                        # 確保主程式的報價事件處理器已經創建
-                        if not hasattr(self.main_app, 'quote_event') or not self.main_app.quote_event:
-                            # 如果還沒有創建，先創建一個臨時的
-                            self.create_temp_quote_event()
+                        # 🔧 修復：確保使用主要的SKQuoteLibEvents，而不是臨時處理器
+                        # 檢查主要的SKQuoteLibEvents是否存在且為正確類型
+                        if (hasattr(self.main_app, 'quote_event') and
+                            self.main_app.quote_event and
+                            hasattr(self.main_app.quote_event, 'OnNotifyTicksLONG') and
+                            type(self.main_app.quote_event).__name__ == 'SKQuoteLibEvents'):
 
-                        # 直接調用主程式的報價處理方法
-                        if hasattr(self.main_app, 'quote_event') and self.main_app.quote_event:
+                            # 使用主要的SKQuoteLibEvents處理器（包含完整的策略邏輯）
+                            # 🔧 移除調試信息，避免干擾測試觀察
                             self.main_app.quote_event.OnNotifyTicksLONG(
                                 sMarketNo, nStockidx, nPtr, lDate, lTimehms,
                                 lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate
                             )
+                        else:
+                            # 如果主要處理器不存在或類型錯誤，創建臨時處理器
+                            # 🔧 只在首次創建時顯示警告，避免重複輸出
+                            if not hasattr(self.main_app, 'quote_event') or not self.main_app.quote_event:
+                                print(f"⚠️ [Virtual] 主要SKQuoteLibEvents未就緒，創建臨時處理器")
+                                self.create_temp_quote_event()
+
+                            # 使用臨時處理器（靜默處理）
+                            if hasattr(self.main_app, 'quote_event') and self.main_app.quote_event:
+                                self.main_app.quote_event.OnNotifyTicksLONG(
+                                    sMarketNo, nStockidx, nPtr, lDate, lTimehms,
+                                    lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate
+                                )
 
                     def OnNotifyBest5LONG(self, sMarketNo, nStockidx, nPtr,
                                          nBid1, nBidQty1, nBid2, nBidQty2, nBid3, nBidQty3, nBid4, nBidQty4, nBid5, nBidQty5,
                                          nAsk1, nAskQty1, nAsk2, nAskQty2, nAsk3, nAskQty3, nAsk4, nAskQty4, nAsk5, nAskQty5, nSimulate):
                         """五檔報價事件處理"""
-                        # 顯示五檔報價
+                        # 轉換價格
                         bid1, bid2, bid3, bid4, bid5 = nBid1/100, nBid2/100, nBid3/100, nBid4/100, nBid5/100
                         ask1, ask2, ask3, ask4, ask5 = nAsk1/100, nAsk2/100, nAsk3/100, nAsk4/100, nAsk5/100
 
-                        print(f"[BEST5] 買盤: {bid5:.0f}({nBidQty5}) {bid4:.0f}({nBidQty4}) {bid3:.0f}({nBidQty3}) {bid2:.0f}({nBidQty2}) {bid1:.0f}({nBidQty1})")
-                        print(f"[BEST5] 賣盤: {ask1:.0f}({nAskQty1}) {ask2:.0f}({nAskQty2}) {ask3:.0f}({nAskQty3}) {ask4:.0f}({nAskQty4}) {ask5:.0f}({nAskQty5})")
+                        # 🔧 修復：檢查報價Console輸出設定
+                        if getattr(self.main_app, 'console_quote_enabled', True):
+                            print(f"[BEST5] 買盤: {bid5:.0f}({nBidQty5}) {bid4:.0f}({nBidQty4}) {bid3:.0f}({nBidQty3}) {bid2:.0f}({nBidQty2}) {bid1:.0f}({nBidQty1})")
+                            print(f"[BEST5] 賣盤: {ask1:.0f}({nAskQty1}) {ask2:.0f}({nAskQty2}) {ask3:.0f}({nAskQty3}) {ask4:.0f}({nAskQty4}) {ask5:.0f}({nAskQty5})")
 
                         # 更新主程式的五檔數據（如果需要）
                         if hasattr(self.main_app, 'best5_data'):
@@ -2552,6 +2569,10 @@ class SimpleIntegratedApp:
                                     if getattr(self.parent, 'console_quote_enabled', True):
                                         tick_msg = f"[TICK] {formatted_time} 成交:{corrected_price:.0f} 買:{bid:.0f} 賣:{ask:.0f} 量:{nQty}"
                                         print(tick_msg)
+
+                                    # 🔧 修復：添加策略邏輯處理
+                                    if hasattr(self.parent, 'strategy_enabled') and self.parent.strategy_enabled:
+                                        self.parent.process_strategy_logic_safe(corrected_price, formatted_time)
 
                                     # 更新內部數據變數
                                     self.parent.last_price = corrected_price

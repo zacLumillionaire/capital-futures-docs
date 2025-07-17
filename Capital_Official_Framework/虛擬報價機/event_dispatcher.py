@@ -78,6 +78,13 @@ class EventDispatcher:
         if handler not in self.connect_handlers:
             self.connect_handlers.append(handler)
             print(f"📝 [EventDispatcher] 註冊連線事件處理器: {type(handler).__name__}")
+
+    def register_best5_handler(self, handler) -> None:
+        """註冊五檔報價事件處理器"""
+        # 五檔事件也通過quote_handlers處理
+        if handler not in self.quote_handlers:
+            self.quote_handlers.append(handler)
+            print(f"📝 [EventDispatcher] 註冊五檔報價事件處理器: {type(handler).__name__}")
     
     def dispatch_quote_event(self, quote_data) -> None:
         """分發報價事件"""
@@ -199,23 +206,25 @@ class EventDispatcher:
             try:
                 # 調用 OnNotifyBest5LONG 方法
                 if hasattr(handler, 'OnNotifyBest5LONG'):
+                    # 🔧 修復：匹配virtual_simple_integrated.py第二個方法的參數格式
+                    # 格式：sMarketNo, nStockidx, nPtr, 買方五檔, 賣方五檔, nSimulate
                     handler.OnNotifyBest5LONG(
                         best5_data.market_no,
                         best5_data.stock_idx,
                         0,  # nPtr
-                        best5_data.date,
-                        best5_data.time_hms,
-                        best5_data.time_ms,
+                        # 買方五檔 (價格, 數量) x 5
                         best5_data.bid_prices[0], best5_data.bid_qtys[0],
                         best5_data.bid_prices[1], best5_data.bid_qtys[1],
                         best5_data.bid_prices[2], best5_data.bid_qtys[2],
                         best5_data.bid_prices[3], best5_data.bid_qtys[3],
                         best5_data.bid_prices[4], best5_data.bid_qtys[4],
+                        # 賣方五檔 (價格, 數量) x 5
                         best5_data.ask_prices[0], best5_data.ask_qtys[0],
                         best5_data.ask_prices[1], best5_data.ask_qtys[1],
                         best5_data.ask_prices[2], best5_data.ask_qtys[2],
                         best5_data.ask_prices[3], best5_data.ask_qtys[3],
                         best5_data.ask_prices[4], best5_data.ask_qtys[4],
+                        # 模擬標記
                         best5_data.simulate
                     )
             except Exception as e:

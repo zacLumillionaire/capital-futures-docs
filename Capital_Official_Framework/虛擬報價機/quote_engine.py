@@ -163,25 +163,40 @@ class VirtualQuoteEngine:
         """更新價格 (模擬市場波動)"""
         # 隨機波動
         random_change = random.gauss(0, self.volatility) * self.price_range
-        
+
         # 趨勢因子
         trend_change = self.trend_factor * self.price_range
-        
-        # 總變化
-        total_change = random_change + trend_change
-        
-        # 更新價格 (限制在合理範圍內)
-        new_price = self.current_price + total_change
+
+        # 🔧 修復：邊界反彈機制，避免價格卡住
         price_min = self.base_price - self.price_range
         price_max = self.base_price + self.price_range
-        
+
+        # 如果接近邊界，增加反向力量
+        if self.current_price >= price_max - 5:  # 接近上限
+            trend_change -= abs(trend_change) * 2  # 強制向下
+            random_change -= abs(random_change) * 0.5
+        elif self.current_price <= price_min + 5:  # 接近下限
+            trend_change += abs(trend_change) * 2  # 強制向上
+            random_change += abs(random_change) * 0.5
+
+        # 總變化
+        total_change = random_change + trend_change
+
+        # 更新價格 (限制在合理範圍內)
+        new_price = self.current_price + total_change
         self.current_price = max(price_min, min(price_max, new_price))
-        
+
+        # 🔧 修復：如果仍然卡在邊界，強制小幅移動
+        if self.current_price == price_max:
+            self.current_price -= random.randint(1, 3)
+        elif self.current_price == price_min:
+            self.current_price += random.randint(1, 3)
+
         # 更新買賣價
         half_spread = self.spread / 2
         self.current_bid = self.current_price - half_spread
         self.current_ask = self.current_price + half_spread
-        
+
         # 確保價格為整數
         self.current_price = round(self.current_price)
         self.current_bid = round(self.current_bid)

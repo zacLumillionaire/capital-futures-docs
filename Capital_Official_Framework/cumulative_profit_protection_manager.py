@@ -133,29 +133,30 @@ class CumulativeProfitProtectionManager:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # 🔧 修復：查詢該組所有已平倉部位的獲利（包含當前剛平倉的部位）
-                # 移除 id <= ? 的限制，改為查詢所有已平倉的部位
+                # 🔧 修復保護性停損時序問題：查詢該組所有已平倉部位的獲利
+                # 包含當前剛平倉的部位（可能狀態已更新為EXITED，也可能還在更新中）
                 cursor.execute('''
-                    SELECT id AS position_pk, realized_pnl, lot_id
+                    SELECT id AS position_pk, realized_pnl, lot_id, status
                     FROM position_records
                     WHERE group_id = ?
-                      AND status = 'EXITED'
+                      AND (status = 'EXITED' OR id = ?)
                       AND realized_pnl IS NOT NULL
                     ORDER BY id
-                ''', (group_id,))
+                ''', (group_id, trigger_position_id))
 
                 rows = cursor.fetchall()
                 profits = []
                 position_details = []
 
                 for row in rows:
-                    position_id, pnl, lot_id = row
+                    position_id, pnl, lot_id, status = row
                     if pnl is not None:
                         profits.append(pnl)
                         position_details.append({
                             'id': position_id,
                             'pnl': pnl,
-                            'lot_id': lot_id
+                            'lot_id': lot_id,
+                            'status': status
                         })
 
                 cumulative_profit = sum(profits)
@@ -164,7 +165,8 @@ class CumulativeProfitProtectionManager:
                     print(f"[PROTECTION] 📊 累積獲利計算 (group_id={group_id}):")
                     print(f"[PROTECTION]   查詢到 {len(position_details)} 個已平倉部位")
                     for detail in position_details:
-                        print(f"[PROTECTION]   部位{detail['id']} (lot_{detail['lot_id']}): {detail['pnl']:.1f} 點")
+                        status_desc = "✅已平倉" if detail['status'] == 'EXITED' else "🔄更新中"
+                        print(f"[PROTECTION]   部位{detail['id']} (lot_{detail['lot_id']}): {detail['pnl']:.1f} 點 ({status_desc})")
                     print(f"[PROTECTION]   總累積獲利: {cumulative_profit:.1f} 點")
 
                     # 🔍 診斷：如果累積獲利為0，額外檢查

@@ -512,17 +512,6 @@ class StopLossExecutor:
                 # 觸發回呼機制，由上層應用負責資料庫更新
                 self._trigger_exit_success_callbacks(position_id, execution_result, trigger_info)
 
-                # 🛡️ 觸發保護性停損更新 (如果是移動停利成功平倉)
-                if self.console_enabled:
-                    trigger_reason = getattr(trigger_info, 'trigger_reason', '')
-                    pnl = getattr(execution_result, 'pnl', 0) or 0
-                    if '移動停利' in trigger_reason and pnl > 0:
-                        print(f"[STOP_EXECUTOR] 🛡️ 移動停利獲利平倉，檢查保護性停損更新...")
-                    else:
-                        print(f"[STOP_EXECUTOR] ℹ️ 非移動停利獲利平倉，跳過保護性停損更新")
-
-                self._trigger_protection_update_if_needed(trigger_info, execution_result)
-
                 # 觸發成功回調函數
                 if self.console_enabled:
                     print(f"[STOP_EXECUTOR] 📞 觸發成功回調函數...")
@@ -884,6 +873,17 @@ class StopLossExecutor:
 
                 if self.console_enabled:
                     print(f"[STOP_EXECUTOR] 🚀 異步平倉更新已排程作為備份: 部位{position_id}")
+
+            # 🔧 修復保護性停損時序問題：在狀態更新完成後才觸發保護性停損更新
+            if self.console_enabled:
+                trigger_reason = getattr(trigger_info, 'trigger_reason', '')
+                pnl = getattr(execution_result, 'pnl', 0) or 0
+                if '移動停利' in trigger_reason and pnl > 0:
+                    print(f"[STOP_EXECUTOR] 🛡️ 移動停利獲利平倉，檢查保護性停損更新...")
+                else:
+                    print(f"[STOP_EXECUTOR] ℹ️ 非移動停利獲利平倉，跳過保護性停損更新")
+
+            self._trigger_protection_update_if_needed(trigger_info, execution_result)
 
             return
 

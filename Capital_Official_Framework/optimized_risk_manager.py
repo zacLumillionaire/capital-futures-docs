@@ -279,6 +279,127 @@ class OptimizedRiskManager:
             if self.console_enabled:
                 print(f"[OPTIMIZED_RISK] ❌ 緩存失效異常: 部位{position_id}, 錯誤: {e}")
 
+    def on_protection_update(self, protection_update):
+        """
+        保護性停損更新回調函數
+        當保護性停損更新時，更新相關緩存
+
+        Args:
+            protection_update: ProtectionUpdate 對象，包含更新信息
+        """
+        try:
+            position_id_str = str(protection_update.position_id)
+
+            with self.cache_lock:
+                # 🔄 更新停損緩存
+                if position_id_str in self.stop_loss_cache:
+                    old_stop_loss = self.stop_loss_cache[position_id_str]
+                    self.stop_loss_cache[position_id_str] = protection_update.new_stop_loss
+
+                    if self.console_enabled:
+                        print(f"[OPTIMIZED_RISK] 🛡️ 保護性停損緩存更新: 部位{position_id_str}")
+                        print(f"[OPTIMIZED_RISK]   {old_stop_loss} → {protection_update.new_stop_loss}")
+
+                # 🔄 更新部位緩存中的停損信息（如果存在）
+                if position_id_str in self.position_cache:
+                    position_data = self.position_cache[position_id_str]
+                    if isinstance(position_data, dict):
+                        position_data['current_stop_loss'] = protection_update.new_stop_loss
+                        position_data['is_initial_stop'] = False
+                        position_data['protection_activated'] = True
+
+                        if self.console_enabled:
+                            print(f"[OPTIMIZED_RISK] 📊 部位緩存更新: 部位{position_id_str} 保護性停損已激活")
+
+                # 🔄 強制重新載入該部位的最新數據（確保一致性）
+                self._refresh_position_data(position_id_str)
+
+        except Exception as e:
+            logger.error(f"保護性停損更新回調失敗: {e}")
+            if self.console_enabled:
+                print(f"[OPTIMIZED_RISK] ❌ 保護更新回調失敗: 部位{protection_update.position_id}, 錯誤: {e}")
+
+    def _refresh_position_data(self, position_id_str: str):
+        """
+        刷新特定部位的數據
+
+        Args:
+            position_id_str: 部位ID字符串
+        """
+        try:
+            if not self.db_manager:
+                return
+
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 重新查詢部位數據
+                cursor.execute('''
+                    SELECT pr.*, sg.range_high, sg.range_low
+                    FROM position_records pr
+                    JOIN strategy_groups sg ON pr.group_id = sg.group_id AND sg.date = date('now')
+                    WHERE pr.id = ? AND pr.status = 'ACTIVE'
+                ''', (int(position_id_str),))
+
+                row = cursor.fetchone()
+                if row:
+                    # 更新緩存數據
+                    position_data = self._row_to_position_dict(row)
+                    self.position_cache[position_id_str] = position_data
+
+                    # 更新停損緩存
+                    if position_data.get('current_stop_loss'):
+                        self.stop_loss_cache[position_id_str] = position_data['current_stop_loss']
+
+                    if self.console_enabled:
+                        print(f"[OPTIMIZED_RISK] 🔄 部位{position_id_str}數據已刷新")
+                else:
+                    # 部位不再活躍，清理緩存
+                    self.invalidate_position_cache(position_id_str)
+
+        except Exception as e:
+            logger.error(f"刷新部位數據失敗: {e}")
+            if self.console_enabled:
+                print(f"[OPTIMIZED_RISK] ❌ 刷新部位{position_id_str}數據失敗: {e}")
+
+    def _row_to_position_dict(self, row) -> dict:
+        """
+        將資料庫行轉換為部位字典
+
+        Args:
+            row: 資料庫查詢結果行
+
+        Returns:
+            dict: 部位數據字典
+        """
+        try:
+            # 假設row的結構與position_records表一致
+            return {
+                'id': row[0],
+                'group_id': row[1],
+                'lot_id': row[2],
+                'direction': row[3],
+                'entry_price': row[4],
+                'current_stop_loss': row[5],
+                'trailing_stop_price': row[6],
+                'peak_price': row[7],
+                'status': row[8],
+                'entry_time': row[9],
+                'exit_time': row[10],
+                'exit_price': row[11],
+                'exit_reason': row[12],
+                'pnl': row[13],
+                'realized_pnl': row[14],
+                'is_initial_stop': row[15] if len(row) > 15 else True,
+                'protection_activated': row[16] if len(row) > 16 else False,
+                # 添加策略組信息
+                'range_high': row[-2] if len(row) > 17 else None,
+                'range_low': row[-1] if len(row) > 17 else None
+            }
+        except Exception as e:
+            logger.error(f"轉換資料庫行失敗: {e}")
+            return {}
+
     def _initial_cache_load(self):
         """初始化時載入緩存"""
         try:
@@ -1412,7 +1533,12 @@ class OptimizedRiskManager:
 
                         # 🆕 檢測新部位：如果資料庫有但內存沒有，且不在已平倉列表中，需要載入
                         if position_key not in self.position_cache and position_key not in self.closed_positions:
-                            new_positions.append(position_id)
+                            # 🔧 修復：額外檢查是否在處理中狀態，避免重複載入已平倉部位
+                            if position_key not in self.exiting_positions:
+                                new_positions.append(position_id)
+                            else:
+                                if self.console_enabled:
+                                    print(f"[OPTIMIZED_RISK] 🚫 跳過處理中部位: {position_id} (避免重新載入)")
                         elif position_key in self.closed_positions:
                             if self.console_enabled:
                                 print(f"[OPTIMIZED_RISK] 🚫 跳過已平倉部位: {position_id} (避免重新載入)")
@@ -1428,6 +1554,14 @@ class OptimizedRiskManager:
                 # 🆕 載入新部位（僅載入新發現的部位，不覆蓋現有內存數據）
                 if new_positions:
                     for position_id in new_positions:
+                        position_key = str(position_id)
+
+                        # 🔧 修復：載入前再次檢查是否已平倉或處理中
+                        if position_key in self.closed_positions or position_key in self.exiting_positions:
+                            if self.console_enabled:
+                                print(f"[OPTIMIZED_RISK] 🚫 載入前檢查：跳過部位{position_id} (已平倉或處理中)")
+                            continue
+
                         cursor.execute('''
                             SELECT pr.*, sg.range_high, sg.range_low
                             FROM position_records pr

@@ -1,6 +1,6 @@
 # 虛擬報價機 Global 模組
 # 提供與群益API相同介面的模擬器
-# 
+#
 # 此模組替換 order_service.Global，提供完全相同的API介面
 # 讓 simple_integrated.py 無需修改即可使用虛擬報價機
 
@@ -8,6 +8,18 @@ import time
 import threading
 import random
 from datetime import datetime
+
+# 🔧 導入新的虛擬報價機組件
+try:
+    from config_manager import ConfigManager
+    from quote_engine import VirtualQuoteEngine
+    from order_simulator import OrderSimulator
+    from event_dispatcher import EventDispatcher
+    ADVANCED_COMPONENTS_AVAILABLE = True
+    print("✅ [Virtual] 進階虛擬報價機組件載入成功")
+except ImportError as e:
+    print(f"⚠️ [Virtual] 進階組件載入失敗，使用簡化版: {e}")
+    ADVANCED_COMPONENTS_AVAILABLE = False
 
 class SimpleVirtualQuote:
     """簡化版虛擬報價機 - 只做核心功能"""
@@ -271,7 +283,29 @@ class SimpleVirtualQuote:
                 handler.OnNewData("virtual_user", reply_data)
 
 # 全域實例
-_virtual_quote = SimpleVirtualQuote()
+if ADVANCED_COMPONENTS_AVAILABLE:
+    # 使用進階虛擬報價機組件
+    _config_manager = ConfigManager()
+    _event_dispatcher = EventDispatcher()
+    _quote_engine = VirtualQuoteEngine(_config_manager, _event_dispatcher)
+    _order_simulator = OrderSimulator(_config_manager, _event_dispatcher)
+
+    # 啟動組件
+    _event_dispatcher.start()  # 啟動事件分發器
+    # _quote_engine.start_quote_feed()  # 報價引擎按需啟動
+    _order_simulator.start()
+
+    print("🚀 [Virtual] 進階虛擬報價機系統啟動完成")
+    print(f"🎯 [Virtual] 追價測試模式: {_order_simulator.chase_test_mode}")
+
+    _virtual_quote = None  # 不使用簡化版
+else:
+    # 使用簡化版虛擬報價機
+    _virtual_quote = SimpleVirtualQuote()
+    _config_manager = None
+    _event_dispatcher = None
+    _quote_engine = None
+    _order_simulator = None
 
 # 模擬群益API物件
 class MockSKCenterLib:
@@ -289,27 +323,37 @@ class MockSKOrderLib:
     def SKOrderLib_Initialize(self):
         print("🎯 [Virtual] 模擬下單初始化")
         return 0
-    
+
     def ReadCertByID(self, user_id):
         print(f"🎯 [Virtual] 模擬憑證讀取: {user_id}")
         return 0
-    
+
     def SendFutureOrderCLR(self, user_id, async_flag, order_obj):
-        return _virtual_quote.process_order(user_id, async_flag, order_obj)
+        if ADVANCED_COMPONENTS_AVAILABLE and _order_simulator:
+            return _order_simulator.process_order(user_id, async_flag, order_obj)
+        else:
+            return _virtual_quote.process_order(user_id, async_flag, order_obj)
 
 class MockSKQuoteLib:
     def SKQuoteLib_EnterMonitorLONG(self):
         print("🎯 [Virtual] 模擬報價連線")
         return 0
-    
+
     def SKQuoteLib_RequestTicks(self, page, product):
         print(f"🎯 [Virtual] 開始報價推送: {product}")
-        _virtual_quote.start_quote_feed()
+        if ADVANCED_COMPONENTS_AVAILABLE and _quote_engine:
+            _quote_engine.start_quote_feed()
+        else:
+            _virtual_quote.start_quote_feed()
         return 0
-    
+
     def SKQuoteLib_RequestBest5LONG(self, page, product):
         print(f"🎯 [Virtual] 開始五檔報價推送: {product}")
-        _virtual_quote.start_best5_feed()
+        if ADVANCED_COMPONENTS_AVAILABLE and _quote_engine:
+            # VirtualQuoteEngine 會在報價循環中自動生成五檔數據
+            print("✅ [Virtual] 五檔報價將隨報價推送自動生成")
+        else:
+            _virtual_quote.start_best5_feed()
         return 0
 
 class MockSKReplyLib:
@@ -339,24 +383,50 @@ def SetID(id):
 # 事件處理器註冊函數
 def register_quote_handler(handler):
     """註冊報價事件處理器"""
-    _virtual_quote.register_quote_handler(handler)
+    if ADVANCED_COMPONENTS_AVAILABLE and _event_dispatcher:
+        _event_dispatcher.register_quote_handler(handler)
+    else:
+        _virtual_quote.register_quote_handler(handler)
 
 def register_reply_handler(handler):
     """註冊回報事件處理器"""
-    _virtual_quote.register_reply_handler(handler)
+    if ADVANCED_COMPONENTS_AVAILABLE and _event_dispatcher:
+        _event_dispatcher.register_reply_handler(handler)
+    else:
+        _virtual_quote.register_reply_handler(handler)
 
 def register_best5_handler(handler):
     """註冊五檔報價事件處理器"""
-    _virtual_quote.register_best5_handler(handler)
+    if ADVANCED_COMPONENTS_AVAILABLE and _event_dispatcher:
+        _event_dispatcher.register_best5_handler(handler)
+    else:
+        _virtual_quote.register_best5_handler(handler)
+
+def initialize_virtual_machine():
+    """初始化虛擬報價機"""
+    try:
+        # 虛擬報價機已經在模組載入時初始化
+        print("✅ [Virtual] 虛擬報價機初始化完成")
+        return True
+    except Exception as e:
+        print(f"❌ [Virtual] 虛擬報價機初始化失敗: {e}")
+        return False
 
 def start_virtual_machine():
     """啟動虛擬報價機"""
-    _virtual_quote.start_quote_feed()
+    if ADVANCED_COMPONENTS_AVAILABLE and _quote_engine:
+        _quote_engine.start_quote_feed()
+    else:
+        _virtual_quote.start_quote_feed()
     print("🚀 [Virtual] 虛擬報價機已啟動")
 
 def stop_virtual_machine():
     """停止虛擬報價機"""
-    _virtual_quote.stop_quote_feed()
+    if ADVANCED_COMPONENTS_AVAILABLE and _quote_engine:
+        _quote_engine.stop()
+        _order_simulator.stop()
+    else:
+        _virtual_quote.stop_quote_feed()
     print("🛑 [Virtual] 虛擬報價機已停止")
 
 # 模組初始化

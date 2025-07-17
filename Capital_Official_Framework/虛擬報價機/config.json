@@ -1,15 +1,15 @@
 {
-    "scenario": "移動停利測試",
-    "description": "趨勢性價格變動，測試移動停利啟動與平倉",
+    "scenario": "建倉追價測試",
+    "description": "快速變動價格環境，測試追價機制",
     "virtual_quote_config": {
         "base_price": 21500,
-        "price_range": 80,
-        "spread": 3,
-        "quote_interval": 0.8,
-        "fill_probability": 0.9,
-        "fill_delay_ms": 150,
-        "volatility": 0.01,
-        "trend_factor": 0.3
+        "price_range": 30,
+        "spread": 5,
+        "quote_interval": 0.3,
+        "fill_probability": 0.7,
+        "fill_delay_ms": 300,
+        "volatility": 0.015,
+        "trend_factor": 0.1
     },
     "market_config": {
         "product": "MTX00",
@@ -24,22 +24,22 @@
     "order_config": {
         "default_account": "F0200006363839",
         "order_types": ["ROD", "IOC", "FOK"],
-        "default_order_type": "FOK",
+        "default_order_type": "IOC",
         "max_quantity": 10,
         "min_quantity": 1
     },
     "best5_config": {
         "enabled": true,
         "depth_levels": 5,
-        "quantity_range": [15, 80],
-        "price_step": 3
+        "quantity_range": [5, 30],
+        "price_step": 5
     },
     "logging_config": {
         "enabled": true,
-        "level": "INFO",
+        "level": "DEBUG",
         "console_output": true,
         "file_output": true,
-        "log_file": "trailing_stop_test.log"
+        "log_file": "entry_chase_test.log"
     },
     "performance_config": {
         "max_memory_mb": 100,
@@ -48,21 +48,14 @@
         "order_buffer_size": 500
     },
     "test_features": {
-        "trending_market": true,
-        "profit_accumulation": true,
-        "trailing_activation": true,
-        "pullback_simulation": true
+        "fast_price_movement": true,
+        "partial_fills": true,
+        "chase_required": true,
+        "variable_liquidity": true
     },
-    "trend_simulation": {
-        "direction": "up",
-        "strength": 0.3,
-        "duration_minutes": 10,
-        "pullback_probability": 0.2,
-        "pullback_strength": 0.15
-    },
-    "profit_targets": {
-        "first_lot": 15,
-        "second_lot": 40,
-        "third_lot": 65
+    "chase_simulation": {
+        "miss_probability": 0.3,
+        "price_jump_range": [2, 8],
+        "chase_delay_ms": 500
     }
 }

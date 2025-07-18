@@ -268,9 +268,20 @@ class OptimizedRiskManager:
                     self.trailing_cache.pop(position_id_str, None)
                     removed_items.append("trailing_cache")
 
+                # 🔧 修復：增強狀態驗證和防護（參考測試機機制）
+                if hasattr(self, 'exiting_positions') and position_id_str in self.exiting_positions:
+                    self.exiting_positions.remove(position_id_str)
+                    removed_items.append("exiting_positions")
+
+                # 🔧 修復：標記為已平倉，防止重新載入
+                if hasattr(self, 'closed_positions'):
+                    self.closed_positions.add(position_id_str)
+                    removed_items.append("marked_as_closed")
+
                 if self.console_enabled and removed_items:
                     print(f"[OPTIMIZED_RISK] 🧹 緩存失效: 部位{position_id_str}")
                     print(f"[OPTIMIZED_RISK]   清理項目: {', '.join(removed_items)}")
+                    print(f"[OPTIMIZED_RISK] 🔒 部位{position_id_str}已標記為已平倉，防止重新載入")
                 elif self.console_enabled:
                     print(f"[OPTIMIZED_RISK] ⚠️ 緩存失效: 部位{position_id_str} 不在緩存中")
 

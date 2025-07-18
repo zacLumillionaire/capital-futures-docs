@@ -27,9 +27,9 @@ class MultiGroupConfigPanel:
         self.current_config: Optional[MultiGroupStrategyConfig] = None
         
         # UI變數
-        self.total_groups_var = tk.StringVar(value="2")
-        self.lots_per_group_var = tk.StringVar(value="2")
-        self.preset_var = tk.StringVar(value="平衡配置 (2口×2組)")
+        self.total_groups_var = tk.StringVar(value="1")
+        self.lots_per_group_var = tk.StringVar(value="3")
+        self.preset_var = tk.StringVar(value="標準配置 (3口×1組)")
         
         # 預設配置
         self.preset_configs = create_preset_configs()
@@ -412,11 +412,11 @@ class MultiGroupConfigPanel:
         """重置配置"""
         try:
             # 重置為預設配置
-            self.preset_var.set("平衡配置 (2口×2組)")
+            self.preset_var.set("標準配置 (3口×1組)")
             self.load_preset_config()
-            
+
             messagebox.showinfo("重置完成", "✅ 配置已重置為預設值")
-            
+
         except Exception as e:
             messagebox.showerror("錯誤", f"重置配置失敗: {e}")
     

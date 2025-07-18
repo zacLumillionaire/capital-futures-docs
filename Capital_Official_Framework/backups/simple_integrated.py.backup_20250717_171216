@@ -14,24 +14,14 @@ from tkinter import ttk
 from typing import Optional
 from datetime import datetime
 
-# 🎯 虛擬報價機整合 - 替換真實API為虛擬報價機
-# 加入虛擬報價機路徑
-virtual_quote_path = os.path.join(os.path.dirname(__file__), '虛擬報價機')
-if virtual_quote_path not in sys.path:
-    sys.path.insert(0, virtual_quote_path)
-
-# 導入虛擬報價機模組 (替換真實API)
-import Global  # 現在導入的是虛擬報價機的 Global.py
-from user_config import get_user_config
-
-# 🔧 新增：導入虛擬報價配置管理器
-sys.path.insert(0, os.path.join(virtual_quote_path))
-from config_manager import ConfigManager
-
-# 原有的 order_service 路徑 (保留以防其他模組需要)
+# 加入order_service路徑
 order_service_path = os.path.join(os.path.dirname(__file__), 'order_service')
 if order_service_path not in sys.path:
     sys.path.insert(0, order_service_path)
+
+# 導入群益官方模組
+import Global
+from user_config import get_user_config
 
 # 🚀 Queue基礎設施導入 (GIL問題解決方案)
 # 🚨 Console模式：完全禁用Queue架構
@@ -155,9 +145,6 @@ class SimpleIntegratedApp:
         # 使用者配置
         self.config = get_user_config()
 
-        # 🔧 新增：初始化虛擬報價配置管理器
-        self.quote_config_manager = ConfigManager()
-
         # 狀態變數
         self.logged_in = False
 
@@ -188,9 +175,6 @@ class SimpleIntegratedApp:
         self.latest_time = ""
         self.price_count = 0  # 接收到的報價數量
         self.best5_count = 0  # 接收到的五檔報價數量
-
-        # 五檔報價數據
-        self.best5_data = {}
         # self.last_quote_time = time.time()  # 已移除，避免GIL風險
 
         # LOG控制變數
@@ -290,9 +274,6 @@ class SimpleIntegratedApp:
 
         # 註冊回報事件 (接收下單狀態)
         self.register_order_reply_events()
-
-        # 🎯 虛擬報價機整合：在程式啟動時就註冊事件處理器
-        self.register_virtual_quote_events()
 
     def init_optimized_risk_manager(self):
         """初始化優化風險管理器"""
@@ -467,19 +448,6 @@ class SimpleIntegratedApp:
                     print("[MULTI_GROUP] ✅ 簡化追蹤器初始化完成")
                 else:
                     print("[MULTI_GROUP] ✅ 簡化追蹤器已存在，跳過重複創建")
-
-                # 任務3：系統啟動時的安全檢查 - 清除所有歷史遺留的平倉鎖
-                try:
-                    if hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
-                       self.multi_group_position_manager.simplified_tracker:
-                        global_exit_manager = self.multi_group_position_manager.simplified_tracker.global_exit_manager
-                        cleared_count = global_exit_manager.clear_all_locks()
-                        if cleared_count > 0:
-                            print(f"[MULTI_GROUP] 🧹 啟動時清除了 {cleared_count} 個歷史平倉鎖")
-                        else:
-                            print("[MULTI_GROUP] 🧹 啟動時無需清除平倉鎖（系統乾淨）")
-                except Exception as clear_error:
-                    print(f"[MULTI_GROUP] ⚠️ 啟動時清除平倉鎖失敗: {clear_error}")
                     # 🔧 確保回調已註冊（防止回調丟失）
                     if hasattr(self.multi_group_position_manager.simplified_tracker, 'fill_callbacks'):
                         callback_count = len(self.multi_group_position_manager.simplified_tracker.fill_callbacks)
@@ -487,6 +455,19 @@ class SimpleIntegratedApp:
                         if callback_count == 0:
                             print("[MULTI_GROUP] ⚠️ 檢測到回調丟失，重新設置...")
                             self.multi_group_position_manager._setup_simplified_tracker_callbacks()
+
+                # 🔧 修復：正式機啟動時的安全檢查 - 清除所有歷史遺留的平倉鎖
+                try:
+                    if hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
+                       self.multi_group_position_manager.simplified_tracker:
+                        global_exit_manager = self.multi_group_position_manager.simplified_tracker.global_exit_manager
+                        cleared_count = global_exit_manager.clear_all_locks()
+                        if cleared_count > 0:
+                            print(f"[MULTI_GROUP] 🧹 正式機啟動時清除了 {cleared_count} 個歷史平倉鎖")
+                        else:
+                            print("[MULTI_GROUP] 🧹 正式機啟動時無需清除平倉鎖（系統乾淨）")
+                except Exception as clear_error:
+                    print(f"[MULTI_GROUP] ⚠️ 正式機啟動時清除平倉鎖失敗: {clear_error}")
 
                 # 🔍 DEBUG: 設定簡化追蹤器的console開關
                 if hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
@@ -705,50 +686,23 @@ class SimpleIntegratedApp:
         # 登入控制
         control_frame = ttk.Frame(login_frame)
         control_frame.pack(fill=tk.X)
-
+        
         ttk.Label(control_frame, text="身分證字號:").grid(row=0, column=0, padx=5)
         self.entry_id = ttk.Entry(control_frame, width=15)
         self.entry_id.insert(0, self.config['USER_ID'])
         self.entry_id.grid(row=0, column=1, padx=5)
-
+        
         ttk.Label(control_frame, text="密碼:").grid(row=0, column=2, padx=5)
         self.entry_password = ttk.Entry(control_frame, show="*", width=15)
         self.entry_password.insert(0, self.config['PASSWORD'])
         self.entry_password.grid(row=0, column=3, padx=5)
-
+        
         self.btn_login = ttk.Button(control_frame, text="登入", command=self.login)
         self.btn_login.grid(row=0, column=4, padx=10)
-
+        
         # 狀態顯示
         self.label_status = ttk.Label(control_frame, text="狀態: 未登入", foreground="red")
         self.label_status.grid(row=0, column=5, padx=10)
-
-        # 🔧 新增：虛擬報價配置選擇區域
-        config_frame = ttk.Frame(login_frame)
-        config_frame.pack(fill=tk.X, pady=(10, 0))
-
-        ttk.Label(config_frame, text="虛擬報價配置:").grid(row=0, column=0, padx=5, sticky=tk.W)
-
-        # 配置下拉選單
-        self.config_var = tk.StringVar()
-        self.config_combobox = ttk.Combobox(config_frame, textvariable=self.config_var,
-                                          width=25, state="readonly")
-        self.config_combobox.grid(row=0, column=1, padx=5)
-
-        # 載入配置選項
-        self.load_config_options()
-
-        # 配置切換按鈕
-        self.btn_switch_config = ttk.Button(config_frame, text="🔄 切換配置",
-                                          command=self.switch_quote_config)
-        self.btn_switch_config.grid(row=0, column=2, padx=10)
-
-        # 當前配置狀態顯示
-        self.label_current_config = ttk.Label(config_frame, text="", foreground="blue")
-        self.label_current_config.grid(row=0, column=3, padx=10)
-
-        # 更新當前配置顯示
-        self.update_current_config_display()
         
         # 功能按鈕區域
         function_frame = ttk.LabelFrame(main_frame, text="功能操作", padding=10)
@@ -2446,167 +2400,10 @@ class SimpleIntegratedApp:
             self.quote_event = SKQuoteLibEvents(self)
             self.quote_handler = comtypes.client.GetEvents(Global.skQ, self.quote_event)
 
-            # 🎯 虛擬報價機整合：同時註冊到虛擬報價機
-            try:
-                # 檢查是否使用虛擬報價機
-                if hasattr(Global, 'register_quote_handler'):
-                    # 創建一個包裝器，將虛擬報價機的事件轉發到主程式
-                    class VirtualQuoteWrapper:
-                        def __init__(self, main_app):
-                            self.main_app = main_app
-
-                        def OnNotifyTicksLONG(self, sMarketNo, nStockidx, nPtr, lDate, lTimehms,
-                                             lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-                            # 直接調用主程式的報價處理方法
-                            if hasattr(self.main_app, 'quote_event'):
-                                self.main_app.quote_event.OnNotifyTicksLONG(
-                                    sMarketNo, nStockidx, nPtr, lDate, lTimehms,
-                                    lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate
-                                )
-
-                    # 註冊包裝器到虛擬報價機
-                    virtual_wrapper = VirtualQuoteWrapper(self)
-                    Global.register_quote_handler(virtual_wrapper)
-                    self.add_log("✅ 虛擬報價機事件註冊成功 (使用包裝器)")
-            except Exception as virtual_error:
-                self.add_log(f"⚠️ 虛擬報價機事件註冊失敗: {virtual_error}")
-
             self.add_log("✅ 報價事件註冊成功 (群益官方方式)")
 
         except Exception as e:
             self.add_log(f"⚠️ 報價事件註冊失敗: {e}")
-
-    def register_virtual_quote_events(self):
-        """註冊虛擬報價機事件處理器 - 在程式啟動時就註冊"""
-        try:
-            # 檢查是否使用虛擬報價機
-            if hasattr(Global, 'register_quote_handler'):
-                # 創建一個包裝器，將虛擬報價機的事件轉發到主程式
-                class VirtualQuoteWrapper:
-                    def __init__(self, main_app):
-                        self.main_app = main_app
-                        self.quote_event = None
-
-                    def OnNotifyTicksLONG(self, sMarketNo, nStockidx, nPtr, lDate, lTimehms,
-                                         lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-                        # 🔧 修復：確保使用主要的SKQuoteLibEvents，而不是臨時處理器
-                        # 檢查主要的SKQuoteLibEvents是否存在且為正確類型
-                        if (hasattr(self.main_app, 'quote_event') and
-                            self.main_app.quote_event and
-                            hasattr(self.main_app.quote_event, 'OnNotifyTicksLONG') and
-                            type(self.main_app.quote_event).__name__ == 'SKQuoteLibEvents'):
-
-                            # 使用主要的SKQuoteLibEvents處理器（包含完整的策略邏輯）
-                            # 🔧 移除調試信息，避免干擾測試觀察
-                            self.main_app.quote_event.OnNotifyTicksLONG(
-                                sMarketNo, nStockidx, nPtr, lDate, lTimehms,
-                                lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate
-                            )
-                        else:
-                            # 如果主要處理器不存在或類型錯誤，創建臨時處理器
-                            # 🔧 只在首次創建時顯示警告，避免重複輸出
-                            if not hasattr(self.main_app, 'quote_event') or not self.main_app.quote_event:
-                                print(f"⚠️ [Virtual] 主要SKQuoteLibEvents未就緒，創建臨時處理器")
-                                self.create_temp_quote_event()
-
-                            # 使用臨時處理器（靜默處理）
-                            if hasattr(self.main_app, 'quote_event') and self.main_app.quote_event:
-                                self.main_app.quote_event.OnNotifyTicksLONG(
-                                    sMarketNo, nStockidx, nPtr, lDate, lTimehms,
-                                    lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate
-                                )
-
-                    def OnNotifyBest5LONG(self, sMarketNo, nStockidx, nPtr,
-                                         nBid1, nBidQty1, nBid2, nBidQty2, nBid3, nBidQty3, nBid4, nBidQty4, nBid5, nBidQty5,
-                                         nAsk1, nAskQty1, nAsk2, nAskQty2, nAsk3, nAskQty3, nAsk4, nAskQty4, nAsk5, nAskQty5, nSimulate):
-                        """五檔報價事件處理"""
-                        # 轉換價格
-                        bid1, bid2, bid3, bid4, bid5 = nBid1/100, nBid2/100, nBid3/100, nBid4/100, nBid5/100
-                        ask1, ask2, ask3, ask4, ask5 = nAsk1/100, nAsk2/100, nAsk3/100, nAsk4/100, nAsk5/100
-
-                        # 🔧 修復：檢查報價Console輸出設定
-                        if getattr(self.main_app, 'console_quote_enabled', True):
-                            print(f"[BEST5] 買盤: {bid5:.0f}({nBidQty5}) {bid4:.0f}({nBidQty4}) {bid3:.0f}({nBidQty3}) {bid2:.0f}({nBidQty2}) {bid1:.0f}({nBidQty1})")
-                            print(f"[BEST5] 賣盤: {ask1:.0f}({nAskQty1}) {ask2:.0f}({nAskQty2}) {ask3:.0f}({nAskQty3}) {ask4:.0f}({nAskQty4}) {ask5:.0f}({nAskQty5})")
-
-                        # 更新主程式的五檔數據（如果需要）
-                        if hasattr(self.main_app, 'best5_data'):
-                            self.main_app.best5_data = {
-                                'bid1': bid1, 'bid1_qty': nBidQty1,
-                                'bid2': bid2, 'bid2_qty': nBidQty2,
-                                'bid3': bid3, 'bid3_qty': nBidQty3,
-                                'bid4': bid4, 'bid4_qty': nBidQty4,
-                                'bid5': bid5, 'bid5_qty': nBidQty5,
-                                'ask1': ask1, 'ask1_qty': nAskQty1,
-                                'ask2': ask2, 'ask2_qty': nAskQty2,
-                                'ask3': ask3, 'ask3_qty': nAskQty3,
-                                'ask4': ask4, 'ask4_qty': nAskQty4,
-                                'ask5': ask5, 'ask5_qty': nAskQty5,
-                            }
-
-                    def create_temp_quote_event(self):
-                        """創建臨時的報價事件處理器"""
-                        try:
-                            import comtypes.client
-
-                            # 建立事件處理類別 (簡化版)
-                            class TempSKQuoteLibEvents():
-                                def __init__(self, parent):
-                                    self.parent = parent
-
-                                def OnNotifyTicksLONG(self, sMarketNo, nStockidx, nPtr, lDate, lTimehms, lTimemillismicros, nBid, nAsk, nClose, nQty, nSimulate):
-                                    """臨時報價事件處理器"""
-                                    # 解析價格資訊
-                                    corrected_price = nClose / 100.0
-                                    bid = nBid / 100.0
-                                    ask = nAsk / 100.0
-
-                                    # 格式化時間
-                                    time_str = f"{lTimehms:06d}"
-                                    formatted_time = f"{time_str[:2]}:{time_str[2:4]}:{time_str[4:6]}"
-
-                                    # 顯示報價 (如果Console輸出已啟用)
-                                    if getattr(self.parent, 'console_quote_enabled', True):
-                                        tick_msg = f"[TICK] {formatted_time} 成交:{corrected_price:.0f} 買:{bid:.0f} 賣:{ask:.0f} 量:{nQty}"
-                                        print(tick_msg)
-
-                                    # 🔧 修復：添加策略邏輯處理
-                                    if hasattr(self.parent, 'strategy_enabled') and self.parent.strategy_enabled:
-                                        self.parent.process_strategy_logic_safe(corrected_price, formatted_time)
-
-                                    # 更新內部數據變數
-                                    self.parent.last_price = corrected_price
-                                    self.parent.last_update_time = formatted_time
-
-                                    # 更新報價計數器
-                                    if hasattr(self.parent, 'price_count'):
-                                        self.parent.price_count += 1
-
-                            # 創建臨時事件處理器
-                            self.main_app.quote_event = TempSKQuoteLibEvents(self.main_app)
-                            print("✅ [Virtual] 臨時報價事件處理器已創建")
-
-                        except Exception as e:
-                            print(f"❌ [Virtual] 創建臨時報價事件處理器失敗: {e}")
-
-                # 註冊包裝器到虛擬報價機
-                self.virtual_wrapper = VirtualQuoteWrapper(self)
-                Global.register_quote_handler(self.virtual_wrapper)
-
-                # 同時註冊五檔報價處理器
-                if hasattr(Global, 'register_best5_handler'):
-                    Global.register_best5_handler(self.virtual_wrapper)
-                    self.add_log("✅ 虛擬五檔報價事件註冊成功")
-
-                self.add_log("✅ 虛擬報價機事件註冊成功 (程式啟動時)")
-                print("✅ [Virtual] 虛擬報價機事件處理器已在程式啟動時註冊")
-
-            else:
-                self.add_log("💡 未檢測到虛擬報價機，跳過虛擬事件註冊")
-
-        except Exception as virtual_error:
-            self.add_log(f"⚠️ 虛擬報價機事件註冊失敗: {virtual_error}")
-            print(f"❌ [Virtual] 虛擬報價機事件註冊失敗: {virtual_error}")
 
     def write_message_direct(self, message):
         """直接寫入訊息 - 完全按照群益官方方式"""
@@ -2814,7 +2611,7 @@ class SimpleIntegratedApp:
 
             # 區間時間設定
             ttk.Label(range_row, text="監控區間:").pack(side="left", padx=5)
-            self.range_time_var = tk.StringVar(value="08:46:00-08:46:20")
+            self.range_time_var = tk.StringVar(value="08:46-08:48")
             ttk.Label(range_row, textvariable=self.range_time_var,
                      font=("Arial", 10, "bold"), foreground="purple").pack(side="left", padx=5)
 
@@ -2999,7 +2796,7 @@ class SimpleIntegratedApp:
             freq_frame.pack(side="left", padx=20)
 
             tk.Label(freq_frame, text="執行頻率:", font=("Arial", 9)).pack(side="left", padx=5)
-            self.multi_group_frequency_var = tk.StringVar(value="可重複執行")
+            self.multi_group_frequency_var = tk.StringVar(value="一天一次")
             freq_combo = ttk.Combobox(
                 freq_frame,
                 textvariable=self.multi_group_frequency_var,
@@ -3248,7 +3045,7 @@ class SimpleIntegratedApp:
                 self.check_exit_conditions_safe(price, time_str)
 
             # 🎯 多組策略風險管理檢查
-            # 任務1：停用舊引擎輪詢，徹底解決偽PENDING狀態問題
+            # 任務2：停用舊引擎輪詢，統一到 OptimizedRiskManager
             # if self.multi_group_enabled and self.multi_group_risk_engine:
             #     self.check_multi_group_exit_conditions(price, time_str)
             elif self.console_enabled:
@@ -3308,12 +3105,12 @@ class SimpleIntegratedApp:
             pass
 
     def is_in_range_time_safe(self, time_str):
-        """安全的時間檢查 - 精確20秒區間"""
+        """安全的時間檢查 - 精確2分鐘區間"""
         try:
             hour, minute, second = map(int, time_str.split(':'))
             current_total_seconds = hour * 3600 + minute * 60 + second
             start_total_seconds = self.range_start_hour * 3600 + self.range_start_minute * 60
-            end_total_seconds = start_total_seconds + 20  # 精確20秒
+            end_total_seconds = start_total_seconds + 120  # 精確2分鐘
 
             return start_total_seconds <= current_total_seconds < end_total_seconds
         except:
@@ -4009,38 +3806,26 @@ class SimpleIntegratedApp:
         try:
             time_input = self.entry_range_time.get().strip()
 
-            # 解析時間格式 HH:MM:SS 或 HH:MM
+            # 解析時間格式 HH:MM
             if ':' in time_input:
-                time_parts = time_input.split(':')
-                if len(time_parts) == 2:
-                    hour, minute = map(int, time_parts)
-                    second = 0  # 預設秒數為0
-                elif len(time_parts) == 3:
-                    hour, minute, second = map(int, time_parts)
-                else:
-                    self.add_log("❌ 時間格式錯誤，請使用 HH:MM 或 HH:MM:SS 格式")
-                    return
+                hour, minute = map(int, time_input.split(':'))
             else:
-                self.add_log("❌ 時間格式錯誤，請使用 HH:MM 或 HH:MM:SS 格式")
+                self.add_log("❌ 時間格式錯誤，請使用 HH:MM 格式")
                 return
 
             # 設定區間開始時間
             self.range_start_hour = hour
             self.range_start_minute = minute
 
-            # 計算結束時間（+20秒）
-            end_second = second + 20
-            end_minute = minute
+            # 計算結束時間（+2分鐘）
+            end_minute = minute + 2
             end_hour = hour
-            if end_second >= 60:
-                end_second -= 60
-                end_minute += 1
-                if end_minute >= 60:
-                    end_minute -= 60
-                    end_hour += 1
+            if end_minute >= 60:
+                end_minute -= 60
+                end_hour += 1
 
             # 更新顯示
-            range_display = f"{hour:02d}:{minute:02d}:{second:02d}-{end_hour:02d}:{end_minute:02d}:{end_second:02d}"
+            range_display = f"{hour:02d}:{minute:02d}-{end_hour:02d}:{end_minute:02d}"
             self.range_time_var.set(range_display)
 
             # 重置區間數據
@@ -4416,8 +4201,8 @@ class SimpleIntegratedApp:
             # 🔧 初始化回報過濾機制
             self._init_reply_filter()
 
-            # 初始化資料庫管理器 (測試環境專用)
-            self.multi_group_db_manager = MultiGroupDatabaseManager("test_virtual_strategy.db")
+            # 初始化資料庫管理器
+            self.multi_group_db_manager = MultiGroupDatabaseManager("multi_group_strategy.db")
 
             # 🚀 擴展資料庫以支援平倉機制
             self._extend_database_for_exit_mechanism()
@@ -4435,23 +4220,12 @@ class SimpleIntegratedApp:
                 print(f"[MULTI_GROUP] ⚠️ 異步更新器初始化失敗: {e}")
                 self.async_updater = None
 
-            # 初始化風險管理引擎
-            self.multi_group_risk_engine = RiskManagementEngine(self.multi_group_db_manager)
+            # 任務4：移除冗餘的 RiskManagementEngine 初始化
+            # 風險管理職責已統一到 OptimizedRiskManager
+            # self.multi_group_risk_engine = RiskManagementEngine(self.multi_group_db_manager)
+            self.multi_group_risk_engine = None  # 保留變數以避免其他代碼引用錯誤
 
-            # 🚀 連接全局異步更新器到風險管理引擎
-            if hasattr(self, 'async_updater') and self.async_updater:
-                # 🔧 檢查異步更新器健康狀態
-                if self.async_updater.running and self.async_updater.worker_thread and self.async_updater.worker_thread.is_alive():
-                    self.multi_group_risk_engine.set_async_updater(self.async_updater)
-                    print("[MULTI_GROUP] 🔗 風險管理引擎已連接全局異步更新器")
-                else:
-                    print("[MULTI_GROUP] ⚠️ 異步更新器未正常運行，嘗試重啟...")
-                    self.async_updater.start()  # 重新啟動
-                    if self.async_updater.running:
-                        self.multi_group_risk_engine.set_async_updater(self.async_updater)
-                        print("[MULTI_GROUP] 🔗 風險管理引擎已連接重啟後的異步更新器")
-                    else:
-                        print("[MULTI_GROUP] ❌ 異步更新器重啟失敗")
+            print("[MULTI_GROUP] 🔄 風險管理已統一到 OptimizedRiskManager")
 
             # 🔧 設置停損執行器到風險管理引擎（如果已創建）
             if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
@@ -4463,29 +4237,9 @@ class SimpleIntegratedApp:
                     self.optimized_risk_manager.set_stop_loss_executor(self.stop_loss_executor)
                     print("[MULTI_GROUP] 🔗 停損執行器已設置到優化風險管理器")
 
-            # 🔍 DEBUG: 設定console開關給風險管理引擎
-            if hasattr(self.multi_group_risk_engine, 'console_enabled'):
-                # 確保console_enabled屬性存在
-                if not hasattr(self, 'console_enabled'):
-                    self.console_enabled = True  # 預設啟用console模式
-
-                self.multi_group_risk_engine.console_enabled = self.console_enabled
-                if self.console_enabled:
-                    print("[MULTI_GROUP] 🔍 風險管理引擎DEBUG模式已啟用")
-
-                    # 🔍 立即測試風險管理引擎
-                    try:
-                        test_price = 22300.0
-                        test_time = "16:00:00"
-                        print(f"[MULTI_GROUP] 🧪 測試風險管理引擎: {test_price} @{test_time}")
-
-                        exit_actions = self.multi_group_risk_engine.check_all_exit_conditions(test_price, test_time)
-                        print(f"[MULTI_GROUP] ✅ 風險管理引擎測試成功: {len(exit_actions)}個出場動作")
-
-                    except Exception as test_error:
-                        print(f"[MULTI_GROUP] ❌ 風險管理引擎測試失敗: {test_error}")
-                        import traceback
-                        traceback.print_exc()
+            # 任務4：移除冗餘的 RiskManagementEngine 測試代碼
+            # 風險管理測試已統一到 OptimizedRiskManager
+            print("[MULTI_GROUP] 🧪 風險管理測試已統一到 OptimizedRiskManager")
 
             # 🎯 設定預設配置 - 改用1組3口模式 (對應回測程式)
             presets = create_preset_configs()
@@ -5265,7 +5019,7 @@ class SimpleIntegratedApp:
         try:
             # 🆕 檢查執行頻率設定
             frequency = getattr(self, 'multi_group_frequency_var', None)
-            freq_setting = frequency.get() if frequency else "可重複執行"
+            freq_setting = frequency.get() if frequency else "一天一次"
 
             # 🆕 根據頻率設定檢查是否允許執行
             if freq_setting == "一天一次":
@@ -5976,154 +5730,6 @@ def run_bug_fix_validation():
             except:
                 pass
 
-# 🔧 新增：虛擬報價配置管理方法（添加到 SimpleIntegratedApp 類中）
-def add_config_management_methods():
-    """為 SimpleIntegratedApp 類添加配置管理方法"""
-
-    def load_config_options(self):
-        """載入配置選項到下拉選單"""
-        try:
-            config_list = self.quote_config_manager.get_config_list()
-            options = []
-
-            for key, name, description, icon in config_list:
-                option_text = f"{icon} {name}"
-                options.append(option_text)
-
-            self.config_combobox['values'] = options
-
-            # 設定預設選項（第一個）
-            if options:
-                self.config_combobox.set(options[0])
-
-        except Exception as e:
-            print(f"❌ 載入配置選項失敗: {e}")
-
-    def update_current_config_display(self):
-        """更新當前配置顯示"""
-        try:
-            scenario, description, icon = self.quote_config_manager.get_current_config_info()
-            display_text = f"{icon} {scenario}"
-            self.label_current_config.config(text=display_text)
-
-            # 更新tooltip顯示完整描述
-            self.create_tooltip(self.label_current_config, description)
-
-        except Exception as e:
-            print(f"❌ 更新配置顯示失敗: {e}")
-            self.label_current_config.config(text="❌ 配置錯誤")
-
-    def switch_quote_config(self):
-        """切換虛擬報價配置"""
-        try:
-            selected_text = self.config_var.get()
-            if not selected_text:
-                tk.messagebox.showwarning("警告", "請選擇一個配置")
-                return
-
-            # 從選擇的文字中提取配置名稱
-            config_list = self.quote_config_manager.get_config_list()
-            selected_key = None
-
-            for key, name, description, icon in config_list:
-                option_text = f"{icon} {name}"
-                if option_text == selected_text:
-                    selected_key = key
-                    break
-
-            if not selected_key:
-                tk.messagebox.showerror("錯誤", "無效的配置選擇")
-                return
-
-            # 確認切換
-            config_info = self.quote_config_manager.available_configs[selected_key]
-            result = tk.messagebox.askyesno(
-                "確認切換配置",
-                f"確定要切換到以下配置嗎？\n\n"
-                f"📝 名稱: {config_info['name']}\n"
-                f"📋 描述: {config_info['description']}\n\n"
-                f"💡 切換後虛擬報價機將使用新的配置參數"
-            )
-
-            if result:
-                # 執行配置切換
-                if self.quote_config_manager.switch_config(selected_key):
-                    # 熱重載配置
-                    if self.quote_config_manager.hot_reload_config():
-                        self.update_current_config_display()
-                        tk.messagebox.showinfo(
-                            "切換成功",
-                            f"✅ 已成功切換到: {config_info['name']}\n\n"
-                            f"🔄 虛擬報價機已應用新配置\n"
-                            f"💡 新的報價參數立即生效"
-                        )
-                    else:
-                        tk.messagebox.showerror("錯誤", "配置重載失敗")
-                else:
-                    tk.messagebox.showerror("錯誤", "配置切換失敗")
-
-        except Exception as e:
-            print(f"❌ 切換配置失敗: {e}")
-            tk.messagebox.showerror("錯誤", f"切換配置時發生錯誤: {e}")
-
-    def create_tooltip(self, widget, text):
-        """創建工具提示"""
-        def on_enter(event):
-            tooltip = tk.Toplevel()
-            tooltip.wm_overrideredirect(True)
-            tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
-
-            label = tk.Label(tooltip, text=text, background="lightyellow",
-                           relief="solid", borderwidth=1, font=("Arial", 9))
-            label.pack()
-
-            widget.tooltip = tooltip
-
-        def on_leave(event):
-            if hasattr(widget, 'tooltip'):
-                widget.tooltip.destroy()
-                del widget.tooltip
-
-        widget.bind("<Enter>", on_enter)
-        widget.bind("<Leave>", on_leave)
-
-    def debug_optimized_risk_manager(self):
-        """調試優化風險管理器狀態 - 診斷移動停利問題"""
-        if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
-            print("\n🧠 OptimizedRiskManager 內存狀態調試:")
-            print("=" * 60)
-
-            with self.optimized_risk_manager.cache_lock:
-                print(f"📊 position_cache 數量: {len(self.optimized_risk_manager.position_cache)}")
-                for pos_id, pos_data in self.optimized_risk_manager.position_cache.items():
-                    print(f"  部位 {pos_id}: entry_price={pos_data.get('entry_price')}, direction={pos_data.get('direction')}")
-
-                print(f"🎯 activation_cache 數量: {len(self.optimized_risk_manager.activation_cache)}")
-                for pos_id, activation_price in self.optimized_risk_manager.activation_cache.items():
-                    print(f"  部位 {pos_id}: 啟動點位={activation_price}")
-
-                print(f"📈 trailing_cache 數量: {len(self.optimized_risk_manager.trailing_cache)}")
-                for pos_id, trailing_data in self.optimized_risk_manager.trailing_cache.items():
-                    print(f"  部位 {pos_id}: activated={trailing_data.get('activated')}, peak={trailing_data.get('peak_price')}")
-
-            # 手動觸發價格更新測試
-            test_prices = [21507.0, 21525.0, 21549.0]
-            for test_price in test_prices:
-                print(f"\n🧪 測試價格 {test_price}:")
-                result = self.optimized_risk_manager.update_price(test_price)
-                print(f"  結果: {result}")
-        else:
-            print("❌ OptimizedRiskManager 未初始化")
-
-    # 將方法添加到類中
-    SimpleIntegratedApp.load_config_options = load_config_options
-    SimpleIntegratedApp.update_current_config_display = update_current_config_display
-    SimpleIntegratedApp.switch_quote_config = switch_quote_config
-    SimpleIntegratedApp.create_tooltip = create_tooltip
-    SimpleIntegratedApp.debug_optimized_risk_manager = debug_optimized_risk_manager
-
-# 執行方法添加
-add_config_management_methods()
 
 if __name__ == "__main__":
     # 檢查是否要運行修復驗證

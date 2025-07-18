@@ -680,7 +680,7 @@ class MultiGroupPositionManager:
                            f"第{retry_count}次重試")
 
             # 🔧 簡化版：只執行單一追價，不重複
-            self._execute_single_retry_for_group(group_id, qty, retry_count)
+            self._execute_single_retry_for_group(logical_group_id, qty, retry_count)
 
         except Exception as e:
             self.logger.error(f"處理簡化追價回調失敗: {e}")
@@ -700,10 +700,10 @@ class MultiGroupPositionManager:
             # 計算追價價格
             retry_price = self._calculate_retry_price_for_group(direction, retry_count)
             if not retry_price:
-                self.logger.error(f"無法計算組{group_id}追價價格")
+                self.logger.error(f"無法計算組{logical_group_id}追價價格")
                 return
 
-            self.logger.info(f"🔄 [簡化追蹤] 組{group_id}追價參數: {direction} {qty}口 @{retry_price} (第{retry_count}次)")
+            self.logger.info(f"🔄 [簡化追蹤] 組{logical_group_id}追價參數: {direction} {qty}口 @{retry_price} (第{retry_count}次)")
 
             # 🔧 修復：執行單一下單 - 使用正確的方法
             if self.order_manager:
@@ -713,11 +713,11 @@ class MultiGroupPositionManager:
                     product=product,
                     quantity=qty,
                     price=retry_price,
-                    signal_source=f"group_{group_id}_retry_{retry_count}"
+                    signal_source=f"group_{logical_group_id}_retry_{retry_count}"
                 )
 
                 if order_result and order_result.success:
-                    self.logger.info(f"✅ 組{group_id}追價下單成功: 第{qty}口 @{retry_price}")
+                    self.logger.info(f"✅ 組{logical_group_id}追價下單成功: 第{qty}口 @{retry_price}")
 
                     # 🔧 修復：註冊到統一追蹤器 (與建倉邏輯一致)
                     if hasattr(self, 'order_tracker') and self.order_tracker:
@@ -729,12 +729,12 @@ class MultiGroupPositionManager:
                                 quantity=qty,
                                 price=retry_price,
                                 is_virtual=(order_result.mode == "virtual"),
-                                signal_source=f"group_{group_id}_retry_{retry_count}",
+                                signal_source=f"group_{logical_group_id}_retry_{retry_count}",
                                 api_seq_no=order_result.api_result if hasattr(order_result, 'api_result') else None
                             )
-                            self.logger.info(f"📝 組{group_id}追價訂單已註冊到統一追蹤器: {order_result.order_id}")
+                            self.logger.info(f"📝 組{logical_group_id}追價訂單已註冊到統一追蹤器: {order_result.order_id}")
                         except Exception as track_error:
-                            self.logger.warning(f"⚠️ 組{group_id}追價訂單註冊失敗: {track_error}")
+                            self.logger.warning(f"⚠️ 組{logical_group_id}追價訂單註冊失敗: {track_error}")
 
                     # 🔧 保留：同時註冊到FIFO匹配器 (向後相容)
                     if hasattr(self, 'simplified_tracker') and self.simplified_tracker:
@@ -747,17 +747,17 @@ class MultiGroupPositionManager:
                                     quantity=qty,
                                     price=retry_price
                                 )
-                                self.logger.info(f"📝 組{group_id}追價訂單已註冊到FIFO: {order_result.order_id}")
+                                self.logger.info(f"📝 組{logical_group_id}追價訂單已註冊到FIFO: {order_result.order_id}")
                             except Exception as fifo_error:
-                                self.logger.warning(f"⚠️ 組{group_id}追價訂單FIFO註冊失敗: {fifo_error}")
+                                self.logger.warning(f"⚠️ 組{logical_group_id}追價訂單FIFO註冊失敗: {fifo_error}")
                 else:
                     error_msg = getattr(order_result, 'error', '未知錯誤') if order_result else '下單結果為空'
-                    self.logger.error(f"❌ 組{group_id}追價下單失敗: {error_msg}")
+                    self.logger.error(f"❌ 組{logical_group_id}追價下單失敗: {error_msg}")
             else:
                 self.logger.error("下單管理器未初始化")
 
         except Exception as e:
-            self.logger.error(f"執行組{group_id}單一追價失敗: {e}")
+            self.logger.error(f"執行組{logical_group_id}單一追價失敗: {e}")
 
     def _get_group_info_for_retry(self, logical_group_id: int) -> Optional[Dict]:
         """獲取組信息用於追價"""
@@ -772,7 +772,7 @@ class MultiGroupPositionManager:
                 }
             return None
         except Exception as e:
-            self.logger.error(f"獲取組{group_id}信息失敗: {e}")
+            self.logger.error(f"獲取組{logical_group_id}信息失敗: {e}")
             return None
 
     def _calculate_retry_price_for_group(self, direction: str, retry_count: int) -> Optional[float]:
@@ -863,7 +863,7 @@ class MultiGroupPositionManager:
 
                         # 🔧 改善：智能調試信息輸出
                         if len(pending_positions) > 0:
-                            self.logger.info(f"🔍 [簡化追蹤] 組{group_id}(DB_ID:{group_db_id}) 找到 {len(pending_positions)} 個PENDING部位")
+                            self.logger.info(f"🔍 [簡化追蹤] 組{logical_group_id}(DB_ID:{group_db_id}) 找到 {len(pending_positions)} 個PENDING部位")
                         else:
                             # 🔧 修復：檢查是否已經全部成交，避免無意義警告
                             cursor.execute('''
@@ -942,7 +942,7 @@ class MultiGroupPositionManager:
                                     if async_success_1 and async_success_2:
                                         # 🔧 新增：註冊到統一移動停利計算器（如果啟用）
                                         self._register_position_to_trailing_calculator(
-                                            position_pk, position, price, group_id
+                                            position_pk, position, price, logical_group_id
                                         )
 
                                         confirmed_count += 1
@@ -980,7 +980,7 @@ class MultiGroupPositionManager:
 
                                 # 🔧 新增：註冊到統一移動停利計算器（如果啟用）
                                 self._register_position_to_trailing_calculator(
-                                    position_pk, position, price, group_id
+                                    position_pk, position, price, logical_group_id
                                 )
 
                                 # 📊 記錄同步更新性能
@@ -994,9 +994,9 @@ class MultiGroupPositionManager:
                         # 🔧 改善：只在實際處理了部位時輸出成功信息
                         if confirmed_count > 0:
                             total_elapsed = (time.time() - start_time) * 1000 if 'start_time' in locals() else 0
-                            self.logger.info(f"🎉 [簡化追蹤] 組{group_id} 成功確認 {confirmed_count} 個部位成交 (總耗時:{total_elapsed:.1f}ms)")
+                            self.logger.info(f"🎉 [簡化追蹤] 組{logical_group_id} 成功確認 {confirmed_count} 個部位成交 (總耗時:{total_elapsed:.1f}ms)")
                 else:
-                    self.logger.warning(f"⚠️ [簡化追蹤] 找不到組{group_id}的資料庫記錄")
+                    self.logger.warning(f"⚠️ [簡化追蹤] 找不到組{logical_group_id}的資料庫記錄")
 
             except Exception as db_error:
                 self.logger.error(f"資料庫部位更新失敗: {db_error}")
@@ -1215,10 +1215,10 @@ class MultiGroupPositionManager:
             # 2. 計算追價價格
             retry_price = self._calculate_retry_price_for_group(direction, retry_count)
             if retry_price is None:
-                self.logger.error(f"無法計算組{group_id}的追價價格")
+                self.logger.error(f"無法計算組{logical_group_id}的追價價格")
                 return
 
-            self.logger.info(f"🔄 [簡化追蹤] 組{group_id}追價參數: "
+            self.logger.info(f"🔄 [簡化追蹤] 組{logical_group_id}追價參數: "
                            f"{direction} {qty}口 @{retry_price} (第{retry_count}次)")
 
             # 3. 🔧 修復：執行追價下單 - 直接使用已初始化的下單管理器
@@ -1230,12 +1230,12 @@ class MultiGroupPositionManager:
                         order_result = self.order_manager.execute_strategy_order(
                             direction=direction,
                             quantity=1,
-                            signal_source=f"group_{group_id}_retry_{retry_count}",
+                            signal_source=f"group_{logical_group_id}_retry_{retry_count}",
                             price=retry_price
                         )
 
                         if order_result.success:
-                            self.logger.info(f"✅ 組{group_id}追價下單成功: 第{i+1}口 @{retry_price}")
+                            self.logger.info(f"✅ 組{logical_group_id}追價下單成功: 第{i+1}口 @{retry_price}")
 
                             # 🔧 新增：註冊追價訂單到追蹤器
                             if hasattr(self, 'order_tracker') and self.order_tracker:
@@ -1247,19 +1247,19 @@ class MultiGroupPositionManager:
                                         quantity=1,
                                         price=retry_price,
                                         is_virtual=(order_result.mode == "virtual"),
-                                        signal_source=f"group_{group_id}_retry_{retry_count}",
+                                        signal_source=f"group_{logical_group_id}_retry_{retry_count}",
                                         api_seq_no=order_result.api_result if order_result.api_result else None
                                     )
-                                    self.logger.info(f"📝 組{group_id}追價訂單已註冊: {order_result.order_id}")
+                                    self.logger.info(f"📝 組{logical_group_id}追價訂單已註冊: {order_result.order_id}")
                                 except Exception as track_error:
-                                    self.logger.warning(f"⚠️ 組{group_id}追價訂單註冊失敗: {track_error}")
+                                    self.logger.warning(f"⚠️ 組{logical_group_id}追價訂單註冊失敗: {track_error}")
                         else:
-                            self.logger.error(f"❌ 組{group_id}追價下單失敗: 第{i+1}口 - {order_result.error_message}")
+                            self.logger.error(f"❌ 組{logical_group_id}追價下單失敗: 第{i+1}口 - {order_result.error_message}")
                     else:
                         self.logger.warning(f"⚠️ 下單管理器未初始化，無法執行追價下單")
 
                 except Exception as order_error:
-                    self.logger.error(f"組{group_id}第{i+1}口追價下單異常: {order_error}")
+                    self.logger.error(f"組{logical_group_id}第{i+1}口追價下單異常: {order_error}")
 
         except Exception as e:
             self.logger.error(f"執行組追價重試失敗: {e}")
@@ -1276,7 +1276,7 @@ class MultiGroupPositionManager:
                 self.logger.warning(f"⚠️ [追價] 組{logical_group_id}信息不存在")
                 return None
         except Exception as e:
-            self.logger.error(f"獲取組{group_id}信息失敗: {e}")
+            self.logger.error(f"獲取組{logical_group_id}信息失敗: {e}")
             return None
 
     def _calculate_retry_price_for_group(self, direction: str, retry_count: int) -> float:

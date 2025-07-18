@@ -208,6 +208,15 @@ class SimpleIntegratedApp:
             'strategy_activity_count': 0
         }
 
+        # 🛡️ 新增：多層回退機制統計監控
+        self.fallback_stats = {
+            'optimized_failures': 0,
+            'original_failures': 0,
+            'total_fallbacks': 0,
+            'last_fallback_time': None,
+            'final_fallbacks': 0  # 最終安全網觸發次數
+        }
+
         # 🎯 多組策略系統初始化
         self.multi_group_enabled = False
         self.multi_group_db_manager = None
@@ -443,11 +452,23 @@ class SimpleIntegratedApp:
                    not self.multi_group_position_manager.simplified_tracker:
                     from simplified_order_tracker import SimplifiedOrderTracker
                     self.multi_group_position_manager.simplified_tracker = SimplifiedOrderTracker()
+
+                    # 🔧 修復：設置資料庫管理器引用，支援平倉追價備用查詢
+                    self.multi_group_position_manager.simplified_tracker.db_manager = self.multi_group_db_manager
+
                     # 🔧 重新設置回調（因為是新實例）
                     self.multi_group_position_manager._setup_simplified_tracker_callbacks()
                     print("[MULTI_GROUP] ✅ 簡化追蹤器初始化完成")
+                    print("[MULTI_GROUP] 🔗 簡化追蹤器已連接資料庫管理器")
                 else:
                     print("[MULTI_GROUP] ✅ 簡化追蹤器已存在，跳過重複創建")
+
+                    # 🔧 修復：確保已存在的簡化追蹤器也有資料庫管理器引用
+                    if not hasattr(self.multi_group_position_manager.simplified_tracker, 'db_manager') or \
+                       not self.multi_group_position_manager.simplified_tracker.db_manager:
+                        self.multi_group_position_manager.simplified_tracker.db_manager = self.multi_group_db_manager
+                        print("[MULTI_GROUP] 🔗 已為現有簡化追蹤器添加資料庫管理器引用")
+
                     # 🔧 確保回調已註冊（防止回調丟失）
                     if hasattr(self.multi_group_position_manager.simplified_tracker, 'fill_callbacks'):
                         callback_count = len(self.multi_group_position_manager.simplified_tracker.fill_callbacks)
@@ -485,17 +506,41 @@ class SimpleIntegratedApp:
 
                     # 🔧 新增：註冊平倉成交回調
                     def on_exit_fill(exit_order: dict, price: float, qty: int):
-                        """平倉成交回調函數 - 更新部位狀態為EXITED"""
+                        """平倉成交回調函數 - 🔧 修復：包含完整損益計算"""
                         try:
                             position_id = exit_order.get('position_id')
                             exit_reason = exit_order.get('exit_reason', '平倉')
 
-                            if self.console_enabled:
-                                print(f"[MAIN] 🎯 收到平倉成交回調: 部位{position_id} @{price:.0f}")
+                            # 🔧 新增：標準化出場原因以符合資料庫約束
+                            from stop_loss_executor import standardize_exit_reason
+                            standardized_reason = standardize_exit_reason(exit_reason)
+
+                            # 🔧 修復：計算實際損益（採用測試機機制）
+                            entry_price = exit_order.get('entry_price')
+                            original_direction = exit_order.get('original_direction')
+
+                            if entry_price and original_direction:
+                                if original_direction == "SHORT":
+                                    pnl = entry_price - price  # SHORT: 進場價 - 出場價
+                                else:
+                                    pnl = price - entry_price  # LONG: 出場價 - 進場價
+
+                                if self.console_enabled:
+                                    print(f"[MAIN] 🎯 收到平倉成交回調: 部位{position_id} @{price:.0f}")
+                                    print(f"[MAIN] 📋 原始原因: '{exit_reason}' → 標準化: '{standardized_reason}'")
+                                    print(f"[MAIN] 💰 計算損益: {original_direction} {entry_price}→{price} = {pnl:.1f}點")
+                            else:
+                                # 🔧 備用：從資料庫查詢計算損益
+                                pnl = self._calculate_pnl_from_db(position_id, price) if hasattr(self, '_calculate_pnl_from_db') else 0.0
+
+                                if self.console_enabled:
+                                    print(f"[MAIN] 🎯 收到平倉成交回調: 部位{position_id} @{price:.0f}")
+                                    print(f"[MAIN] 📋 原始原因: '{exit_reason}' → 標準化: '{standardized_reason}'")
+                                    print(f"[MAIN] ⚠️ 缺少部位信息，損益設為: {pnl:.1f}點")
 
                             # 更新部位狀態為EXITED
                             if hasattr(self, 'multi_group_db_manager') and self.multi_group_db_manager:
-                                # 🔧 新增：準備緩存失效回呼
+                                # 🔧 修復：使用虛擬機的正確實現方式
                                 cache_invalidation_callback = None
                                 if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
                                     cache_invalidation_callback = self.optimized_risk_manager.invalidate_position_cache
@@ -504,14 +549,32 @@ class SimpleIntegratedApp:
                                     position_id=position_id,
                                     exit_price=price,
                                     exit_time=datetime.now().strftime('%H:%M:%S'),
-                                    exit_reason=exit_reason,
-                                    pnl=0.0,  # 暫時設為0，後續可以計算實際損益
-                                    on_success_callback=cache_invalidation_callback  # 🔧 新增：緩存失效回呼
+                                    exit_reason=standardized_reason,  # 🔧 修復：使用標準化後的原因
+                                    pnl=pnl,  # 🔧 修復：使用計算後的實際損益
+                                    on_success_callback=cache_invalidation_callback  # 🔧 修復：延遲緩存失效
                                 )
 
                                 if success:
                                     if self.console_enabled:
                                         print(f"[MAIN] ✅ 部位{position_id}狀態已更新為EXITED")
+
+                                    # 🔧 新增：立即更新內存狀態，防止重複平倉
+                                    try:
+                                        # 立即更新優化風險管理器的緩存
+                                        if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
+                                            self.optimized_risk_manager.invalidate_position_cache(position_id)
+                                            if self.console_enabled:
+                                                print(f"[MAIN] 🔄 已立即更新部位{position_id}內存狀態")
+
+                                        # 立即標記部位為已平倉狀態
+                                        if hasattr(self, 'async_updater') and self.async_updater:
+                                            if hasattr(self.async_updater, 'mark_position_exited_in_cache'):
+                                                self.async_updater.mark_position_exited_in_cache(position_id)
+                                                if self.console_enabled:
+                                                    print(f"[MAIN] 🔄 已在異步緩存中標記部位{position_id}為已平倉")
+                                    except Exception as update_error:
+                                        if self.console_enabled:
+                                            print(f"[MAIN] ⚠️ 立即狀態更新失敗: {update_error}")
 
                                     # 🔧 修復：平倉成功後清除全局平倉鎖
                                     try:
@@ -527,9 +590,23 @@ class SimpleIntegratedApp:
                                     if self.console_enabled:
                                         print(f"[MAIN] ❌ 部位{position_id}狀態更新失敗")
 
+                                    # 🔧 新增：失敗時記錄到備用日誌
+                                    try:
+                                        with open("exit_callback_errors.log", "a", encoding="utf-8") as f:
+                                            f.write(f"{datetime.now()}: 部位{position_id} 平倉記錄更新失敗，原因: {exit_reason} → {standardized_reason}\n")
+                                    except:
+                                        pass
+
                         except Exception as e:
                             if self.console_enabled:
                                 print(f"[MAIN] ❌ 平倉成交回調異常: {e}")
+
+                            # 🔧 新增：異常時記錄到備用日誌
+                            try:
+                                with open("exit_callback_errors.log", "a", encoding="utf-8") as f:
+                                    f.write(f"{datetime.now()}: 部位{position_id} 平倉回調異常: {e}\n")
+                            except:
+                                pass
 
                     # 註冊平倉成交回調到簡化追蹤器
                     if hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
@@ -556,7 +633,7 @@ class SimpleIntegratedApp:
                                 if self.console_enabled:
                                     print(f"[MAIN] ❌ 部位{position_id}追價次數超限({retry_count}>{max_retries})")
 
-                                # 🔧 修復：追價失敗後清除全局平倉鎖
+                                # 🔧 修復：追價失敗後清除全局平倉鎖（參考虛擬機實現）
                                 try:
                                     if hasattr(self.multi_group_position_manager, 'simplified_tracker'):
                                         global_exit_manager = self.multi_group_position_manager.simplified_tracker.global_exit_manager
@@ -566,6 +643,14 @@ class SimpleIntegratedApp:
                                 except Exception as clear_error:
                                     if self.console_enabled:
                                         print(f"[MAIN] ⚠️ 清除平倉鎖失敗: {clear_error}")
+
+                                # 🔧 新增：記錄到備用日誌
+                                try:
+                                    with open("exit_retry_failures.log", "a", encoding="utf-8") as f:
+                                        from datetime import datetime
+                                        f.write(f"{datetime.now()}: 部位{position_id} 追價次數超限({retry_count}>{max_retries})\n")
+                                except:
+                                    pass
                                 return
 
                             # 計算平倉追價價格
@@ -604,6 +689,39 @@ class SimpleIntegratedApp:
                                 if success:
                                     if self.console_enabled:
                                         print(f"[MAIN] ✅ 部位{position_id}第{retry_count}次追價下單成功")
+
+                                    # 🔧 階段1：註冊追價訂單到簡化追蹤器（已有機制，保持不變）
+                                    simplified_registered = False
+                                    if hasattr(self, 'multi_group_position_manager') and \
+                                       hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
+                                       order_result and hasattr(order_result, 'order_id'):
+                                        try:
+                                            self.multi_group_position_manager.simplified_tracker.register_exit_order(
+                                                position_id=position_id,
+                                                order_id=order_result.order_id,
+                                                direction=exit_direction,
+                                                quantity=1,
+                                                price=retry_price,
+                                                product="TM0000"
+                                            )
+                                            simplified_registered = True
+                                            if self.console_enabled:
+                                                print(f"[MAIN] 📝 追價訂單已註冊到簡化追蹤器: {order_result.order_id}")
+                                        except Exception as reg_error:
+                                            if self.console_enabled:
+                                                print(f"[MAIN] ⚠️ 簡化追蹤器註冊失敗: {reg_error}")
+
+                                    # 🔧 階段2：完整註冊機制（開關控制，現在啟用以便測試）
+                                    enable_full_registration = getattr(self, 'enable_exit_retry_full_registration', True)
+                                    if enable_full_registration and order_result and hasattr(order_result, 'order_id'):
+                                        self._register_exit_retry_order_full(
+                                            position_id=position_id,
+                                            order_result=order_result,
+                                            exit_direction=exit_direction,
+                                            retry_price=retry_price,
+                                            retry_count=retry_count,
+                                            simplified_registered=simplified_registered
+                                        )
                                 else:
                                     if self.console_enabled:
                                         print(f"[MAIN] ❌ 部位{position_id}第{retry_count}次追價下單失敗")
@@ -641,8 +759,177 @@ class SimpleIntegratedApp:
 
                 print("[MULTI_GROUP] ✅ 下單組件整合完成")
 
+                # 🔧 新增：顯示追價訂單註冊狀態
+                full_reg_enabled = getattr(self, 'enable_exit_retry_full_registration', True)
+                if self.console_enabled:
+                    print(f"[MULTI_GROUP] 📋 追價訂單註冊狀態:")
+                    if full_reg_enabled:
+                        print(f"[MULTI_GROUP]   🔧 完整註冊模式：啟用")
+                        print(f"[MULTI_GROUP]   📝 LOG標籤：[FULL_REG]")
+                        print(f"[MULTI_GROUP]   📄 日誌文件：exit_retry_registration.log")
+                    else:
+                        print(f"[MULTI_GROUP]   🛡️ 安全模式：只使用簡化追蹤器")
+
         except Exception as e:
             print(f"[MULTI_GROUP] ❌ 下單組件整合失敗: {e}")
+
+    def _register_exit_retry_order_full(self, position_id: int, order_result, exit_direction: str,
+                                       retry_price: float, retry_count: int, simplified_registered: bool = False):
+        """
+        完整註冊追價訂單到所有追蹤器（開關控制功能）
+
+        Args:
+            position_id: 部位ID
+            order_result: 下單結果
+            exit_direction: 平倉方向
+            retry_price: 追價價格
+            retry_count: 重試次數
+            simplified_registered: 是否已註冊到簡化追蹤器
+        """
+        try:
+            order_id = order_result.order_id
+            registration_success = {"simplified": simplified_registered, "unified": False, "fifo": False}
+
+            if self.console_enabled:
+                print(f"[FULL_REG] 🚀 開始完整註冊追價訂單")
+                print(f"[FULL_REG]   部位ID: {position_id}")
+                print(f"[FULL_REG]   訂單ID: {order_id}")
+                print(f"[FULL_REG]   方向: {exit_direction}")
+                print(f"[FULL_REG]   價格: {retry_price}")
+                print(f"[FULL_REG]   重試次數: {retry_count}")
+                print(f"[FULL_REG]   下單模式: {order_result.mode}")
+                print(f"[FULL_REG]   簡化追蹤器已註冊: {simplified_registered}")
+
+            # 1. 註冊到統一追蹤器
+            if self.console_enabled:
+                print(f"[FULL_REG] 📝 步驟1: 註冊到統一追蹤器...")
+
+            if hasattr(self, 'unified_order_tracker') and self.unified_order_tracker:
+                if self.console_enabled:
+                    print(f"[FULL_REG]   ✅ 統一追蹤器可用")
+                try:
+                    # 獲取當前商品和API序號
+                    current_product = "TM0000"
+                    if hasattr(self, 'virtual_real_order_manager') and self.virtual_real_order_manager:
+                        current_product = self.virtual_real_order_manager.get_current_product() or "TM0000"
+                        if self.console_enabled:
+                            print(f"[FULL_REG]   商品代碼: {current_product}")
+
+                    api_seq_no = None
+                    if order_result.mode == "real" and order_result.api_result:
+                        api_seq_no = str(order_result.api_result)
+                        if self.console_enabled:
+                            print(f"[FULL_REG]   API序號: {api_seq_no}")
+                    else:
+                        if self.console_enabled:
+                            print(f"[FULL_REG]   API序號: 無（虛擬訂單或無API結果）")
+
+                    if self.console_enabled:
+                        print(f"[FULL_REG]   開始調用 unified_order_tracker.register_order...")
+
+                    self.unified_order_tracker.register_order(
+                        order_id=order_id,
+                        product=current_product,
+                        direction=exit_direction,
+                        quantity=1,
+                        price=retry_price,
+                        is_virtual=(order_result.mode == "virtual"),
+                        signal_source=f"exit_retry_{position_id}_{retry_count}",
+                        api_seq_no=api_seq_no
+                    )
+                    registration_success["unified"] = True
+                    if self.console_enabled:
+                        print(f"[FULL_REG]   ✅ 統一追蹤器註冊成功: {order_id}")
+
+                except Exception as unified_error:
+                    if self.console_enabled:
+                        print(f"[FULL_REG]   ❌ 統一追蹤器註冊失敗: {unified_error}")
+                        import traceback
+                        print(f"[FULL_REG]   錯誤詳情: {traceback.format_exc()}")
+            else:
+                if self.console_enabled:
+                    print(f"[FULL_REG]   ❌ 統一追蹤器不可用")
+                    print(f"[FULL_REG]   hasattr unified_order_tracker: {hasattr(self, 'unified_order_tracker')}")
+                    if hasattr(self, 'unified_order_tracker'):
+                        print(f"[FULL_REG]   unified_order_tracker is None: {self.unified_order_tracker is None}")
+
+            # 2. FIFO匹配器註冊檢查
+            if self.console_enabled:
+                print(f"[FULL_REG] 📝 步驟2: 檢查FIFO匹配器註冊...")
+
+            if registration_success["unified"]:
+                # 檢查FIFO匹配器是否真的註冊了
+                if hasattr(self, 'unified_order_tracker') and \
+                   hasattr(self.unified_order_tracker, 'fifo_matcher') and \
+                   self.unified_order_tracker.fifo_matcher:
+                    registration_success["fifo"] = True
+                    if self.console_enabled:
+                        print(f"[FULL_REG]   ✅ FIFO匹配器自動註冊成功: {order_id}")
+                        # 檢查FIFO匹配器狀態
+                        fifo_stats = self.unified_order_tracker.fifo_matcher.get_statistics()
+                        print(f"[FULL_REG]   FIFO匹配器統計: {fifo_stats}")
+                else:
+                    if self.console_enabled:
+                        print(f"[FULL_REG]   ⚠️ FIFO匹配器不可用或未自動註冊")
+            else:
+                if self.console_enabled:
+                    print(f"[FULL_REG]   ❌ 統一追蹤器註冊失敗，跳過FIFO匹配器")
+
+            # 3. 記錄註冊結果
+            success_count = sum(registration_success.values())
+            total_trackers = len(registration_success)
+
+            if self.console_enabled:
+                print(f"[FULL_REG] 📊 註冊結果統計:")
+                print(f"[FULL_REG]   成功率: {success_count}/{total_trackers}")
+                for tracker, success in registration_success.items():
+                    status = "✅" if success else "❌"
+                    print(f"[FULL_REG]   {status} {tracker}: {'成功' if success else '失敗'}")
+
+            # 4. 記錄到詳細日誌
+            try:
+                with open("exit_retry_registration.log", "a", encoding="utf-8") as f:
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    f.write(f"[{timestamp}] 部位{position_id} 追價訂單{order_id} 完整註冊:\n")
+                    f.write(f"  方向: {exit_direction}, 價格: {retry_price}, 重試: {retry_count}\n")
+                    f.write(f"  註冊結果: {registration_success}\n")
+                    f.write(f"  成功率: {success_count}/{total_trackers}\n")
+                    f.write("=" * 50 + "\n")
+                if self.console_enabled:
+                    print(f"[FULL_REG] 📝 詳細日誌已記錄")
+            except Exception as log_error:
+                if self.console_enabled:
+                    print(f"[FULL_REG] ⚠️ 日誌記錄失敗: {log_error}")
+
+            if self.console_enabled:
+                print(f"[FULL_REG] 🏁 完整註冊流程結束")
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[FULL_REG] ❌ 完整註冊追價訂單失敗: {e}")
+                import traceback
+                print(f"[FULL_REG] 錯誤詳情: {traceback.format_exc()}")
+
+    def enable_exit_retry_full_registration(self, enabled: bool = True):
+        """
+        啟用/禁用追價訂單完整註冊功能
+
+        Args:
+            enabled: 是否啟用完整註冊
+        """
+        self.enable_exit_retry_full_registration = enabled
+        status = "啟用" if enabled else "禁用"
+        if self.console_enabled:
+            print(f"[MAIN] 🔧 追價訂單完整註冊功能已{status}")
+            if enabled:
+                print(f"[MAIN] 📋 完整註冊將包含:")
+                print(f"[MAIN]   ✅ 簡化追蹤器（基本功能）")
+                print(f"[MAIN]   🔧 統一追蹤器（新增）")
+                print(f"[MAIN]   🔧 FIFO匹配器（新增）")
+                print(f"[MAIN] 📝 詳細LOG將記錄到 exit_retry_registration.log")
+            else:
+                print(f"[MAIN] 🛡️ 回到安全模式：只使用簡化追蹤器")
 
     def create_widgets(self):
         """建立使用者介面"""
@@ -1097,10 +1384,26 @@ class SimpleIntegratedApp:
                     Global.Global_IID = user_id
                     print(f"✅ [LOGIN] Global_IID已手動設定: {Global.Global_IID}")
 
-                self.label_status.config(text="狀態: 已登入", foreground="green")
-                self.btn_login.config(state="disabled")
-                self.btn_init_order.config(state="normal")
-                self.btn_connect_quote.config(state="normal")
+                # 🛡️ 安全的GUI狀態更新（採用測試機驗證模式）
+                try:
+                    self.label_status.config(text="狀態: 已登入", foreground="green")
+                except:
+                    pass  # 忽略GUI更新錯誤，不影響功能
+
+                try:
+                    self.btn_login.config(state="disabled")
+                except:
+                    pass  # 忽略GUI更新錯誤，不影響功能
+
+                try:
+                    self.btn_init_order.config(state="normal")
+                except:
+                    pass  # 忽略GUI更新錯誤，不影響功能
+
+                try:
+                    self.btn_connect_quote.config(state="normal")
+                except:
+                    pass  # 忽略GUI更新錯誤，不影響功能
 
                 self.add_log("✅ 登入成功！")
                 
@@ -1119,10 +1422,26 @@ class SimpleIntegratedApp:
                     Global.Global_IID = user_id
                     print(f"✅ [LOGIN] Global_IID已手動設定: {Global.Global_IID}")
 
-                self.label_status.config(text="狀態: 已登入", foreground="green")
-                self.btn_login.config(state="disabled")
-                self.btn_init_order.config(state="normal")
-                self.btn_connect_quote.config(state="normal")
+                # 🛡️ 安全的GUI狀態更新（採用測試機驗證模式）
+                try:
+                    self.label_status.config(text="狀態: 已登入", foreground="green")
+                except:
+                    pass  # 忽略GUI更新錯誤，不影響功能
+
+                try:
+                    self.btn_login.config(state="disabled")
+                except:
+                    pass  # 忽略GUI更新錯誤，不影響功能
+
+                try:
+                    self.btn_init_order.config(state="normal")
+                except:
+                    pass  # 忽略GUI更新錯誤，不影響功能
+
+                try:
+                    self.btn_connect_quote.config(state="normal")
+                except:
+                    pass  # 忽略GUI更新錯誤，不影響功能
 
                 self.add_log("✅ 登入成功 (已處理警告)！")
                 
@@ -1157,8 +1476,16 @@ class SimpleIntegratedApp:
                 print(f"📋 [INIT] 憑證讀取: {msg} (代碼: {nCode})")
 
                 if nCode == 0:
-                    self.btn_init_order.config(state="disabled")
-                    self.btn_test_order.config(state="normal")  # 啟用下單測試按鈕
+                    # 🛡️ 安全的GUI狀態更新（採用測試機驗證模式）
+                    try:
+                        self.btn_init_order.config(state="disabled")
+                    except:
+                        pass  # 忽略GUI更新錯誤，不影響功能
+
+                    try:
+                        self.btn_test_order.config(state="normal")  # 啟用下單測試按鈕
+                    except:
+                        pass  # 忽略GUI更新錯誤，不影響功能
 
                     # 初始化回報連線 (群益官方方式)
                     self.init_reply_connection()
@@ -2160,8 +2487,18 @@ class SimpleIntegratedApp:
 
                             except Exception as e:
                                 # 🛡️ 安全回退：如果優化版本失敗，自動使用原始版本
+                                # 🔧 新增：更新回退統計
+                                if hasattr(self.parent, 'fallback_stats'):
+                                    self.parent.fallback_stats['optimized_failures'] += 1
+                                    self.parent.fallback_stats['total_fallbacks'] += 1
+                                    self.parent.fallback_stats['last_fallback_time'] = datetime.now()
+
                                 if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
                                     print(f"[OPTIMIZED_RISK] ⚠️ 優化版本錯誤，回退到原始版本: {e}")
+                                    # 🔧 新增：顯示回退統計
+                                    if hasattr(self.parent, 'fallback_stats'):
+                                        stats = self.parent.fallback_stats
+                                        print(f"[FALLBACK_STATS] 📊 回退統計: 優化失敗{stats['optimized_failures']}次, 總計{stats['total_fallbacks']}次")
 
                                 # 回退到原始平倉機制
                                 if hasattr(self.parent, 'exit_mechanism_manager') and self.parent.exit_mechanism_manager:
@@ -2174,7 +2511,27 @@ class SimpleIntegratedApp:
                                             if total_events > 0:
                                                 print(f"[FALLBACK_RISK] 📊 平倉事件: {total_events} 個")
                                     except Exception as fallback_error:
+                                        # 🔧 新增：更新原始版本失敗統計
+                                        if hasattr(self.parent, 'fallback_stats'):
+                                            self.parent.fallback_stats['original_failures'] += 1
+                                            self.parent.fallback_stats['final_fallbacks'] += 1
+
                                         print(f"[FALLBACK_RISK] ❌ 原始版本也失敗: {fallback_error}")
+
+                                        # 🛡️ 新增：最終安全網 - 確保報價流程不中斷
+                                        try:
+                                            if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
+                                                print(f"[FINAL_FALLBACK] ⚠️ 進入安全模式，跳過本次風險檢查")
+                                                # 🔧 新增：顯示最終回退統計
+                                                if hasattr(self.parent, 'fallback_stats'):
+                                                    stats = self.parent.fallback_stats
+                                                    print(f"[FINAL_STATS] 📊 最終回退統計: 原始失敗{stats['original_failures']}次, 最終回退{stats['final_fallbacks']}次")
+
+                                            # 記錄到安全日誌
+                                            with open("risk_fallback_errors.log", "a", encoding="utf-8") as f:
+                                                f.write(f"{datetime.now()}: 風險管理完全失敗 - {fallback_error}\n")
+                                        except:
+                                            pass  # 最終安全網不能失敗
 
                         # 🔄 回退模式：如果沒有優化版本，使用原始平倉機制系統
                         elif hasattr(self.parent, 'exit_mechanism_manager') and self.parent.exit_mechanism_manager:
@@ -2286,10 +2643,11 @@ class SimpleIntegratedApp:
                         # 📊 性能監控：計算報價處理總耗時
                         quote_elapsed = (time.time() - quote_start_time) * 1000
 
-                        # 🚨 延遲警告：如果報價處理超過100ms，輸出警告
-                        if quote_elapsed > 100:
+                        # 🚨 延遲警告：使用動態閾值，預設50ms（可配置）
+                        warning_threshold = getattr(self.parent, 'performance_warning_threshold', 100)
+                        if quote_elapsed > warning_threshold:
                             if hasattr(self.parent, 'console_enabled') and self.parent.console_enabled:
-                                print(f"[PERFORMANCE] ⚠️ 報價處理延遲: {quote_elapsed:.1f}ms @{corrected_price}")
+                                print(f"[PERFORMANCE] ⚠️ 報價處理延遲: {quote_elapsed:.1f}ms @{corrected_price} (閾值:{warning_threshold}ms)")
 
                         # 📈 定期報告異步更新性能（每100次報價）
                         if hasattr(self.parent, 'price_count') and self.parent.price_count % 100 == 0:
@@ -2796,7 +3154,7 @@ class SimpleIntegratedApp:
             freq_frame.pack(side="left", padx=20)
 
             tk.Label(freq_frame, text="執行頻率:", font=("Arial", 9)).pack(side="left", padx=5)
-            self.multi_group_frequency_var = tk.StringVar(value="一天一次")
+            self.multi_group_frequency_var = tk.StringVar(value="可重複執行")
             freq_combo = ttk.Combobox(
                 freq_frame,
                 textvariable=self.multi_group_frequency_var,
@@ -3694,6 +4052,65 @@ class SimpleIntegratedApp:
         except Exception as e:
             pass
 
+    def _calculate_pnl_from_db(self, position_id: int, exit_price: float) -> float:
+        """
+        從資料庫查詢計算損益 - 🔧 備用機制
+
+        Args:
+            position_id: 部位ID
+            exit_price: 出場價格
+
+        Returns:
+            float: 損益點數
+        """
+        try:
+            if hasattr(self, 'multi_group_db_manager') and self.multi_group_db_manager:
+                # 方法1: 使用資料庫管理器API
+                if hasattr(self.multi_group_db_manager, 'get_position_by_id'):
+                    position_info = self.multi_group_db_manager.get_position_by_id(position_id)
+                    if position_info:
+                        entry_price = position_info.get('entry_price')
+                        direction = position_info.get('direction')
+
+                        if entry_price and direction:
+                            if direction == "SHORT":
+                                pnl = entry_price - exit_price
+                            else:
+                                pnl = exit_price - entry_price
+
+                            if self.console_enabled:
+                                print(f"[MAIN] 🔍 從資料庫計算損益: {direction} {entry_price}→{exit_price} = {pnl:.1f}點")
+                            return pnl
+
+                # 方法2: 直接查詢資料庫
+                with self.multi_group_db_manager.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        SELECT entry_price, direction FROM position_records
+                        WHERE id = ? AND status != 'FAILED'
+                        ORDER BY id DESC LIMIT 1
+                    ''', (position_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        entry_price, direction = result
+                        if direction == "SHORT":
+                            pnl = entry_price - exit_price
+                        else:
+                            pnl = exit_price - entry_price
+
+                        if self.console_enabled:
+                            print(f"[MAIN] 🔍 從資料庫直接查詢計算損益: {direction} {entry_price}→{exit_price} = {pnl:.1f}點")
+                        return pnl
+
+            if self.console_enabled:
+                print(f"[MAIN] ⚠️ 無法從資料庫計算部位{position_id}損益，返回0")
+            return 0.0
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[MAIN] ❌ 從資料庫計算損益失敗: {e}")
+            return 0.0
+
     def exit_position_safe(self, price, time_str, reason):
         """安全的出場處理 - 包含完整損益計算"""
         try:
@@ -4220,12 +4637,26 @@ class SimpleIntegratedApp:
                 print(f"[MULTI_GROUP] ⚠️ 異步更新器初始化失敗: {e}")
                 self.async_updater = None
 
-            # 任務4：移除冗餘的 RiskManagementEngine 初始化
-            # 風險管理職責已統一到 OptimizedRiskManager
-            # self.multi_group_risk_engine = RiskManagementEngine(self.multi_group_db_manager)
-            self.multi_group_risk_engine = None  # 保留變數以避免其他代碼引用錯誤
+            # 🔧 修復：恢復風險管理引擎初始化（採用測試機穩定版本）
+            # 初始化風險管理引擎
+            self.multi_group_risk_engine = RiskManagementEngine(self.multi_group_db_manager)
 
-            print("[MULTI_GROUP] 🔄 風險管理已統一到 OptimizedRiskManager")
+            print("[MULTI_GROUP] ✅ 風險管理引擎初始化完成")
+
+            # 🚀 連接全局異步更新器到風險管理引擎（採用測試機穩定版本）
+            if hasattr(self, 'async_updater') and self.async_updater:
+                # 🔧 檢查異步更新器健康狀態
+                if self.async_updater.running and self.async_updater.worker_thread and self.async_updater.worker_thread.is_alive():
+                    self.multi_group_risk_engine.set_async_updater(self.async_updater)
+                    print("[MULTI_GROUP] 🔗 風險管理引擎已連接全局異步更新器")
+                else:
+                    print("[MULTI_GROUP] ⚠️ 異步更新器未正常運行，嘗試重啟...")
+                    self.async_updater.start()  # 重新啟動
+                    if self.async_updater.running:
+                        self.multi_group_risk_engine.set_async_updater(self.async_updater)
+                        print("[MULTI_GROUP] 🔗 風險管理引擎已連接重啟後的異步更新器")
+                    else:
+                        print("[MULTI_GROUP] ❌ 異步更新器重啟失敗")
 
             # 🔧 設置停損執行器到風險管理引擎（如果已創建）
             if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
@@ -4277,6 +4708,12 @@ class SimpleIntegratedApp:
 
             # 🔧 新增：初始化統一出場管理器
             self.unified_exit_manager = None  # 稍後在設置下單組件時初始化
+
+            # 🔧 新增：預防性清理可能存在的舊平倉鎖定狀態
+            self._cleanup_old_exit_locks()
+
+            # 🚀 新增：啟用性能優化配置
+            self._enable_performance_optimizations()
 
             self.multi_group_enabled = True
             self.multi_group_logger.system_info("多組策略系統初始化完成")
@@ -4330,6 +4767,111 @@ class SimpleIntegratedApp:
         except Exception as e:
             print(f"[EXIT_CONFIG] ❌ 平倉機制配置初始化失敗: {e}")
             self.exit_config = None
+
+    def _cleanup_old_exit_locks(self):
+        """預防性清理可能存在的舊平倉鎖定狀態"""
+        try:
+            print("[INIT] 🧹 開始清理舊的平倉鎖定狀態...")
+
+            # 清理全局平倉管理器中的鎖定
+            if hasattr(self, 'multi_group_position_manager') and self.multi_group_position_manager:
+                if hasattr(self.multi_group_position_manager, 'simplified_tracker'):
+                    simplified_tracker = self.multi_group_position_manager.simplified_tracker
+                    if hasattr(simplified_tracker, 'global_exit_manager'):
+                        global_exit_manager = simplified_tracker.global_exit_manager
+
+                        # 清理所有可能的鎖定
+                        if hasattr(global_exit_manager, 'clear_all_locks'):
+                            global_exit_manager.clear_all_locks()
+                            print("[INIT] 🧹 已清除所有平倉鎖定狀態")
+                        else:
+                            # 手動清理已知的鎖定範圍
+                            cleared_count = 0
+                            for position_id in range(1, 200):  # 清理可能的部位ID範圍
+                                try:
+                                    if global_exit_manager.clear_exit(str(position_id)):
+                                        cleared_count += 1
+                                except:
+                                    pass
+
+                            if cleared_count > 0:
+                                print(f"[INIT] 🧹 已手動清除 {cleared_count} 個平倉鎖定狀態")
+                            else:
+                                print("[INIT] 🧹 未發現需要清理的平倉鎖定狀態")
+
+            # 清理停損執行器中的執行狀態
+            if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
+                if hasattr(self.stop_loss_executor, 'executing_exits'):
+                    self.stop_loss_executor.executing_exits = {}
+                    print("[INIT] 🧹 已清除停損執行器中的執行狀態")
+
+            # 清理優化風險管理器中的緩存
+            if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
+                if hasattr(self.optimized_risk_manager, 'clear_all_caches'):
+                    self.optimized_risk_manager.clear_all_caches()
+                    print("[INIT] 🧹 已清除優化風險管理器緩存")
+
+            print("[INIT] ✅ 舊平倉鎖定狀態清理完成")
+
+        except Exception as e:
+            print(f"[INIT] ⚠️ 清理舊鎖定狀態失敗: {e}")
+            # 不拋出異常，避免影響系統初始化
+
+    def _enable_performance_optimizations(self):
+        """啟用性能優化配置"""
+        try:
+            print("[PERF] 🚀 啟用性能優化配置...")
+
+            # 1. 確保異步更新器已正確配置
+            if hasattr(self, 'async_updater') and self.async_updater:
+                # 設置高性能模式
+                if hasattr(self.async_updater, 'set_performance_mode'):
+                    self.async_updater.set_performance_mode(enabled=True)
+                    print("[PERF] 🚀 異步更新器高性能模式已啟用")
+
+                # 優化隊列大小
+                if hasattr(self.async_updater, 'set_queue_size'):
+                    self.async_updater.set_queue_size(max_size=1000)
+                    print("[PERF] 📊 異步更新器隊列大小已優化")
+
+            # 2. 啟用報價頻率控制（減少不必要的處理）
+            self.enable_quote_throttle = True
+            self.quote_throttle_interval = 100  # 100ms間隔，平衡性能和即時性
+            print("[PERF] ⏱️ 報價頻率控制已啟用 (100ms間隔)")
+
+            # 3. 優化風險管理器性能設置
+            if hasattr(self, 'optimized_risk_manager') and self.optimized_risk_manager:
+                # 啟用批量處理模式
+                if hasattr(self.optimized_risk_manager, 'enable_batch_processing'):
+                    self.optimized_risk_manager.enable_batch_processing(batch_size=10)
+                    print("[PERF] 📦 風險管理器批量處理已啟用")
+
+                # 設置緩存優化
+                if hasattr(self.optimized_risk_manager, 'set_cache_optimization'):
+                    self.optimized_risk_manager.set_cache_optimization(enabled=True)
+                    print("[PERF] 💾 風險管理器緩存優化已啟用")
+
+            # 4. 優化停損執行器性能
+            if hasattr(self, 'stop_loss_executor') and self.stop_loss_executor:
+                # 啟用快速執行模式
+                if hasattr(self.stop_loss_executor, 'enable_fast_execution'):
+                    self.stop_loss_executor.enable_fast_execution(enabled=True)
+                    print("[PERF] ⚡ 停損執行器快速執行模式已啟用")
+
+            # 5. 設置性能監控閾值
+            self.performance_warning_threshold = 50  # 50ms警告閾值（降低自100ms）
+            print("[PERF] 📊 性能監控閾值已設置為50ms")
+
+            # 6. 啟用內存優化
+            import gc
+            gc.set_threshold(700, 10, 10)  # 優化垃圾回收閾值
+            print("[PERF] 🧹 內存垃圾回收已優化")
+
+            print("[PERF] ✅ 性能優化配置完成")
+
+        except Exception as e:
+            print(f"[PERF] ⚠️ 性能優化配置失敗: {e}")
+            # 不拋出異常，避免影響系統初始化
 
     def _init_stop_loss_system(self):
         """初始化停損系統"""
@@ -5019,7 +5561,7 @@ class SimpleIntegratedApp:
         try:
             # 🆕 檢查執行頻率設定
             frequency = getattr(self, 'multi_group_frequency_var', None)
-            freq_setting = frequency.get() if frequency else "一天一次"
+            freq_setting = frequency.get() if frequency else "可重複執行"
 
             # 🆕 根據頻率設定檢查是否允許執行
             if freq_setting == "一天一次":

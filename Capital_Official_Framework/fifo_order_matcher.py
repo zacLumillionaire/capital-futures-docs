@@ -32,24 +32,31 @@ class FIFOOrderMatcher:
     def __init__(self, console_enabled: bool = True):
         self.console_enabled = console_enabled
         self.logger = logging.getLogger(self.__class__.__name__)
-        
+
         # FIFO訂單隊列 - 按時間排序
         self.pending_orders: List[OrderInfo] = []
-        
+
         # 線程安全鎖
         self.data_lock = threading.Lock()
-        
+
         # 匹配參數
         self.price_tolerance = 10.0  # ±10點價格容差（擴大以適應滑價）
         self.time_window = 30.0     # 30秒時間窗口
-        
+
+        # 🔧 新增：FIFO模式開關
+        self.pure_fifo_mode = True   # 預設開啟純FIFO模式（不比對價格）
+        self.fallback_to_pure_fifo = True  # 價格匹配失敗時啟用純FIFO
+
         # 統計數據
         self.total_registered = 0
         self.total_matched = 0
         self.total_expired = 0
-        
+        self.price_matched = 0      # 價格匹配成功次數
+        self.pure_fifo_matched = 0  # 純FIFO匹配成功次數
+
         if self.console_enabled:
-            print("[FIFO_MATCHER] 純FIFO匹配器已初始化")
+            mode_desc = "純FIFO模式" if self.pure_fifo_mode else "價格匹配模式"
+            print(f"[FIFO_MATCHER] FIFO匹配器已初始化 ({mode_desc})")
     
     def add_pending_order(self, order_info: OrderInfo) -> bool:
         """
@@ -93,7 +100,7 @@ class FIFOOrderMatcher:
     
     def find_match(self, price: float, qty: int, product: str, order_type: str = "D") -> Optional[OrderInfo]:
         """
-        FIFO匹配邏輯 - 核心方法
+        FIFO匹配邏輯 - 核心方法（支援純FIFO模式開關）
 
         Args:
             price: 回報價格
@@ -116,42 +123,134 @@ class FIFOOrderMatcher:
                 if order_type == "C":
                     return self._find_cancel_match(normalized_product, current_time)
 
-                # FIFO搜索：從最早的訂單開始
-                for i, order_info in enumerate(self.pending_orders):
-                    # 檢查時間窗口
-                    if current_time - order_info.submit_time > self.time_window:
-                        continue
+                # 🔧 根據模式選擇匹配邏輯
+                if self.pure_fifo_mode:
+                    # 純FIFO模式：不比對價格，只依時間順序
+                    return self._find_pure_fifo_match(price, qty, normalized_product, current_time)
+                else:
+                    # 價格匹配模式：原有邏輯
+                    result = self._find_price_match(price, qty, normalized_product, current_time)
 
-                    # 檢查商品匹配
-                    if self._normalize_product(order_info.product) != normalized_product:
-                        continue
-
-                    # 檢查數量匹配
-                    if order_info.quantity != qty:
-                        continue
-
-                    # 檢查價格匹配（±5點容差）
-                    if abs(order_info.price - price) <= self.price_tolerance:
-                        # 找到匹配，移除並返回
-                        matched_order = self.pending_orders.pop(i)
-                        matched_order.status = "MATCHED"
-                        self.total_matched += 1
-
+                    # 如果價格匹配失敗且啟用回退，則嘗試純FIFO
+                    if not result and self.fallback_to_pure_fifo:
                         if self.console_enabled:
-                            print(f"[FIFO_MATCHER] ✅ FIFO匹配成功: {product} {qty}口 @{price} "
-                                  f"→ 訂單{matched_order.order_id}")
+                            print(f"[FIFO_MATCHER] 🔄 價格匹配失敗，嘗試純FIFO匹配...")
+                        result = self._find_pure_fifo_match(price, qty, normalized_product, current_time)
+                        if result:
+                            self.pure_fifo_matched += 1
+                    else:
+                        self.price_matched += 1
 
-                        return matched_order
-
-                # 沒有找到匹配
-                if self.console_enabled:
-                    print(f"[FIFO_MATCHER] ⚠️ 找不到匹配: {product} {qty}口 @{price}")
-
-                return None
+                    return result
 
         except Exception as e:
             if self.console_enabled:
                 print(f"[FIFO_MATCHER] ❌ 匹配失敗: {e}")
+            return None
+
+    def _find_pure_fifo_match(self, price: float, qty: int, normalized_product: str, current_time: float) -> Optional[OrderInfo]:
+        """
+        純FIFO匹配邏輯 - 不比對價格，只依時間順序匹配最早的訂單
+
+        Args:
+            price: 回報價格
+            qty: 回報數量
+            normalized_product: 標準化商品代碼
+            current_time: 當前時間
+
+        Returns:
+            Optional[OrderInfo]: 匹配的訂單，None表示無匹配
+        """
+        try:
+            # FIFO搜索：從最早的訂單開始
+            for i, order_info in enumerate(self.pending_orders):
+                # 檢查時間窗口
+                if current_time - order_info.submit_time > self.time_window:
+                    continue
+
+                # 檢查商品匹配
+                if self._normalize_product(order_info.product) != normalized_product:
+                    continue
+
+                # 檢查數量匹配
+                if order_info.quantity != qty:
+                    continue
+
+                # 🔧 純FIFO：不檢查價格，直接匹配最早的訂單
+                matched_order = self.pending_orders.pop(i)
+                matched_order.status = "MATCHED"
+                self.total_matched += 1
+                self.pure_fifo_matched += 1
+
+                price_diff = abs(matched_order.price - price)
+                if self.console_enabled:
+                    print(f"[FIFO_MATCHER] ✅ 純FIFO匹配成功: {normalized_product} {qty}口 @{price} "
+                          f"→ 訂單{matched_order.order_id} (價差:{price_diff:.1f}點)")
+
+                return matched_order
+
+            # 沒有找到匹配
+            if self.console_enabled:
+                print(f"[FIFO_MATCHER] ⚠️ 純FIFO找不到匹配: {normalized_product} {qty}口 @{price}")
+
+            return None
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[FIFO_MATCHER] ❌ 純FIFO匹配失敗: {e}")
+            return None
+
+    def _find_price_match(self, price: float, qty: int, normalized_product: str, current_time: float) -> Optional[OrderInfo]:
+        """
+        價格匹配邏輯 - 原有的價格容差匹配
+
+        Args:
+            price: 回報價格
+            qty: 回報數量
+            normalized_product: 標準化商品代碼
+            current_time: 當前時間
+
+        Returns:
+            Optional[OrderInfo]: 匹配的訂單，None表示無匹配
+        """
+        try:
+            # FIFO搜索：從最早的訂單開始
+            for i, order_info in enumerate(self.pending_orders):
+                # 檢查時間窗口
+                if current_time - order_info.submit_time > self.time_window:
+                    continue
+
+                # 檢查商品匹配
+                if self._normalize_product(order_info.product) != normalized_product:
+                    continue
+
+                # 檢查數量匹配
+                if order_info.quantity != qty:
+                    continue
+
+                # 檢查價格匹配（±容差）
+                if abs(order_info.price - price) <= self.price_tolerance:
+                    # 找到匹配，移除並返回
+                    matched_order = self.pending_orders.pop(i)
+                    matched_order.status = "MATCHED"
+                    self.total_matched += 1
+                    self.price_matched += 1
+
+                    if self.console_enabled:
+                        print(f"[FIFO_MATCHER] ✅ 價格匹配成功: {normalized_product} {qty}口 @{price} "
+                              f"→ 訂單{matched_order.order_id}")
+
+                    return matched_order
+
+            # 沒有找到匹配
+            if self.console_enabled:
+                print(f"[FIFO_MATCHER] ⚠️ 價格匹配找不到匹配: {normalized_product} {qty}口 @{price}")
+
+            return None
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[FIFO_MATCHER] ❌ 價格匹配失敗: {e}")
             return None
 
     def _find_cancel_match(self, normalized_product: str, current_time: float) -> Optional[OrderInfo]:
@@ -245,8 +344,48 @@ class FIFOOrderMatcher:
                 'total_registered': self.total_registered,
                 'total_matched': self.total_matched,
                 'total_expired': self.total_expired,
-                'pending_count': len(self.pending_orders)
+                'pending_count': len(self.pending_orders),
+                'price_matched': getattr(self, 'price_matched', 0),
+                'pure_fifo_matched': getattr(self, 'pure_fifo_matched', 0),
+                'current_mode': "純FIFO模式" if self.pure_fifo_mode else "價格匹配模式"
             }
+
+    def set_pure_fifo_mode(self, enabled: bool):
+        """設定純FIFO模式開關"""
+        self.pure_fifo_mode = enabled
+        mode_desc = "純FIFO模式" if enabled else "價格匹配模式"
+        if self.console_enabled:
+            print(f"[FIFO_MATCHER] 🔧 切換到{mode_desc}")
+
+    def get_matching_statistics(self) -> dict:
+        """獲取詳細匹配統計資訊"""
+        with self.data_lock:
+            return {
+                "total_registered": self.total_registered,
+                "total_matched": self.total_matched,
+                "price_matched": getattr(self, 'price_matched', 0),
+                "pure_fifo_matched": getattr(self, 'pure_fifo_matched', 0),
+                "total_expired": self.total_expired,
+                "current_mode": "純FIFO模式" if self.pure_fifo_mode else "價格匹配模式",
+                "pending_orders": len(self.pending_orders)
+            }
+
+    def print_statistics(self):
+        """列印匹配統計資訊"""
+        stats = self.get_matching_statistics()
+        if self.console_enabled:
+            print(f"\n[FIFO_MATCHER] 📊 匹配統計:")
+            print(f"  當前模式: {stats['current_mode']}")
+            print(f"  已註冊訂單: {stats['total_registered']}")
+            print(f"  總匹配成功: {stats['total_matched']}")
+            print(f"  價格匹配: {stats['price_matched']}")
+            print(f"  純FIFO匹配: {stats['pure_fifo_matched']}")
+            print(f"  過期清理: {stats['total_expired']}")
+            print(f"  待匹配訂單: {stats['pending_orders']}")
+
+            if stats['total_matched'] > 0:
+                pure_fifo_rate = (stats['pure_fifo_matched'] / stats['total_matched']) * 100
+                print(f"  純FIFO匹配率: {pure_fifo_rate:.1f}%")
     
     def clear_all_orders(self):
         """清空所有待匹配訂單"""

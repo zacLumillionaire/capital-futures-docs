@@ -447,8 +447,7 @@ class StopLossExecutor:
                     direction=trigger_info.direction,
                     exit_direction=exit_direction_for_group,
                     target_price=trigger_info.current_price,
-                    product="TM0000",
-                    entry_price=trigger_info.entry_price  # 🔧 修復：傳遞進場價格
+                    product="TM0000"
                 )
 
                 if self.console_enabled:
@@ -1404,16 +1403,13 @@ class StopLossExecutor:
 
             # 🔧 修復：註冊移動停利平倉組到口級別追蹤系統
             if self.simplified_tracker:
-                # 🔧 修復：從觸發信息獲取進場價格
-                entry_price = trigger_info.get('entry_price')
                 self.simplified_tracker.register_exit_group(
                     position_id=position_id,
                     total_lots=1,  # 移動停利通常是1口
                     direction=direction,
                     exit_direction=exit_direction,
                     target_price=exit_price,
-                    product="TM0000",
-                    entry_price=entry_price  # 🔧 修復：傳遞進場價格
+                    product="TM0000"
                 )
 
                 if self.console_enabled:

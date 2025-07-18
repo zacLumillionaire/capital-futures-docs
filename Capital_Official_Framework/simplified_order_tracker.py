@@ -79,6 +79,9 @@ class ExitGroup:
     target_price: float      # 目標平倉價格
     product: str             # 商品代碼
 
+    # 🔧 修復：添加缺少的進場價格屬性（參考測試機）
+    entry_price: float = None  # 原始進場價格，用於損益計算
+
     # 統計數據
     submitted_lots: int = 0   # 已送出平倉口數
     filled_lots: int = 0      # 已平倉口數
@@ -686,7 +689,7 @@ class SimplifiedOrderTracker:
 
     def register_exit_group(self, position_id: int, total_lots: int,
                            direction: str, exit_direction: str, target_price: float,
-                           product: str = "TM0000") -> bool:
+                           product: str = "TM0000", entry_price: float = None) -> bool:
         """
         註冊平倉組 - 🔧 修復：口級別平倉追價機制
 
@@ -697,6 +700,7 @@ class SimplifiedOrderTracker:
             exit_direction: 平倉方向 (SHORT/LONG)
             target_price: 目標平倉價格
             product: 商品代碼
+            entry_price: 原始進場價格（用於損益計算）
 
         Returns:
             bool: 註冊是否成功
@@ -711,6 +715,7 @@ class SimplifiedOrderTracker:
                     exit_direction=exit_direction,
                     target_price=target_price,
                     product=product,
+                    entry_price=entry_price,  # 🔧 修復：添加進場價格
                     # 🔧 新增：使用全局預設追價設定
                     enable_cancel_retry=self.default_enable_cancel_retry,
                     enable_partial_retry=self.default_enable_partial_retry
@@ -719,8 +724,9 @@ class SimplifiedOrderTracker:
                 self.exit_groups[position_id] = exit_group
 
                 if self.console_enabled:
+                    entry_info = f" (進場@{entry_price:.0f})" if entry_price else ""
                     print(f"[SIMPLIFIED_TRACKER] 📝 註冊平倉組: 部位{position_id} "
-                          f"{direction}→{exit_direction} {product} {total_lots}口 @{target_price:.0f}")
+                          f"{direction}→{exit_direction} {product} {total_lots}口 @{target_price:.0f}{entry_info}")
 
                 return True
 
@@ -1717,7 +1723,7 @@ class SimplifiedOrderTracker:
 
     def _find_matching_exit_order(self, price: float, qty: int, product: str, for_cancel=False):
         """
-        找到匹配的平倉訂單
+        找到匹配的平倉訂單 - 🔧 修復：改善FIFO匹配機制
 
         Args:
             price: 回報價格
@@ -1732,6 +1738,9 @@ class SimplifiedOrderTracker:
             normalized_product = self._normalize_product_code(product)
             current_time = time.time()
 
+            # 🔧 修復：收集所有候選訂單，按時間排序（FIFO）
+            candidates = []
+
             for order_id, exit_info in self.exit_orders.items():
                 # 檢查商品匹配
                 if self._normalize_product_code(exit_info['product']) != normalized_product:
@@ -1743,12 +1752,26 @@ class SimplifiedOrderTracker:
 
                 # 取消回報特殊處理
                 if for_cancel:
-                    return exit_info
+                    candidates.append((exit_info['submit_time'], order_id, exit_info))
+                    continue
 
                 # 成交回報：檢查價格和數量
                 if (exit_info['quantity'] == qty and
                     abs(exit_info['price'] - price) <= 10):  # ±10點容差
-                    return exit_info
+                    candidates.append((exit_info['submit_time'], order_id, exit_info))
+
+            # 🔧 修復：按FIFO順序返回最早的訂單
+            if candidates:
+                candidates.sort(key=lambda x: x[0])  # 按提交時間排序
+                earliest_order = candidates[0][2]
+
+                if self.console_enabled:
+                    print(f"[SIMPLIFIED_TRACKER] 🔍 FIFO匹配結果:")
+                    print(f"[SIMPLIFIED_TRACKER]   候選訂單: {len(candidates)}個")
+                    print(f"[SIMPLIFIED_TRACKER]   選中訂單: {candidates[0][1]} (最早提交)")
+                    print(f"[SIMPLIFIED_TRACKER]   部位ID: {earliest_order['position_id']}")
+
+                return earliest_order
 
             return None
 
@@ -1758,21 +1781,47 @@ class SimplifiedOrderTracker:
             return None
 
     def _trigger_exit_fill_callbacks(self, exit_order, price, qty):
-        """觸發平倉成交回調"""
+        """觸發平倉成交回調 - 🔧 修復：增強數據傳遞"""
         try:
+            position_id = exit_order['position_id']
+
+            # 🔧 修復：從平倉組獲取完整部位信息
+            exit_group = self.exit_groups.get(position_id)
+            if exit_group:
+                # 🔧 增強：構造包含完整信息的 exit_order
+                enhanced_exit_order = {
+                    **exit_order,
+                    'entry_price': exit_group.entry_price,      # ✅ 進場價格
+                    'original_direction': exit_group.direction, # ✅ 原始部位方向
+                    'exit_reason': getattr(exit_group, 'exit_reason', '平倉')  # ✅ 出場原因
+                }
+
+                if self.console_enabled:
+                    print(f"[SIMPLIFIED_TRACKER] 🔍 從平倉組獲取部位{position_id}信息:")
+                    print(f"[SIMPLIFIED_TRACKER]   進場價格: {exit_group.entry_price}")
+                    print(f"[SIMPLIFIED_TRACKER]   原始方向: {exit_group.direction}")
+            else:
+                # 🔧 備用：從資料庫查詢部位信息
+                enhanced_exit_order = self._enhance_exit_order_from_db(exit_order)
+
+                if self.console_enabled:
+                    print(f"[SIMPLIFIED_TRACKER] 🔍 從資料庫獲取部位{position_id}信息")
+
+            # 觸發回調
             for callback in self.exit_fill_callbacks:
-                callback(exit_order, price, qty)
+                callback(enhanced_exit_order, price, qty)
+
         except Exception as e:
             if self.console_enabled:
                 print(f"[SIMPLIFIED_TRACKER] ❌ 觸發平倉成交回調失敗: {e}")
 
     def _trigger_exit_retry_callbacks(self, exit_order):
-        """觸發平倉追價回調 - 🔧 修復：傳遞正確的參數"""
+        """觸發平倉追價回調 - 🔧 修復：傳遞正確的參數和原始部位方向"""
         try:
             position_id = exit_order['position_id']
 
             for callback in self.exit_retry_callbacks:
-                # 🔧 修復：從 exit_group 獲取正確的重試次數
+                # 🔧 修復：從 exit_group 獲取正確的重試次數和原始方向
                 exit_group = self.exit_groups.get(position_id)
                 if exit_group:
                     current_lot_index = exit_group.get_current_lot_index()
@@ -1782,10 +1831,21 @@ class SimplifiedOrderTracker:
                     else:
                         # 如果不是字典（例如舊數據），提供一個備用值
                         retry_count = 1
+
+                    # 🔧 關鍵修復：從平倉組獲取原始部位方向
+                    original_direction = exit_group.direction
                 else:
                     retry_count = 1  # 備用值
+                    # 🔧 備用機制：從資料庫查詢原始部位方向
+                    original_direction = self._get_position_direction_from_db(position_id)
 
-                callback(exit_order, retry_count)  # ✅ 正確：傳遞 (exit_order, retry_count)
+                # 🔧 修復：構造包含原始方向的完整 exit_order
+                enhanced_exit_order = {
+                    **exit_order,
+                    'original_direction': original_direction
+                }
+
+                callback(enhanced_exit_order, retry_count)  # ✅ 正確：傳遞包含原始方向的完整信息
 
             if self.console_enabled:
                 print(f"[SIMPLIFIED_TRACKER] 🔄 觸發平倉追價: 部位{position_id} 重試次數{retry_count}")
@@ -1793,6 +1853,112 @@ class SimplifiedOrderTracker:
         except Exception as e:
             if self.console_enabled:
                 print(f"[SIMPLIFIED_TRACKER] ❌ 觸發平倉追價失敗: {e}")
+
+    def _get_position_direction_from_db(self, position_id: int) -> str:
+        """
+        從資料庫獲取部位方向 - 🔧 備用機制
+
+        Args:
+            position_id: 部位ID
+
+        Returns:
+            str: 部位方向 (LONG/SHORT)，失敗返回 None
+        """
+        try:
+            # 嘗試從資料庫管理器獲取部位信息
+            if hasattr(self, 'db_manager') and self.db_manager:
+                # 方法1: 使用 get_position_by_id
+                if hasattr(self.db_manager, 'get_position_by_id'):
+                    position_info = self.db_manager.get_position_by_id(position_id)
+                    if position_info and 'direction' in position_info:
+                        direction = position_info['direction']
+                        if self.console_enabled:
+                            print(f"[SIMPLIFIED_TRACKER] 🔍 從資料庫獲取部位{position_id}方向: {direction}")
+                        return direction
+
+                # 方法2: 直接查詢資料庫
+                with self.db_manager.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        SELECT direction FROM position_records
+                        WHERE id = ? AND status != 'FAILED'
+                        ORDER BY id DESC LIMIT 1
+                    ''', (position_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        direction = result[0]
+                        if self.console_enabled:
+                            print(f"[SIMPLIFIED_TRACKER] 🔍 從資料庫直接查詢部位{position_id}方向: {direction}")
+                        return direction
+
+            if self.console_enabled:
+                print(f"[SIMPLIFIED_TRACKER] ⚠️ 無法從資料庫獲取部位{position_id}方向")
+            return None
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[SIMPLIFIED_TRACKER] ❌ 查詢部位{position_id}方向失敗: {e}")
+            return None
+
+    def _enhance_exit_order_from_db(self, exit_order: dict) -> dict:
+        """
+        從資料庫增強平倉訂單信息 - 🔧 備用機制
+
+        Args:
+            exit_order: 基本平倉訂單信息
+
+        Returns:
+            dict: 增強後的平倉訂單信息
+        """
+        try:
+            position_id = exit_order['position_id']
+            enhanced_order = exit_order.copy()
+
+            # 嘗試從資料庫獲取完整部位信息
+            if hasattr(self, 'db_manager') and self.db_manager:
+                # 方法1: 使用 get_position_by_id
+                if hasattr(self.db_manager, 'get_position_by_id'):
+                    position_info = self.db_manager.get_position_by_id(position_id)
+                    if position_info:
+                        enhanced_order['entry_price'] = position_info.get('entry_price')
+                        enhanced_order['original_direction'] = position_info.get('direction')
+                        enhanced_order['exit_reason'] = '平倉'
+
+                        if self.console_enabled:
+                            print(f"[SIMPLIFIED_TRACKER] 🔍 從資料庫API獲取部位{position_id}:")
+                            print(f"[SIMPLIFIED_TRACKER]   進場價格: {enhanced_order.get('entry_price')}")
+                            print(f"[SIMPLIFIED_TRACKER]   原始方向: {enhanced_order.get('original_direction')}")
+                        return enhanced_order
+
+                # 方法2: 直接查詢資料庫
+                with self.db_manager.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        SELECT entry_price, direction FROM position_records
+                        WHERE id = ? AND status != 'FAILED'
+                        ORDER BY id DESC LIMIT 1
+                    ''', (position_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        enhanced_order['entry_price'] = result[0]
+                        enhanced_order['original_direction'] = result[1]
+                        enhanced_order['exit_reason'] = '平倉'
+
+                        if self.console_enabled:
+                            print(f"[SIMPLIFIED_TRACKER] 🔍 從資料庫直接查詢部位{position_id}:")
+                            print(f"[SIMPLIFIED_TRACKER]   進場價格: {enhanced_order['entry_price']}")
+                            print(f"[SIMPLIFIED_TRACKER]   原始方向: {enhanced_order['original_direction']}")
+                        return enhanced_order
+
+            # 如果無法獲取，保持原有信息
+            if self.console_enabled:
+                print(f"[SIMPLIFIED_TRACKER] ⚠️ 無法從資料庫獲取部位{position_id}完整信息")
+            return enhanced_order
+
+        except Exception as e:
+            if self.console_enabled:
+                print(f"[SIMPLIFIED_TRACKER] ❌ 增強平倉訂單信息失敗: {e}")
+            return exit_order
 
     def _cleanup_completed_exit_order(self, order_id):
         """清理已完成的平倉訂單"""

@@ -1,0 +1,63 @@
+{
+    "scenario": "綜合壓力測試",
+    "description": "極端市場環境，測試系統穩定性",
+    "virtual_quote_config": {
+        "base_price": 21500,
+        "price_range": 150,
+        "spread": 10,
+        "quote_interval": 0.1,
+        "fill_probability": 0.5,
+        "fill_delay_ms": 600,
+        "volatility": 0.05,
+        "trend_factor": 0.0
+    },
+    "market_config": {
+        "product": "MTX00",
+        "market_no": 1,
+        "stock_idx": 0,
+        "trading_hours": {
+            "start": "00:00:00",
+            "end": "23:59:59",
+            "24h_mode": true
+        }
+    },
+    "order_config": {
+        "default_account": "F0200006363839",
+        "order_types": ["ROD", "IOC", "FOK"],
+        "default_order_type": "IOC",
+        "max_quantity": 10,
+        "min_quantity": 1
+    },
+    "best5_config": {
+        "enabled": true,
+        "depth_levels": 5,
+        "quantity_range": [1, 15],
+        "price_step": 10
+    },
+    "logging_config": {
+        "enabled": true,
+        "level": "DEBUG",
+        "console_output": true,
+        "file_output": true,
+        "log_file": "stress_test.log"
+    },
+    "performance_config": {
+        "max_memory_mb": 100,
+        "max_cpu_percent": 5,
+        "quote_buffer_size": 1000,
+        "order_buffer_size": 500
+    },
+    "test_features": {
+        "extreme_volatility": true,
+        "random_gaps": true,
+        "liquidity_shocks": true,
+        "system_stress": true
+    },
+    "stress_parameters": {
+        "volatility_spikes": true,
+        "random_direction_changes": true,
+        "liquidity_variations": [0.2, 1.0],
+        "network_delay_simulation": true,
+        "partial_fill_probability": 0.4
+    }
+}

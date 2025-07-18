@@ -776,7 +776,7 @@ class MultiGroupPositionManager:
             return None
 
     def _calculate_retry_price_for_group(self, direction: str, retry_count: int) -> Optional[float]:
-        """計算組追價價格"""
+        """計算組追價價格 - 🔧 修復：使用純新報價邏輯"""
         try:
             product = "TM0000"
 
@@ -785,14 +785,16 @@ class MultiGroupPositionManager:
                 if direction == "LONG":
                     current_ask1 = self.order_manager.get_ask1_price(product)
                     if current_ask1:
-                        retry_price = current_ask1 + retry_count
-                        self.logger.info(f"🔄 [追價] LONG追價計算: ASK1({current_ask1}) + {retry_count} = {retry_price}")
+                        # 🔧 修復：直接使用最新ASK1，不加點數
+                        retry_price = current_ask1
+                        self.logger.info(f"🔄 [純新報價追價] LONG使用最新ASK1: {retry_price}")
                         return retry_price
                 elif direction == "SHORT":
                     current_bid1 = self.order_manager.get_bid1_price(product)
                     if current_bid1:
-                        retry_price = current_bid1 - retry_count
-                        self.logger.info(f"🔄 [追價] SHORT追價計算: BID1({current_bid1}) - {retry_count} = {retry_price}")
+                        # 🔧 修復：直接使用最新BID1，不減點數
+                        retry_price = current_bid1
+                        self.logger.info(f"🔄 [純新報價追價] SHORT使用最新BID1: {retry_price}")
                         return retry_price
 
             self.logger.warning(f"無法計算{direction}追價價格")
@@ -1198,8 +1200,8 @@ class MultiGroupPositionManager:
     def _execute_group_retry(self, logical_group_id: int, qty: int, price: float, retry_count: int):
         """執行組追價重試"""
         try:
-            self.logger.info(f"🔄 [簡化追蹤] 組{logical_group_id}觸發追價重試: "
-                           f"{qty}口 @{price}, 第{retry_count}次")
+            # 🔧 修復：顯示口級別追價資訊，不使用組級別累計次數
+            self.logger.info(f"🔄 [簡化追蹤] 組{logical_group_id}觸發追價: {qty}口 @{price} (口級別追價)")
 
             # 🔧 實際追價下單邏輯
             # 1. 獲取組的基本信息
@@ -1212,8 +1214,8 @@ class MultiGroupPositionManager:
             # 🔧 修復：商品代碼從配置或預設值獲取
             product = getattr(self, 'current_product', 'TM0000')
 
-            # 2. 計算追價價格
-            retry_price = self._calculate_retry_price_for_group(direction, retry_count)
+            # 🔧 修復：計算追價價格 - 純新報價邏輯不需要retry_count
+            retry_price = self._calculate_retry_price_for_group(direction, 0)  # 傳入0，實際不使用
             if retry_price is None:
                 self.logger.error(f"無法計算組{logical_group_id}的追價價格")
                 return
@@ -1317,14 +1319,14 @@ class MultiGroupPositionManager:
             # 檢查是否成功獲取市價
             if current_ask1 > 0 and current_bid1 > 0:
                 if direction == "LONG":
-                    # 🔧 修復：多單使用ASK1+追價點數 (向上追價)
-                    retry_price = current_ask1 + retry_count
-                    self.logger.info(f"🔄 [追價] LONG追價計算: ASK1({current_ask1}) + {retry_count} = {retry_price}")
+                    # 🔧 修復：多單直接使用最新ASK1 (純新報價邏輯)
+                    retry_price = current_ask1
+                    self.logger.info(f"🔄 [純新報價追價] LONG使用最新ASK1: {retry_price}")
                     return retry_price
                 elif direction == "SHORT":
-                    # 🔧 修復：空單使用BID1-追價點數 (向下追價，更容易成交)
-                    retry_price = current_bid1 - retry_count
-                    self.logger.info(f"🔄 [追價] SHORT追價計算: BID1({current_bid1}) - {retry_count} = {retry_price}")
+                    # 🔧 修復：空單直接使用最新BID1 (純新報價邏輯)
+                    retry_price = current_bid1
+                    self.logger.info(f"🔄 [純新報價追價] SHORT使用最新BID1: {retry_price}")
                     return retry_price
             else:
                 self.logger.warning(f"無法獲取有效市價: ASK1={current_ask1}, BID1={current_bid1}")
@@ -1604,38 +1606,43 @@ class MultiGroupPositionManager:
             price_type = ""
 
             if position_direction.upper() == "LONG":
-                # 多單進場：使用ASK1 + retry_count點 (向上追價)
+                # 🔧 修復：多單進場直接使用最新ASK1 (純新報價邏輯)
                 if self.order_manager and hasattr(self.order_manager, 'get_ask1_price'):
                     try:
                         current_ask1 = self.order_manager.get_ask1_price(product)
                         if current_ask1:
-                            current_price = current_ask1 + retry_count
+                            current_price = current_ask1
                             price_type = "ASK1"
-                            self.logger.info(f"多單進場追價: ASK1({current_ask1}) + {retry_count}點 = {current_price}")
+                            self.logger.info(f"🔄 [純新報價追價] 多單進場使用最新ASK1: {current_price}")
                     except:
                         pass
 
             elif position_direction.upper() == "SHORT":
-                # 空單進場：使用BID1 - retry_count點 (向下追價)
+                # 🔧 修復：空單進場直接使用最新BID1 (純新報價邏輯)
                 if self.order_manager and hasattr(self.order_manager, 'get_bid1_price'):
                     try:
                         current_bid1 = self.order_manager.get_bid1_price(product)
                         if current_bid1:
-                            current_price = current_bid1 - retry_count
+                            current_price = current_bid1
                             price_type = "BID1"
-                            self.logger.info(f"空單進場追價: BID1({current_bid1}) - {retry_count}點 = {current_price}")
+                            self.logger.info(f"🔄 [純新報價追價] 空單進場使用最新BID1: {current_price}")
                     except:
                         pass
 
-            # 備用方案：使用原始價格估算
+            # 🔧 修復：備用方案使用純新報價邏輯
             if current_price is None:
                 original_price = position_info.get('original_price') or position_info.get('entry_price')
                 if original_price:
                     if position_direction.upper() == "LONG":
-                        current_price = original_price + 1 + retry_count
+                        # 多單備用：使用原價+1作為估算ASK1
+                        current_price = original_price + 1
                         price_type = "估算ASK1"
+                        self.logger.info(f"🔄 [備用純新報價] 多單使用估算ASK1: {current_price}")
                     else:
-                        current_price = original_price - 1 - retry_count
+                        # 空單備用：使用原價-1作為估算BID1
+                        current_price = original_price - 1
+                        price_type = "估算BID1"
+                        self.logger.info(f"🔄 [備用純新報價] 空單使用估算BID1: {current_price}")
                         price_type = "估算BID1"
                     self.logger.warning(f"⚠️ 無法取得即時{price_type}，使用估算價格: {current_price}")
                 else:

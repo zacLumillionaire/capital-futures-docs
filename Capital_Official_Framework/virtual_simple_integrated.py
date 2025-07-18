@@ -173,6 +173,13 @@ class SimpleIntegratedApp:
         self.range_prices = []
         self.range_start_hour = 8    # 預設08:46開始
         self.range_start_minute = 46
+        self.range_start_second = 1  # 🆕 新增：開始秒數（預設1秒）
+
+        # 🆕 新增：結束時間變數
+        self.range_end_hour = 8      # 預設08:46結束
+        self.range_end_minute = 46   # 預設結束分鐘
+        self.range_end_second = 21   # 預設結束秒數（開始+20秒）
+
         self._last_range_minute = None
         self._range_start_time = ""
 
@@ -182,6 +189,19 @@ class SimpleIntegratedApp:
         self.waiting_for_entry = False
         self.breakout_signal = None
         self.breakout_direction = None
+
+        # 🆕 空單進場模式配置（新增功能）
+        self.short_entry_mode = "next_minute_close"  # 預設使用新邏輯："immediate" 或 "next_minute_close"
+        self.short_trigger_pending = False           # 跌破觸發等待狀態
+        self.short_trigger_minute = None             # 觸發的分鐘
+        self.short_trigger_time = None               # 觸發時間
+        self.short_trigger_price = None              # 觸發價格
+
+        # 🔧 修復：防止重複檢查分鐘K線突破
+        self.last_checked_minute = None              # 上次檢查的分鐘
+
+        # 🆕 新增：LOG頻率控制
+        self.last_time_check_log_minute = None       # 上次輸出時間檢查LOG的分鐘
 
         # 價格追蹤（不即時更新UI，只記錄）
         self.latest_price = 0
@@ -262,6 +282,12 @@ class SimpleIntegratedApp:
         if VIRTUAL_REAL_ORDER_AVAILABLE:
             self.init_virtual_real_order_system()
 
+        # 🎯 各口移動停利自訂功能初始化
+        self.trailing_stop_config_manager = None
+        self.trailing_stop_config_panel = None
+        self.custom_trailing_config = None
+        self.init_custom_trailing_stop_system()
+
         # Console輸出控制
         self.console_quote_enabled = True
         self.console_strategy_enabled = True  # 策略Console輸出控制
@@ -293,6 +319,9 @@ class SimpleIntegratedApp:
 
         # 🎯 虛擬報價機整合：在程式啟動時就註冊事件處理器
         self.register_virtual_quote_events()
+
+        # 🆕 載入空單進場模式配置
+        self.load_short_entry_config()
 
     def init_optimized_risk_manager(self):
         """初始化優化風險管理器"""
@@ -504,13 +533,36 @@ class SimpleIntegratedApp:
 
                     # 🔧 新增：註冊平倉成交回調
                     def on_exit_fill(exit_order: dict, price: float, qty: int):
-                        """平倉成交回調函數 - 更新部位狀態為EXITED"""
+                        """平倉成交回調函數 - 🔧 修復：包含完整損益計算和保護性停損更新"""
                         try:
                             position_id = exit_order.get('position_id')
                             exit_reason = exit_order.get('exit_reason', '平倉')
 
-                            if self.console_enabled:
-                                print(f"[MAIN] 🎯 收到平倉成交回調: 部位{position_id} @{price:.0f}")
+                            # 🔧 新增：標準化出場原因以符合資料庫約束
+                            from stop_loss_executor import standardize_exit_reason
+                            standardized_reason = standardize_exit_reason(exit_reason)
+
+                            # 🔧 修復：計算實際損益（採用正式機機制）
+                            entry_price = exit_order.get('entry_price')
+                            original_direction = exit_order.get('original_direction')
+
+                            if entry_price and original_direction:
+                                if original_direction == "SHORT":
+                                    pnl = entry_price - price  # SHORT: 進場價 - 出場價
+                                else:
+                                    pnl = price - entry_price  # LONG: 出場價 - 進場價
+
+                                if self.console_enabled:
+                                    print(f"[MAIN] 🎯 收到平倉成交回調: 部位{position_id} @{price:.0f}")
+                                    print(f"[MAIN] 📋 原始原因: '{exit_reason}' → 標準化: '{standardized_reason}'")
+                                    print(f"[MAIN] 💰 計算損益: {original_direction} {entry_price}→{price} = {pnl:.1f}點")
+                            else:
+                                # 🔧 備用：從資料庫查詢計算損益
+                                pnl = self._calculate_pnl_from_db(position_id, price) if hasattr(self, '_calculate_pnl_from_db') else 0.0
+
+                                if self.console_enabled:
+                                    print(f"[MAIN] 🎯 收到平倉成交回調: 部位{position_id} @{price:.0f}")
+                                    print(f"[MAIN] 📋 原始原因: '{exit_reason}' → 標準化: '{standardized_reason}'")
 
                             # 更新部位狀態為EXITED
                             if hasattr(self, 'multi_group_db_manager') and self.multi_group_db_manager:
@@ -523,14 +575,35 @@ class SimpleIntegratedApp:
                                     position_id=position_id,
                                     exit_price=price,
                                     exit_time=datetime.now().strftime('%H:%M:%S'),
-                                    exit_reason=exit_reason,
-                                    pnl=0.0,  # 暫時設為0，後續可以計算實際損益
+                                    exit_reason=standardized_reason,  # 使用標準化後的原因
+                                    pnl=pnl,  # 🔧 修復：使用計算出的實際損益
                                     on_success_callback=cache_invalidation_callback  # 🔧 新增：緩存失效回呼
                                 )
 
                                 if success:
                                     if self.console_enabled:
                                         print(f"[MAIN] ✅ 部位{position_id}狀態已更新為EXITED")
+
+                                    # 🔧 新增：獲利平倉後觸發保護性停損更新
+                                    if pnl > 0:  # 只有獲利平倉才觸發保護性停損
+                                        if self.console_enabled:
+                                            print(f"[MAIN] 🛡️ 觸發保護性停損更新: 部位{position_id} 獲利{pnl:.1f}點")
+
+                                        # 獲取組別ID
+                                        group_id = exit_order.get('group_id', 1)  # 預設組別1
+
+                                        # 觸發保護性停損更新
+                                        if hasattr(self, 'multi_group_risk_engine') and self.multi_group_risk_engine:
+                                            try:
+                                                self.multi_group_risk_engine.update_protective_stop_loss(
+                                                    position_id,
+                                                    group_id
+                                                )
+                                                if self.console_enabled:
+                                                    print(f"[MAIN] ✅ 保護性停損更新完成: 部位{position_id} 組別{group_id}")
+                                            except Exception as protection_error:
+                                                if self.console_enabled:
+                                                    print(f"[MAIN] ❌ 保護性停損更新失敗: {protection_error}")
 
                                     # 🔧 修復：平倉成功後清除全局平倉鎖
                                     try:
@@ -546,9 +619,23 @@ class SimpleIntegratedApp:
                                     if self.console_enabled:
                                         print(f"[MAIN] ❌ 部位{position_id}狀態更新失敗")
 
+                                    # 🔧 新增：失敗時記錄到備用日誌
+                                    try:
+                                        with open("exit_callback_errors.log", "a", encoding="utf-8") as f:
+                                            f.write(f"{datetime.now()}: 部位{position_id} 平倉記錄更新失敗，原因: {exit_reason} → {standardized_reason}\n")
+                                    except:
+                                        pass
+
                         except Exception as e:
                             if self.console_enabled:
                                 print(f"[MAIN] ❌ 平倉成交回調異常: {e}")
+
+                            # 🔧 新增：異常時記錄到備用日誌
+                            try:
+                                with open("exit_callback_errors.log", "a", encoding="utf-8") as f:
+                                    f.write(f"{datetime.now()}: 部位{position_id} 平倉回調異常: {e}\n")
+                            except:
+                                pass
 
                     # 註冊平倉成交回調到簡化追蹤器
                     if hasattr(self.multi_group_position_manager, 'simplified_tracker') and \
@@ -662,6 +749,33 @@ class SimpleIntegratedApp:
 
         except Exception as e:
             print(f"[MULTI_GROUP] ❌ 下單組件整合失敗: {e}")
+
+    def init_custom_trailing_stop_system(self):
+        """初始化各口移動停利自訂功能系統"""
+        try:
+            # 導入移動停利配置管理器
+            from trailing_stop_config_manager import TrailingStopConfigManager
+
+            # 初始化配置管理器
+            self.trailing_stop_config_manager = TrailingStopConfigManager()
+            self.trailing_stop_config_manager.console_enabled = getattr(self, 'console_enabled', True)
+
+            # 載入當前配置
+            self.custom_trailing_config = self.trailing_stop_config_manager.load_config()
+
+            print("[CUSTOM_TRAILING] ✅ 各口移動停利自訂功能系統初始化完成")
+            print("[CUSTOM_TRAILING] 🎯 支援1-3口獨立移動停利參數配置")
+            print("[CUSTOM_TRAILING] 💾 配置文件: trailing_stop_config.json")
+
+        except ImportError as e:
+            print(f"[CUSTOM_TRAILING] ⚠️ 移動停利配置管理器載入失敗: {e}")
+            print("[CUSTOM_TRAILING] 💡 將使用原有的硬編碼移動停利參數")
+            self.trailing_stop_config_manager = None
+            self.custom_trailing_config = None
+        except Exception as e:
+            print(f"[CUSTOM_TRAILING] ❌ 各口移動停利自訂功能初始化失敗: {e}")
+            self.trailing_stop_config_manager = None
+            self.custom_trailing_config = None
 
     def create_widgets(self):
         """建立使用者介面"""
@@ -2774,6 +2888,12 @@ class SimpleIntegratedApp:
             strategy_notebook.add(multi_group_frame, text="🎯 多組策略配置")
             self.create_multi_group_strategy_page(multi_group_frame)
 
+        # 🎯 各口移動停利自訂配置頁面
+        if self.trailing_stop_config_manager:
+            trailing_config_frame = ttk.Frame(strategy_notebook)
+            strategy_notebook.add(trailing_config_frame, text="🎯 移動停利配置")
+            self.create_trailing_stop_config_page(trailing_config_frame)
+
     def create_strategy_panel(self, parent_frame):
         """創建策略監控面板 - 簡化版，避免頻繁UI更新"""
         try:
@@ -2818,13 +2938,65 @@ class SimpleIntegratedApp:
             ttk.Label(range_row, textvariable=self.range_time_var,
                      font=("Arial", 10, "bold"), foreground="purple").pack(side="left", padx=5)
 
-            # 手動設定區間時間
-            ttk.Label(range_row, text="設定開始時間:").pack(side="left", padx=(20, 2))
-            self.entry_range_time = ttk.Entry(range_row, width=8)
-            self.entry_range_time.insert(0, "08:46")
+            # 🆕 修改：自定義時間區間設定
+            ttk.Label(range_row, text="自定義區間:").pack(side="left", padx=(20, 2))
+            self.entry_range_time = ttk.Entry(range_row, width=15)
+            self.entry_range_time.insert(0, "08:46 - 08:48")
             self.entry_range_time.pack(side="left", padx=2)
 
             ttk.Button(range_row, text="套用", command=self.apply_range_time).pack(side="left", padx=2)
+
+            # 🆕 新增：格式提示和說明
+            format_info_row = ttk.Frame(strategy_frame)
+            format_info_row.pack(fill="x", pady=(2, 5))
+
+            ttk.Label(format_info_row, text="💡 支援格式:",
+                     font=("Arial", 8), foreground="blue").pack(side="left", padx=5)
+            ttk.Label(format_info_row, text="10:15 - 10:30 (自定義區間) | 08:46 (固定20秒)",
+                     font=("Arial", 8), foreground="gray").pack(side="left", padx=2)
+
+            # 🆕 新增：快速設定按鈕
+            quick_set_row = ttk.Frame(strategy_frame)
+            quick_set_row.pack(fill="x", pady=(0, 5))
+
+            ttk.Label(quick_set_row, text="🚀 快速設定:",
+                     font=("Arial", 8), foreground="green").pack(side="left", padx=5)
+
+            # 常用時間區間按鈕
+            ttk.Button(quick_set_row, text="08:46-08:48", width=10,
+                      command=lambda: self._quick_set_time("08:46 - 08:48")).pack(side="left", padx=2)
+            ttk.Button(quick_set_row, text="10:15-10:30", width=10,
+                      command=lambda: self._quick_set_time("10:15 - 10:30")).pack(side="left", padx=2)
+            ttk.Button(quick_set_row, text="13:25-13:27", width=10,
+                      command=lambda: self._quick_set_time("13:25 - 13:27")).pack(side="left", padx=2)
+
+            # 🆕 新增：空單進場模式選擇
+            short_mode_row = ttk.Frame(strategy_frame)
+            short_mode_row.pack(fill="x", pady=5)
+
+            ttk.Label(short_mode_row, text="🎯 空單進場模式:").pack(side="left", padx=5)
+
+            self.short_entry_mode_var = tk.StringVar(value="next_minute_close")
+
+            # 收盤價進場模式（預設）
+            close_radio = ttk.Radiobutton(
+                short_mode_row,
+                text="收盤價進場（跌破當分鐘收盤價觸發）",
+                variable=self.short_entry_mode_var,
+                value="next_minute_close",
+                command=self.on_short_entry_mode_changed
+            )
+            close_radio.pack(side="left", padx=5)
+
+            # 即時進場模式
+            immediate_radio = ttk.Radiobutton(
+                short_mode_row,
+                text="即時進場（跌破立即觸發）",
+                variable=self.short_entry_mode_var,
+                value="immediate",
+                command=self.on_short_entry_mode_changed
+            )
+            immediate_radio.pack(side="left", padx=5)
 
             # 第三行：區間結果顯示（只在計算完成時更新）
             result_row = ttk.Frame(strategy_frame)
@@ -3077,6 +3249,125 @@ class SimpleIntegratedApp:
             if self.multi_group_logger:
                 self.multi_group_logger.system_error(f"頁面創建失敗: {e}")
 
+    def create_trailing_stop_config_page(self, trailing_config_frame):
+        """創建各口移動停利自訂配置頁面"""
+        try:
+            # 導入移動停利配置面板
+            from trailing_stop_config_panel import TrailingStopConfigPanel
+
+            # 創建配置面板
+            self.trailing_stop_config_panel = TrailingStopConfigPanel(
+                parent_frame=trailing_config_frame,
+                max_lots=3,
+                console_enabled=getattr(self, 'console_enabled', True)
+            )
+
+            # 設置回調函數
+            self.trailing_stop_config_panel.set_config_changed_callback(self.on_trailing_config_changed)
+            self.trailing_stop_config_panel.set_config_applied_callback(self.on_trailing_config_applied)
+
+            # 創建UI
+            self.trailing_stop_config_panel.create_ui()
+
+            # 添加說明文字
+            info_frame = ttk.LabelFrame(trailing_config_frame, text="📋 使用說明", padding=10)
+            info_frame.pack(fill="x", pady=(10, 0))
+
+            info_text = """🎯 各口移動停利自訂功能說明：
+
+1. 啟動點數：獲利達到指定點數後啟動移動停利（建議範圍：5-200點）
+2. 回撤比例：從峰值回撤指定百分比時觸發平倉（建議範圍：5%-80%）
+3. 預設配置：提供三種時段的優化配置選項
+4. 即時生效：配置變更後點擊「應用到系統」立即生效
+
+⚠️ 注意事項：
+- 配置變更需要點擊「應用到系統」才會生效
+- 建議先在虛擬環境測試配置效果
+- 參數設定過於激進可能影響獲利表現"""
+
+            info_label = ttk.Label(info_frame, text=info_text.strip(), justify="left")
+            info_label.pack(anchor="w")
+
+            print("[TRAILING_UI] ✅ 移動停利配置頁面創建完成")
+
+        except ImportError as e:
+            print(f"[TRAILING_UI] ⚠️ 移動停利配置面板載入失敗: {e}")
+            self.trailing_stop_config_panel = None
+        except Exception as e:
+            print(f"[TRAILING_UI] ❌ 移動停利配置頁面創建失敗: {e}")
+            self.trailing_stop_config_panel = None
+
+    def on_trailing_config_changed(self, config):
+        """移動停利配置變更回調"""
+        try:
+            if getattr(self, 'console_enabled', True):
+                print("[TRAILING_UI] 🔄 移動停利配置已變更（尚未應用）")
+        except Exception as e:
+            print(f"[TRAILING_UI] ❌ 配置變更回調失敗: {e}")
+
+    def on_trailing_config_applied(self, config):
+        """移動停利配置應用回調"""
+        try:
+            # 更新當前配置
+            self.custom_trailing_config = config
+            if self.trailing_stop_config_manager:
+                self.trailing_stop_config_manager.current_config = config
+
+            if getattr(self, 'console_enabled', True):
+                print("[TRAILING_UI] ✅ 移動停利配置已應用到交易系統")
+                print("[TRAILING_UI] 🎯 新配置將在下次建倉時生效")
+
+                # 顯示當前配置摘要
+                for lot_id in range(1, 4):
+                    lot_config = config.get_lot_config(lot_id)
+                    if lot_config and lot_config.enabled:
+                        print(f"[TRAILING_UI]   第{lot_id}口: {lot_config.activation_points}點啟動, {lot_config.pullback_percent}%回撤")
+                    else:
+                        print(f"[TRAILING_UI]   第{lot_id}口: 已禁用")
+
+        except Exception as e:
+            print(f"[TRAILING_UI] ❌ 配置應用回調失敗: {e}")
+
+    def get_trailing_stop_params(self, lot_id: int = 1) -> dict:
+        """取得移動停利參數（支援自訂配置）"""
+        try:
+            # 如果有自訂配置管理器且配置有效
+            if (self.trailing_stop_config_manager and
+                self.custom_trailing_config and
+                self.custom_trailing_config.global_enabled):
+
+                # 嘗試從自訂配置取得參數
+                params = self.trailing_stop_config_manager.get_lot_trailing_params(lot_id)
+                if params['enabled']:
+                    if getattr(self, 'console_enabled', True):
+                        print(f"[TRAILING_PARAMS] 🎯 使用第{lot_id}口自訂配置: "
+                              f"{params['trailing_activation_points']}點啟動, "
+                              f"{params['trailing_pullback_percent']*100:.1f}%回撤")
+                    return params
+
+            # 回退到原有硬編碼參數（向後相容）
+            default_params = {
+                'trailing_activation_points': 15.0,
+                'trailing_pullback_percent': 0.20,
+                'enabled': True
+            }
+
+            if getattr(self, 'console_enabled', True):
+                print(f"[TRAILING_PARAMS] 💡 使用預設配置: "
+                      f"{default_params['trailing_activation_points']}點啟動, "
+                      f"{default_params['trailing_pullback_percent']*100:.1f}%回撤")
+
+            return default_params
+
+        except Exception as e:
+            print(f"[TRAILING_PARAMS] ❌ 取得移動停利參數失敗: {e}")
+            # 安全回退
+            return {
+                'trailing_activation_points': 15.0,
+                'trailing_pullback_percent': 0.20,
+                'enabled': True
+            }
+
     def create_strategy_log_area(self, parent_frame):
         """創建策略日誌區域"""
         try:
@@ -3230,14 +3521,11 @@ class SimpleIntegratedApp:
             if self.range_calculated:
                 self.update_minute_candle_safe(price, hour, minute, second)
 
-            # 🔧 修正：空單即時檢測 + 多單1分K檢測
+            # 🔧 修正：空單即時檢測（分鐘K線檢測已移到update_minute_candle_safe中）
             if self.range_calculated and not self.first_breakout_detected:
-                # 🚀 新增：即時空單進場檢測（不等1分K收盤）
+                # 🚀 即時空單進場檢測（不等1分K收盤）
                 self.check_immediate_short_entry_safe(price, time_str)
-
-                # 原有：1分K多單檢測（只檢測多單）
-                if not self.first_breakout_detected:  # 確保空單沒有先觸發
-                    self.check_minute_candle_breakout_safe()
+                # 注意：分鐘K線突破檢測已移到update_minute_candle_safe()中，避免重複調用
 
             # 執行進場（檢測到突破信號後的下一個報價）
             if self.range_calculated and self.waiting_for_entry:
@@ -3277,6 +3565,15 @@ class SimpleIntegratedApp:
                     self.in_range_period = True
                     self.range_prices = []
                     self._range_start_time = time_str
+
+                    # 🆕 詳細的Console輸出
+                    start_time_str = f"{self.range_start_hour:02d}:{self.range_start_minute:02d}:{self.range_start_second:02d}"
+                    end_time_str = f"{self.range_end_hour:02d}:{self.range_end_minute:02d}:{self.range_end_second:02d}"
+                    print(f"🎯 [RANGE_START] 開始收集區間數據")
+                    print(f"📊 [RANGE_START] 監控區間: {start_time_str} - {end_time_str}")
+                    print(f"📊 [RANGE_START] 觸發時間: {time_str}")
+                    print(f"📊 [RANGE_START] 觸發價格: {price:.0f}")
+
                     # 重要事件：記錄到策略日誌
                     self.add_strategy_log(f"📊 開始收集區間數據: {time_str}")
 
@@ -3291,10 +3588,18 @@ class SimpleIntegratedApp:
                     self.range_calculated = True
                     self.in_range_period = False
 
-                    # 移除UI更新，改用Console輸出
+                    # 🆕 詳細的Console輸出
                     range_text = f"高:{self.range_high:.0f} 低:{self.range_low:.0f} 大小:{self.range_high-self.range_low:.0f}"
-                    print(f"✅ [STRATEGY] 區間計算完成: {range_text}")
-                    # UI更新會在背景線程中引起GIL錯誤，已移除
+                    start_time_str = f"{self.range_start_hour:02d}:{self.range_start_minute:02d}:{self.range_start_second:02d}"
+                    end_time_str = f"{self.range_end_hour:02d}:{self.range_end_minute:02d}:{self.range_end_second:02d}"
+
+                    print(f"🎉 [RANGE_COMPLETE] 區間計算完成!")
+                    print(f"📊 [RANGE_COMPLETE] 監控區間: {start_time_str} - {end_time_str}")
+                    print(f"📊 [RANGE_COMPLETE] 開始時間: {self._range_start_time}")
+                    print(f"📊 [RANGE_COMPLETE] 結束時間: {time_str}")
+                    print(f"📊 [RANGE_COMPLETE] 區間結果: {range_text}")
+                    print(f"📊 [RANGE_COMPLETE] 數據點數: {len(self.range_prices)} 筆")
+                    print(f"🔍 [RANGE_COMPLETE] 開始監測突破信號...")
 
                     # 重要事件：記錄到策略日誌
                     self.add_strategy_log(f"✅ 區間計算完成: {range_text}")
@@ -3308,15 +3613,48 @@ class SimpleIntegratedApp:
             pass
 
     def is_in_range_time_safe(self, time_str):
-        """安全的時間檢查 - 精確20秒區間"""
+        """
+        安全的時間檢查 - 支援自定義時間範圍
+        🆕 新增：支援自定義開始和結束時間，精確到秒
+        """
         try:
             hour, minute, second = map(int, time_str.split(':'))
             current_total_seconds = hour * 3600 + minute * 60 + second
-            start_total_seconds = self.range_start_hour * 3600 + self.range_start_minute * 60
-            end_total_seconds = start_total_seconds + 20  # 精確20秒
 
-            return start_total_seconds <= current_total_seconds < end_total_seconds
-        except:
+            # 🆕 使用自定義的開始和結束時間
+            start_total_seconds = (self.range_start_hour * 3600 +
+                                 self.range_start_minute * 60 +
+                                 self.range_start_second)
+            end_total_seconds = (self.range_end_hour * 3600 +
+                               self.range_end_minute * 60 +
+                               self.range_end_second)
+
+            # 🎯 關鍵邏輯：開始時間包含，結束時間不包含 [start, end)
+            is_in_range = start_total_seconds <= current_total_seconds < end_total_seconds
+
+            # 🔧 優化：控制LOG輸出頻率，每分鐘只顯示一次
+            hour, minute, second = map(int, time_str.split(':'))
+            current_minute = minute
+
+            # 只在以下情況輸出LOG：
+            # 1. 在範圍內且當前分鐘與上次LOG分鐘不同
+            # 2. 邊界時間（開始前1秒或結束時間）
+            should_log = False
+            if is_in_range and self.last_time_check_log_minute != current_minute:
+                should_log = True
+                self.last_time_check_log_minute = current_minute
+            elif (current_total_seconds == start_total_seconds - 1) or (current_total_seconds == end_total_seconds):
+                should_log = True
+
+            if should_log:
+                start_time_str = f"{self.range_start_hour:02d}:{self.range_start_minute:02d}:{self.range_start_second:02d}"
+                end_time_str = f"{self.range_end_hour:02d}:{self.range_end_minute:02d}:{self.range_end_second:02d}"
+                print(f"🕐 [TIME_CHECK] 當前:{time_str}, 區間:{start_time_str}-{end_time_str}, 在範圍內:{'是' if is_in_range else '否'}")
+
+            return is_in_range
+
+        except Exception as e:
+            print(f"❌ [TIME_CHECK] 時間檢查失敗: {time_str} - {e}")
             return False
 
     def update_minute_candle_safe(self, price, hour, minute, second):
@@ -3342,6 +3680,12 @@ class SimpleIntegratedApp:
                         'start_time': f"{hour:02d}:{self.last_minute:02d}:00"
                     }
 
+                    # 🔧 修復：在分鐘變化時檢查突破（只檢查一次）
+                    if not self.first_breakout_detected and self.last_checked_minute != self.last_minute:
+                        self.last_checked_minute = self.last_minute
+                        print(f"📊 [DEBUG] 分鐘變化觸發突破檢查 - 從{self.last_minute:02d}分到{current_minute:02d}分")
+                        self.check_minute_candle_breakout_safe()
+
                 # 重置當前分鐘的價格數據
                 self.minute_prices = []
 
@@ -3354,8 +3698,8 @@ class SimpleIntegratedApp:
 
     def check_immediate_short_entry_safe(self, price, time_str):
         """
-        即時空單進場檢測 - 不等1分K收盤
-        空單在下跌過程中只要碰到區間就立即進場
+        空單進場檢測 - 支援兩種模式
+        🆕 新增：可選擇即時進場或收盤價進場
         """
         try:
             if not self.range_high or not self.range_low:
@@ -3365,27 +3709,45 @@ class SimpleIntegratedApp:
             if self.first_breakout_detected:
                 return
 
-            # 🚀 空單即時檢測：任何報價跌破區間下緣就立即觸發
+            # 檢測跌破條件
             if price < self.range_low:
-                # 記錄第一次突破
-                self.first_breakout_detected = True
-                self.breakout_direction = 'SHORT'
-                self.waiting_for_entry = True
+                hour, minute, second = map(int, time_str.split(':'))
 
-                # 重要事件：記錄到策略日誌
-                self.add_strategy_log(f"🔥 即時空單觸發！報價:{price:.0f} < 下緣:{self.range_low:.0f}")
-                self.add_strategy_log(f"⚡ 立即進場做空（不等1分K收盤）...")
+                # 根據配置選擇進場模式
+                if self.short_entry_mode == "immediate":
+                    # 🚀 即時進場模式（原有邏輯）
+                    self.first_breakout_detected = True
+                    self.breakout_direction = 'SHORT'
+                    self.waiting_for_entry = True
 
-                # Console輸出
-                print(f"🔥 [STRATEGY] SHORT突破信號已觸發（即時）")
+                    self.add_strategy_log(f"🔥 即時空單觸發！報價:{price:.0f} < 下緣:{self.range_low:.0f}")
+                    self.add_strategy_log(f"⚡ 立即進場做空（即時模式）...")
+                    print(f"🔥 [STRATEGY] SHORT突破信號已觸發（即時模式）")
+                    print(f"📊 [DEBUG] 空單進場模式: {self.short_entry_mode}")
+
+                elif self.short_entry_mode == "next_minute_close":
+                    # 🆕 收盤價進場模式（新增邏輯）
+                    if not self.short_trigger_pending:
+                        self.short_trigger_pending = True
+                        self.short_trigger_minute = minute
+                        self.short_trigger_time = time_str
+                        self.short_trigger_price = price
+
+                        self.add_strategy_log(f"⚠️ 空單跌破條件達成！報價:{price:.0f} < 下緣:{self.range_low:.0f}")
+                        self.add_strategy_log(f"⏳ 等待{minute:02d}分收盤價確認進場...")
+                        print(f"⚠️ [STRATEGY] SHORT跌破條件達成，等待當分鐘收盤確認")
+                        print(f"📊 [DEBUG] 空單進場模式: {self.short_entry_mode}")
+                        print(f"📊 [DEBUG] 觸發時間: {time_str}, 觸發價格: {price:.0f}")
+                        print(f"📊 [DEBUG] 等待{minute:02d}分收盤價（當分鐘收盤）")
 
         except Exception as e:
+            print(f"❌ [ERROR] check_immediate_short_entry_safe 發生錯誤: {e}")
             pass
 
     def check_minute_candle_breakout_safe(self):
         """
-        檢查分鐘K線收盤價是否突破區間 - 修正版本
-        🔧 現在只檢測多單（空單已改為即時檢測）
+        檢查分鐘K線收盤價是否突破區間 - 支援空單收盤價模式
+        🆕 新增：支援空單收盤價進場模式
         """
         try:
             if not self.current_minute_candle or not self.range_high or not self.range_low:
@@ -3398,24 +3760,38 @@ class SimpleIntegratedApp:
             close_price = self.current_minute_candle['close']
             minute = self.current_minute_candle['minute']
 
-            # 🔧 修正：只檢查多單突破（空單已改為即時檢測）
+            # 🔧 優化：只在實際檢查時輸出DEBUG日誌
+            print(f"📊 [DEBUG] 檢查{minute:02d}分K線突破 - 收盤價:{close_price:.0f}, 區間:{self.range_low:.0f}-{self.range_high:.0f}")
+
+            # 多單檢測（保持原有邏輯）
             if close_price > self.range_high:
-                # 記錄第一次突破
                 self.first_breakout_detected = True
                 self.breakout_direction = 'LONG'
                 self.waiting_for_entry = True
 
-                # 重要事件：記錄到策略日誌
                 self.add_strategy_log(f"🔥 {minute:02d}分K線收盤突破上緣！收盤:{close_price:.0f} > 上緣:{self.range_high:.0f}")
                 self.add_strategy_log(f"⏳ 等待下一個報價進場做多...")
-
-                # Console輸出
                 print(f"🔥 [STRATEGY] LONG突破信號已觸發")
 
-            # 🚀 移除空單檢測邏輯（已改為即時檢測）
-            # elif close_price < self.range_low: 已移除
+            # 🆕 空單收盤價模式檢測（修復：使用跌破當分鐘的收盤價）
+            elif (self.short_entry_mode == "next_minute_close" and
+                  self.short_trigger_pending and
+                  minute >= self.short_trigger_minute):
+
+                print(f"🎯 [SHORT_CLOSE] 空單收盤價觸發 - {self.short_trigger_minute:02d}分跌破→{minute:02d}分收盤:{close_price:.0f}")
+
+                # 使用跌破當分鐘的收盤價作為進場觸發
+                self.first_breakout_detected = True
+                self.breakout_direction = 'SHORT'
+                self.waiting_for_entry = True
+                self.short_trigger_pending = False  # 重置觸發狀態
+
+                self.add_strategy_log(f"🔥 {minute:02d}分K線收盤確認空單進場！收盤:{close_price:.0f}")
+                self.add_strategy_log(f"⏳ 等待下一個報價進場做空...")
+                print(f"🔥 [STRATEGY] SHORT突破信號已確認（跌破當分鐘收盤價模式）")
 
         except Exception as e:
+            print(f"❌ [ERROR] check_minute_candle_breakout_safe 發生錯誤: {e}")
             pass
 
     def check_breakout_signals_safe(self, price, time_str):
@@ -3721,6 +4097,9 @@ class SimpleIntegratedApp:
             except Exception as clear_error:
                 print(f"[ENTER_POSITION] ⚠️ 清除舊鎖定失敗: {clear_error}")
 
+            # 🎯 取得移動停利參數（支援自訂配置）
+            trailing_params = self.get_trailing_stop_params(lot_id=1)  # 單一策略使用第1口配置
+
             # 記錄部位資訊
             self.current_position = {
                 'direction': direction,
@@ -3729,8 +4108,8 @@ class SimpleIntegratedApp:
                 'quantity': 1,
                 'peak_price': price,  # 峰值價格追蹤
                 'trailing_activated': False,  # 移動停利是否啟動
-                'trailing_activation_points': 15,  # 15點啟動移動停利
-                'trailing_pullback_percent': 0.20  # 20%回撤
+                'trailing_activation_points': trailing_params['trailing_activation_points'],
+                'trailing_pullback_percent': trailing_params['trailing_pullback_percent']
             }
 
             # 標記已檢測到第一次突破
@@ -4004,43 +4383,115 @@ class SimpleIntegratedApp:
         except Exception as e:
             self.add_strategy_log(f"❌ 策略停止失敗: {e}")
 
+    def _parse_single_time(self, time_str):
+        """
+        解析單一時間字串
+        🆕 新增：支援 HH:MM 和 HH:MM:SS 格式
+        """
+        try:
+            time_str = time_str.strip()
+            parts = time_str.split(':')
+
+            if len(parts) == 2:
+                # HH:MM 格式
+                hour, minute = map(int, parts)
+                second = 0
+                return (hour, minute, second)
+            elif len(parts) == 3:
+                # HH:MM:SS 格式
+                hour, minute, second = map(int, parts)
+                return (hour, minute, second)
+            else:
+                raise ValueError(f"時間格式錯誤: {time_str}")
+
+        except Exception as e:
+            raise ValueError(f"解析時間失敗: {time_str} - {e}")
+
+    def _parse_time_range(self, time_input):
+        """
+        解析時間範圍輸入
+        🆕 新增：支援 'HH:MM - HH:MM' 和 'HH:MM:SS - HH:MM:SS' 格式
+        """
+        try:
+            time_input = time_input.strip()
+
+            if ' - ' in time_input:
+                # 範圍格式：'10:15 - 10:30'
+                start_str, end_str = time_input.split(' - ', 1)
+                start_time = self._parse_single_time(start_str)
+                end_time = self._parse_single_time(end_str)
+
+                # 🎯 關鍵邏輯：10:15 - 10:30 實際代表 10:15:01 - 10:30:00
+                if start_time[2] == 0:  # 如果開始時間沒有指定秒數
+                    start_time = (start_time[0], start_time[1], 1)  # 設為01秒
+                if end_time[2] == 0:    # 如果結束時間沒有指定秒數
+                    end_time = (end_time[0], end_time[1], 0)       # 保持00秒
+
+                return start_time, end_time
+
+            elif '-' in time_input:
+                # 無空格範圍格式：'10:15-10:30'
+                start_str, end_str = time_input.split('-', 1)
+                start_time = self._parse_single_time(start_str)
+                end_time = self._parse_single_time(end_str)
+
+                # 同樣的邏輯處理
+                if start_time[2] == 0:
+                    start_time = (start_time[0], start_time[1], 1)
+                if end_time[2] == 0:
+                    end_time = (end_time[0], end_time[1], 0)
+
+                return start_time, end_time
+
+            else:
+                # 單一時間格式（向後兼容）
+                start_time = self._parse_single_time(time_input)
+
+                # 計算結束時間（+20秒）
+                hour, minute, second = start_time
+                end_second = second + 20
+                end_minute = minute
+                end_hour = hour
+
+                if end_second >= 60:
+                    end_second -= 60
+                    end_minute += 1
+                    if end_minute >= 60:
+                        end_minute -= 60
+                        end_hour += 1
+
+                end_time = (end_hour, end_minute, end_second)
+                return start_time, end_time
+
+        except Exception as e:
+            raise ValueError(f"解析時間範圍失敗: {time_input} - {e}")
+
     def apply_range_time(self):
-        """套用區間時間設定"""
+        """
+        套用區間時間設定
+        🆕 新增：支援自定義時間範圍格式
+        """
         try:
             time_input = self.entry_range_time.get().strip()
 
-            # 解析時間格式 HH:MM:SS 或 HH:MM
-            if ':' in time_input:
-                time_parts = time_input.split(':')
-                if len(time_parts) == 2:
-                    hour, minute = map(int, time_parts)
-                    second = 0  # 預設秒數為0
-                elif len(time_parts) == 3:
-                    hour, minute, second = map(int, time_parts)
-                else:
-                    self.add_log("❌ 時間格式錯誤，請使用 HH:MM 或 HH:MM:SS 格式")
-                    return
-            else:
-                self.add_log("❌ 時間格式錯誤，請使用 HH:MM 或 HH:MM:SS 格式")
+            if not time_input:
+                self.add_strategy_log("❌ 請輸入時間")
                 return
 
-            # 設定區間開始時間
-            self.range_start_hour = hour
-            self.range_start_minute = minute
+            # 🆕 使用新的時間範圍解析邏輯
+            start_time, end_time = self._parse_time_range(time_input)
 
-            # 計算結束時間（+20秒）
-            end_second = second + 20
-            end_minute = minute
-            end_hour = hour
-            if end_second >= 60:
-                end_second -= 60
-                end_minute += 1
-                if end_minute >= 60:
-                    end_minute -= 60
-                    end_hour += 1
+            # 設定開始時間
+            self.range_start_hour, self.range_start_minute, self.range_start_second = start_time
 
-            # 更新顯示
-            range_display = f"{hour:02d}:{minute:02d}:{second:02d}-{end_hour:02d}:{end_minute:02d}:{end_second:02d}"
+            # 🆕 設定結束時間
+            self.range_end_hour, self.range_end_minute, self.range_end_second = end_time
+
+            # 🆕 更新顯示格式
+            start_display = f"{self.range_start_hour:02d}:{self.range_start_minute:02d}:{self.range_start_second:02d}"
+            end_display = f"{self.range_end_hour:02d}:{self.range_end_minute:02d}:{self.range_end_second:02d}"
+            range_display = f"{start_display}-{end_display}"
+
             self.range_time_var.set(range_display)
 
             # 重置區間數據
@@ -4048,17 +4499,93 @@ class SimpleIntegratedApp:
             self.in_range_period = False
             self.range_prices = []
 
+            # 🆕 詳細的Console輸出
+            print(f"✅ [TIME_RANGE] 區間時間已設定:")
+            print(f"📊 [TIME_RANGE] 輸入格式: {time_input}")
+            print(f"📊 [TIME_RANGE] 開始時間: {start_display}")
+            print(f"📊 [TIME_RANGE] 結束時間: {end_display}")
+            print(f"📊 [TIME_RANGE] 監控區間: {range_display}")
+
             # 重要事件：記錄到策略日誌
             self.add_strategy_log(f"✅ 區間時間已設定: {range_display}")
 
-        except ValueError:
-            self.add_strategy_log("❌ 時間格式錯誤，請使用 HH:MM 格式")
+        except ValueError as e:
+            error_msg = f"❌ 時間格式錯誤: {e}"
+            print(f"[TIME_RANGE] {error_msg}")
+            self.add_strategy_log(error_msg)
+            self.add_strategy_log("💡 支援格式: HH:MM, HH:MM:SS, HH:MM - HH:MM, HH:MM:SS - HH:MM:SS")
         except Exception as e:
-            self.add_strategy_log(f"❌ 套用區間時間失敗: {e}")
+            error_msg = f"❌ 套用區間時間失敗: {e}"
+            print(f"[TIME_RANGE] {error_msg}")
+            self.add_strategy_log(error_msg)
+
+    def _quick_set_time(self, time_range):
+        """
+        快速設定時間區間
+        🆕 新增：提供常用時間區間的快速設定功能
+        """
+        try:
+            # 清空輸入框並設定新值
+            self.entry_range_time.delete(0, tk.END)
+            self.entry_range_time.insert(0, time_range)
+
+            # 自動套用設定
+            self.apply_range_time()
+
+            print(f"🚀 [QUICK_SET] 快速設定時間區間: {time_range}")
+
+        except Exception as e:
+            error_msg = f"❌ 快速設定失敗: {e}"
+            print(f"[QUICK_SET] {error_msg}")
+            self.add_strategy_log(error_msg)
+
+    def on_short_entry_mode_changed(self):
+        """
+        空單進場模式變更回調函數
+        🆕 新增：處理空單進場模式變更
+        """
+        try:
+            new_mode = self.short_entry_mode_var.get()
+            old_mode = self.short_entry_mode
+
+            # 更新內部狀態
+            self.short_entry_mode = new_mode
+
+            # 重置相關狀態
+            if old_mode != new_mode:
+                self.short_trigger_pending = False
+                self.short_trigger_minute = None
+                self.short_trigger_time = None
+                self.short_trigger_price = None
+                self.last_checked_minute = None  # 🔧 重置檢查標記
+
+                # 記錄模式變更
+                mode_names = {
+                    "immediate": "即時進場模式",
+                    "next_minute_close": "收盤價進場模式"
+                }
+
+                self.add_strategy_log(f"🔄 空單進場模式已變更: {mode_names.get(old_mode, old_mode)} → {mode_names.get(new_mode, new_mode)}")
+                print(f"🔄 [CONFIG] 空單進場模式變更: {old_mode} → {new_mode}")
+                print(f"📊 [DEBUG] 空單觸發狀態已重置")
+
+                # 🆕 自動保存配置
+                self.save_short_entry_config()
+
+        except Exception as e:
+            print(f"❌ [ERROR] on_short_entry_mode_changed 發生錯誤: {e}")
+            self.add_strategy_log(f"❌ 空單進場模式變更失敗: {e}")
 
     def show_strategy_status(self):
         """顯示詳細策略狀態"""
         try:
+            # 🆕 新增：空單模式信息
+            mode_names = {
+                "immediate": "即時進場模式",
+                "next_minute_close": "收盤價進場模式"
+            }
+            current_mode_name = mode_names.get(self.short_entry_mode, self.short_entry_mode)
+
             status_info = f"""
 策略監控狀態報告
 ==================
@@ -4066,8 +4593,19 @@ class SimpleIntegratedApp:
 接收報價: {self.price_count} 筆
 最新價格: {self.latest_price:.0f} ({self.latest_time})
 
+🆕 空單進場配置:
+- 進場模式: {current_mode_name}
+- 觸發等待: {'是' if self.short_trigger_pending else '否'}
+- 觸發時間: {self.short_trigger_time if self.short_trigger_time else '--'}
+- 觸發價格: {self.short_trigger_price:.0f if self.short_trigger_price else '--'}
+
+🆕 時間範圍配置:
+- 顯示格式: {self.range_time_var.get()}
+- 開始時間: {self.range_start_hour:02d}:{self.range_start_minute:02d}:{self.range_start_second:02d}
+- 結束時間: {self.range_end_hour:02d}:{self.range_end_minute:02d}:{self.range_end_second:02d}
+- 監控狀態: {'進行中' if self.in_range_period else '等待中' if not self.range_calculated else '已完成'}
+
 區間計算:
-- 監控時間: {self.range_time_var.get()}
 - 計算狀態: {'已完成' if self.range_calculated else '等待中'}
 - 區間高點: {self.range_high:.0f if self.range_calculated else '--'}
 - 區間低點: {self.range_low:.0f if self.range_calculated else '--'}
@@ -5748,16 +6286,16 @@ class SimpleIntegratedApp:
             # 檢查是否成功獲取市價
             if current_ask1 > 0 and current_bid1 > 0:
                 if original_direction.upper() == "LONG":
-                    # 🔧 多單平倉：使用BID1 - retry_count點 (向下追價)
-                    retry_price = current_bid1 - retry_count
+                    # 🔧 修復：多單平倉直接使用最新BID1 (純新報價邏輯)
+                    retry_price = current_bid1
                     if self.console_enabled:
-                        print(f"[MAIN] 🔄 多單平倉追價計算: BID1({current_bid1}) - {retry_count} = {retry_price}")
+                        print(f"[MAIN] 🔄 [純新報價追價] 多單平倉使用最新BID1: {retry_price}")
                     return retry_price
                 elif original_direction.upper() == "SHORT":
-                    # 🔧 空單平倉：使用ASK1 + retry_count點 (向上追價)
-                    retry_price = current_ask1 + retry_count
+                    # 🔧 修復：空單平倉直接使用最新ASK1 (純新報價邏輯)
+                    retry_price = current_ask1
                     if self.console_enabled:
-                        print(f"[MAIN] 🔄 空單平倉追價計算: ASK1({current_ask1}) + {retry_count} = {retry_price}")
+                        print(f"[MAIN] 🔄 [純新報價追價] 空單平倉使用最新ASK1: {retry_price}")
                     return retry_price
             else:
                 if self.console_enabled:
@@ -6122,7 +6660,70 @@ def add_config_management_methods():
     SimpleIntegratedApp.create_tooltip = create_tooltip
     SimpleIntegratedApp.debug_optimized_risk_manager = debug_optimized_risk_manager
 
+# 🆕 新增：空單進場模式配置管理方法
+def add_short_entry_config_methods():
+    """新增空單進場模式配置管理方法到SimpleIntegratedApp類"""
+
+    def save_short_entry_config(self):
+        """保存空單進場模式配置"""
+        try:
+            import json
+            import os
+
+            config = {
+                'short_entry_mode': self.short_entry_mode,
+                'last_updated': time.strftime('%Y-%m-%d %H:%M:%S')
+            }
+
+            config_file = 'short_entry_config.json'
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+
+            print(f"✅ [CONFIG] 空單進場模式配置已保存: {self.short_entry_mode}")
+            self.add_strategy_log(f"✅ 空單進場模式配置已保存")
+
+        except Exception as e:
+            print(f"❌ [ERROR] 保存空單進場模式配置失敗: {e}")
+            self.add_strategy_log(f"❌ 保存配置失敗: {e}")
+
+    def load_short_entry_config(self):
+        """載入空單進場模式配置"""
+        try:
+            import json
+            import os
+
+            config_file = 'short_entry_config.json'
+
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+
+                loaded_mode = config.get('short_entry_mode', 'next_minute_close')
+                self.short_entry_mode = loaded_mode
+
+                # 如果UI已經創建，更新UI狀態
+                if hasattr(self, 'short_entry_mode_var'):
+                    self.short_entry_mode_var.set(loaded_mode)
+
+                print(f"✅ [CONFIG] 空單進場模式配置已載入: {loaded_mode}")
+                print(f"📊 [DEBUG] 配置載入時間: {config.get('last_updated', '未知')}")
+
+            else:
+                # 使用預設值
+                print(f"📊 [CONFIG] 使用預設空單進場模式: {self.short_entry_mode}")
+
+        except Exception as e:
+            print(f"❌ [ERROR] 載入空單進場模式配置失敗: {e}")
+            # 使用預設值
+            self.short_entry_mode = "next_minute_close"
+            print(f"📊 [CONFIG] 使用預設空單進場模式: {self.short_entry_mode}")
+
+    # 將方法添加到類中
+    SimpleIntegratedApp.save_short_entry_config = save_short_entry_config
+    SimpleIntegratedApp.load_short_entry_config = load_short_entry_config
+
 # 執行方法添加
+add_short_entry_config_methods()
 add_config_management_methods()
 
 if __name__ == "__main__":

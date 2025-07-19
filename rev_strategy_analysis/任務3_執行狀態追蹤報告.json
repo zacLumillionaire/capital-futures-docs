@@ -1,0 +1,33 @@
+{
+  "rev_web_trading_gui": {
+    "success": true,
+    "result": {
+      "total_pnl": -90.0,
+      "long_pnl": 0.0,
+      "short_pnl": -90.0,
+      "total_trades": 1,
+      "long_trades": 0,
+      "short_trades": 1,
+      "winning_trades": 0,
+      "losing_trades": 1,
+      "long_wins": 0,
+      "short_wins": 0,
+      "win_rate": 0.0,
+      "long_win_rate": 0.0,
+      "short_win_rate": 0.0,
+      "trade_days": 1,
+      "max_drawdown": 90.0,
+      "peak_pnl": 0.0,
+      "lot1_pnl": -15.0,
+      "lot2_pnl": -35.0,
+      "lot3_pnl": -40.0
+    },
+    "method": "direct_api_call"
+  },
+  "mdd_gui": {
+    "success": false,
+    "error": "Traceback (most recent call last):\n  File \"/Users/z/big/my-capital-project/rev_strategy_analysis/experiment_analysis/enhanced_mdd_optimizer.py\", line 15, in <module>\n    from mdd_search_config import MDDSearchConfig\nImportError: cannot import name 'MDDSearchConfig' from 'mdd_search_config' (/Users/z/big/my-capital-project/rev_strategy_analysis/experiment_analysis/mdd_search_config.py)\n",
+    "method": "subprocess_call",
+    "return_code": 1
+  }
+}

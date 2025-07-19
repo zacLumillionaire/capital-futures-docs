@@ -1,0 +1,51 @@
+{
+  "timestamp": "2025-07-17T17:00:55.699085",
+  "test_type": "GUI一致性比較測試",
+  "mdd_gui_result": {
+    "total_pnl": -96.0,
+    "long_pnl": 0.0,
+    "short_pnl": -96.0,
+    "total_trades": 1,
+    "long_trades": 0,
+    "short_trades": 1,
+    "winning_trades": 0,
+    "losing_trades": 1,
+    "long_wins": 0,
+    "short_wins": 0,
+    "win_rate": 0.0,
+    "long_win_rate": 0.0,
+    "short_win_rate": 0.0,
+    "trade_days": 1,
+    "max_drawdown": 96.0,
+    "peak_pnl": 0.0,
+    "lot1_pnl": -15.0,
+    "lot2_pnl": -40.0,
+    "lot3_pnl": -41.0
+  },
+  "rev_web_gui_result": {
+    "total_pnl": -96.0,
+    "long_pnl": 0.0,
+    "short_pnl": -96.0,
+    "total_trades": 1,
+    "long_trades": 0,
+    "short_trades": 1,
+    "winning_trades": 0,
+    "losing_trades": 1,
+    "long_wins": 0,
+    "short_wins": 0,
+    "win_rate": 0.0,
+    "long_win_rate": 0.0,
+    "short_win_rate": 0.0,
+    "trade_days": 1,
+    "max_drawdown": 96.0,
+    "peak_pnl": 0.0,
+    "lot1_pnl": -15.0,
+    "lot2_pnl": -40.0,
+    "lot3_pnl": -41.0
+  },
+  "consistency_check": {
+    "basic_test_consistent": true,
+    "all_scenarios_consistent": true,
+    "overall_success": true
+  }
+}

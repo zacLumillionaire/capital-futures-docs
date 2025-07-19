@@ -94,6 +94,10 @@ class StrategyConfig:
     risk_config: RiskConfig = field(default_factory=RiskConfig)
     stop_loss_config: StopLossConfig = field(default_factory=StopLossConfig)
 
+    # === 🚀 【新增】交易方向和進場模式控制 ===
+    trading_direction: str = "BOTH"  # "BOTH", "LONG_ONLY", "SHORT_ONLY"
+    entry_price_mode: str = "range_boundary"  # "range_boundary", "breakout_close", "breakout_low"
+
 def format_config_summary(config: StrategyConfig) -> str:
     """將 StrategyConfig 物件格式化為人類易讀的摘要字串。"""
     summary_lines = [f"\n📋======= 🔄反轉策略設定摘要 (交易口數: {config.trade_size_in_lots}) =======📋"]
@@ -245,28 +249,57 @@ def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config:
     """支援任意口數，並使用正確序列檢查的邏輯 - 反轉策略版本"""
     position, entry_price, entry_time, entry_candle_index = None, Decimal(0), None, -1
 
-    # 🔄 【反轉策略】進場邏輯完全反轉
+    # 🔄 【反轉策略】進場邏輯完全反轉 + 🚀 【新增】交易方向控制
+    trading_direction = getattr(config, 'trading_direction', 'BOTH')
+    entry_price_mode = getattr(config, 'entry_price_mode', 'range_boundary')
+
     for i, candle in enumerate(trade_candles):
         if candle['close_price'] > range_high:
             # 原本做多的點改為做空
-            position, entry_price, entry_time, entry_candle_index = 'SHORT', candle['close_price'], candle['trade_datetime'].time(), i
-            break
+            if trading_direction in ['BOTH', 'SHORT_ONLY']:
+                # 🚀 【修復】根據進場價格模式計算實際進場價格
+                if entry_price_mode == 'breakout_close':
+                    actual_entry_price = candle['close_price']
+                elif entry_price_mode == 'breakout_low':
+                    actual_entry_price = candle['low_price'] + Decimal(5)  # 最低點+5點
+                else:  # range_boundary (預設)
+                    actual_entry_price = range_high  # 區間邊緣進場
+
+                position, entry_price, entry_time, entry_candle_index = 'SHORT', actual_entry_price, candle['trade_datetime'].time(), i
+                break
         elif candle['low_price'] < range_low:
             # 原本做空的點改為做多
-            position, entry_price, entry_time, entry_candle_index = 'LONG', candle['low_price'], candle['trade_datetime'].time(), i
-            break
+            if trading_direction in ['BOTH', 'LONG_ONLY']:
+                # 🚀 【修復】根據進場價格模式計算實際進場價格
+                if entry_price_mode == 'breakout_close':
+                    actual_entry_price = candle['close_price']
+                elif entry_price_mode == 'breakout_low':
+                    actual_entry_price = candle['low_price'] + Decimal(5)  # 最低點+5點
+                else:  # range_boundary (預設)
+                    actual_entry_price = range_low  # 區間邊緣進場
 
-    if not position: return Decimal(0), ""
+                position, entry_price, entry_time, entry_candle_index = 'LONG', actual_entry_price, candle['trade_datetime'].time(), i
+                break
+
+    # 🚀 【修復】如果沒有進場，返回一致的格式（3個值）
+    if not position:
+        return Decimal(0), "", [Decimal(0), Decimal(0), Decimal(0)]
 
     # 🚀 【移除舊邏輯】不再使用累積虧損檢查，改用風控停損點方式
 
-    # 🔄 【反轉策略】日誌顯示反轉後的實際進場方向
-    logger.info(f"  📈 LONG  | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))} (原策略做空點)" if position == 'LONG'
-                else f"  📉 SHORT | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))} (原策略做多點)")
+    # 🔄 【反轉策略】日誌顯示反轉後的實際進場方向和進場模式
+    entry_mode_desc = {
+        'range_boundary': '區間邊緣',
+        'breakout_close': '突破收盤價',
+        'breakout_low': '最低點+5點'
+    }.get(entry_price_mode, entry_price_mode)
+
+    logger.info(f"  📈 LONG  | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))} | 進場模式: {entry_mode_desc} (原策略做空點)" if position == 'LONG'
+                else f"  📉 SHORT | 反轉進場 {config.trade_size_in_lots} 口 | 時間: {entry_time}, 價格: {int(round(entry_price))} | 進場模式: {entry_mode_desc} (原策略做多點)")
 
     lots = []
     # 🎯 取得停利目標點（雖然函數名稱是 get_initial_stop_loss，但實際返回停利目標）
-    profit_target_price = get_initial_stop_loss(config, range_high, range_low, position, entry_price)
+    profit_target_price = get_initial_stop_loss(config, range_high, range_low, position)
 
     # 🚀 【新增】風控停損點計算
     risk_sl = None
@@ -363,9 +396,10 @@ def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config:
             tp_triggered = False
 
             # 檢查是否為實驗模式且有固定停利設定
-            if config.get('experiment_mode') and config.get('experiment_take_profit_points'):
+            # 注意：StrategyConfig 是 dataclass，不是字典，所以使用 hasattr 檢查屬性
+            if hasattr(config, 'experiment_mode') and getattr(config, 'experiment_mode', False) and hasattr(config, 'experiment_take_profit_points'):
                 # 實驗模式：使用固定停利點數
-                take_profit_points = config['experiment_take_profit_points']
+                take_profit_points = config.experiment_take_profit_points
                 if position == 'LONG':
                     target_price = entry_price + take_profit_points
                     tp_triggered = exit_candle['high_price'] >= target_price
@@ -479,7 +513,7 @@ def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config:
             if exited_by_sl:
                 # 🚀 【新增】第一口出場時，移除所有剩餘口數的風控停損，改回停利目標
                 if lot['id'] == 1:  # 第一口出場
-                    profit_target = get_initial_stop_loss(config, range_high, range_low, position, entry_price)  # 實際是停利目標
+                    profit_target = get_initial_stop_loss(config, range_high, range_low, position)  # 實際是停利目標
                     for remaining_lot in lots:
                         if remaining_lot['status'] == 'active' and remaining_lot['is_initial_stop']:
                             if remaining_lot['stop_loss'] != profit_target:
@@ -530,7 +564,17 @@ def _run_multi_lot_logic(day_session_candles: list, trade_candles: list, config:
             for lot in active_lots: lot['pnl'], lot['status'] = eod_pnl, 'exited'
             logger.info(f"  ⚪️ 收盤平倉剩餘 {len(active_lots)} 口 | 損益: {int(round(eod_pnl)):+d}")
     
-    return Decimal(sum(l['pnl'] for l in lots)) if lots else Decimal(0), position or ""
+    # 🚀 【修復】返回總損益、交易方向和各口詳細損益
+    total_day_pnl = Decimal(sum(l['pnl'] for l in lots)) if lots else Decimal(0)
+
+    # 計算各口損益（確保有3口的數據）
+    lot_pnls = [Decimal(0), Decimal(0), Decimal(0)]  # 初始化3口損益
+    if lots:
+        for lot in lots:
+            if lot['id'] <= 3:  # 確保不超過3口
+                lot_pnls[lot['id'] - 1] = Decimal(lot['pnl'])
+
+    return total_day_pnl, position or "", lot_pnls
 
 # ==============================================================================
 # 3. 主回測函式
@@ -613,6 +657,15 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
             total_pnl, winning_trades, losing_trades = Decimal(0), 0, 0
             cumulative_pnl = Decimal(0)  # 🚀 新增：追蹤累積損益
 
+            # 🚀 【新增】MDD 計算變量
+            peak_pnl = Decimal(0)  # 累積損益峰值
+            max_drawdown = Decimal(0)  # 最大回撤
+
+            # 🚀 【新增】各口損益統計
+            lot1_total_pnl = Decimal(0)
+            lot2_total_pnl = Decimal(0)
+            lot3_total_pnl = Decimal(0)
+
             # 🚀 【新增】多空分別統計
             long_pnl, short_pnl = Decimal(0), Decimal(0)
             long_trades, short_trades = 0, 0
@@ -670,8 +723,8 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
 
                 trade_candles = [c for c in day_session_candles if c['trade_datetime'].time() >= time(trade_start_hour, trade_start_min)]
 
-                # 🚀 【新邏輯】使用風控停損點方式，不再需要累積損益參數
-                day_pnl, trade_direction = _run_multi_lot_logic(day_session_candles, trade_candles, config, range_high, range_low)
+                # 🚀 【修復】使用風控停損點方式，並獲取各口損益
+                day_pnl, trade_direction, day_lot_pnls = _run_multi_lot_logic(day_session_candles, trade_candles, config, range_high, range_low)
 
                 if day_pnl != 0:
                     is_long_trade = (trade_direction == 'LONG')
@@ -694,6 +747,19 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
                 total_pnl += day_pnl
                 cumulative_pnl += day_pnl  # 🚀 更新累積損益
 
+                # 🚀 【修復】計算 MDD
+                if cumulative_pnl > peak_pnl:
+                    peak_pnl = cumulative_pnl
+
+                current_drawdown = peak_pnl - cumulative_pnl
+                if current_drawdown > max_drawdown:
+                    max_drawdown = current_drawdown
+
+                # 🚀 【修復】累積各口損益
+                lot1_total_pnl += day_lot_pnls[0]
+                lot2_total_pnl += day_lot_pnls[1]
+                lot3_total_pnl += day_lot_pnls[2]
+
             # 計算統計數據
             trade_count = winning_trades + losing_trades
             win_rate = (winning_trades / trade_count * 100) if trade_count > 0 else 0
@@ -711,7 +777,7 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
                 logger.info(format_config_summary(config))
                 logger.info("===========================")
 
-            # 返回結構化結果
+            # 🚀 【修復】返回包含MDD和各口損益的完整結構化結果
             return {
                 'total_pnl': float(total_pnl),
                 'long_pnl': float(long_pnl),
@@ -726,7 +792,13 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
                 'win_rate': win_rate / 100,
                 'long_win_rate': long_win_rate / 100,
                 'short_win_rate': short_win_rate / 100,
-                'trade_days': len(trade_days)
+                'trade_days': len(trade_days),
+                # 🚀 【修復】新增MDD和各口損益統計
+                'max_drawdown': float(max_drawdown),
+                'peak_pnl': float(peak_pnl),
+                'lot1_pnl': float(lot1_total_pnl),
+                'lot2_pnl': float(lot2_total_pnl),
+                'lot3_pnl': float(lot3_total_pnl)
             }
 
     except Exception as e:
@@ -736,7 +808,10 @@ def run_backtest(config: StrategyConfig, start_date: str | None = None, end_date
             'total_pnl': 0.0, 'long_pnl': 0.0, 'short_pnl': 0.0,
             'total_trades': 0, 'long_trades': 0, 'short_trades': 0,
             'winning_trades': 0, 'losing_trades': 0, 'long_wins': 0, 'short_wins': 0,
-            'win_rate': 0.0, 'long_win_rate': 0.0, 'short_win_rate': 0.0, 'trade_days': 0
+            'win_rate': 0.0, 'long_win_rate': 0.0, 'short_win_rate': 0.0, 'trade_days': 0,
+            # 🚀 【修復】錯誤情況下也要返回MDD和各口損益
+            'max_drawdown': 0.0, 'peak_pnl': 0.0,
+            'lot1_pnl': 0.0, 'lot2_pnl': 0.0, 'lot3_pnl': 0.0
         }
 
 

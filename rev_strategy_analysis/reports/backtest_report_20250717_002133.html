@@ -1,0 +1,221 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>回測分析報告</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }
+        .stat-card { background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; }
+        .stat-value { font-size: 24px; font-weight: bold; color: #2e7d32; }
+        .stat-value.positive { color: #2e7d32; }
+        .stat-value.negative { color: #d32f2f; }
+        .stat-label { font-size: 14px; color: #666; margin-top: 5px; }
+        .log-section { margin-top: 30px; }
+        .log-content { background: #f8f9fa; padding: 15px; border-radius: 5px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; font-size: 12px; }
+        .debug-section { margin-top: 20px; background: #fff3cd; padding: 15px; border-radius: 5px; }
+
+        /* 🚀 【新增】詳細日誌區塊樣式 */
+        .log-container {
+            margin-top: 30px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fafafa;
+        }
+        .log-header {
+            background: #f0f0f0;
+            padding: 12px 15px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+        }
+        #logToggleBtn {
+            background: #1976d2;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        #logToggleBtn:hover {
+            background: #1565c0;
+        }
+
+        h1, h2 { color: #333; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Profit-Funded Risk 多口交易策略回測報告</h1>
+            <p>報告生成時間: 2025-07-17 00:21:33</p>
+        </div>
+
+        <h2>📈 關鍵統計指標</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">0</div>
+                <div class="stat-label">總交易天數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">0</div>
+                <div class="stat-label">總交易次數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">0.00%</div>
+                <div class="stat-label">勝率</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">0.00</div>
+                <div class="stat-label">總損益 (TOTAL P&L)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value negative">0.00</div>
+                <div class="stat-label">最大回撤 (MAX DRAWDOWN)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">0</div>
+                <div class="stat-label">獲利次數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">0</div>
+                <div class="stat-label">虧損次數</div>
+            </div>
+        </div>
+
+        <!-- 🚀 【新增】各口PnL分析 -->
+        <h2>🎯 各口損益分析</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value ">0.00</div>
+                <div class="stat-label">第一口累積損益</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value ">0.00</div>
+                <div class="stat-label">第二口累積損益</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value ">0.00</div>
+                <div class="stat-label">第三口累積損益</div>
+            </div>
+        </div>
+        <div class="help-text" style="margin-top: 10px;">
+            <strong>各口損益說明：</strong><br>
+            • <strong>第一口：</strong> 最先進場的部位，通常風險較低<br>
+            • <strong>第二口：</strong> 第二個進場的部位，可能有保護性停損<br>
+            • <strong>第三口：</strong> 最後進場的部位，通常風險較高<br>
+            • 透過比較各口表現，可以判斷是否要使用三口策略還是兩口多組策略
+        </div>
+
+        <h2>📊 多空部位分析</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">0</div>
+                <div class="stat-label">LONG 交易天數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">0.00</div>
+                <div class="stat-label">LONG TOTAL P&L</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">0</div>
+                <div class="stat-label">SHORT 交易天數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">0.00</div>
+                <div class="stat-label">SHORT TOTAL P&L</div>
+            </div>
+        </div>
+
+        <div class="debug-section">
+            <h3>🔧 數據驗證資訊</h3>
+            <p><strong>數據來源:</strong> 直接API調用 (無subprocess)</p>
+            <hr>
+            <h4>📊 交易統計驗證</h4>
+            <p><strong>總交易次數:</strong> 0</p>
+            <p><strong>多頭交易天數:</strong> 0</p>
+            <p><strong>空頭交易天數:</strong> 0</p>
+            <p><strong>最大回撤:</strong> 0.00 點</p>
+        </div>
+    </div>
+
+    <!-- 🚀 【新增】詳細日誌區塊 -->
+    <h2>📋 詳細執行日誌</h2>
+    <div class="log-container">
+        <div class="log-header">
+            <span>回測執行過程詳細記錄</span>
+            <button onclick="toggleLogExpand()" id="logToggleBtn">展開全部</button>
+        </div>
+        <div class="log-content" id="logContent">
+            <pre>[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:597] 📅 回測時間區間: 2024-11-04 至 2025-06-28
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:601] 🕐 開盤區間時間: 11:00 至 11:15
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:603] 
+📋======= 🔄反轉策略設定摘要 (交易口數: 3) =======📋
+  - 交易方向：只做多
+  - 停利目標設定：區間邊緣 (反轉策略：原停損點變停利點)
+  --- 濾網設定 ---
+  - 區間大小濾網：停用
+  - 風險管理濾網：停用
+  --- 各口數出場規則 ---
+  - [第 1 口單]
+    - 停利: 固定停利 (30點)
+  - [第 2 口單]
+    - 停利: 固定停利 (30點)
+    - 保護性停損: 前序累積獲利 * 0
+  - [第 3 口單]
+    - 停利: 固定停利 (30點)
+    - 保護性停損: 前序累積獲利 * 0
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:633] 🔍 找到 192 個交易日進行回測。
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:671] 📊 2024-11-04 開盤區間計算詳情:
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:672]    時間範圍: 11:00 - 11:15
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:673]    找到 15 根K棒:
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒1: 11:00:00 | 高:22880 低:22868 收:22874
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒2: 11:01:00 | 高:22905 低:22875 收:22887
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒3: 11:03:00 | 高:22884 低:22872 收:22875
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒4: 11:04:00 | 高:22879 低:22869 收:22873
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒5: 11:05:00 | 高:22878 低:22865 收:22866
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒6: 11:06:00 | 高:22878 低:22866 收:22875
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒7: 11:07:00 | 高:22883 低:22868 收:22880
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒8: 11:08:00 | 高:22893 低:22877 收:22891
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒9: 11:09:00 | 高:22891 低:22878 收:22880
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒10: 11:10:00 | 高:22897 低:22882 收:22896
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒11: 11:11:00 | 高:22899 低:22890 收:22895
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒12: 11:12:00 | 高:22905 低:22893 收:22899
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒13: 11:13:00 | 高:22922 低:22899 收:22916
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒14: 11:14:00 | 高:22951 低:22916 收:22933
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:675]      K棒15: 11:15:00 | 高:22939 低:22919 收:22926
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:683]    ➡️ 計算結果: 區間高點 22951 | 區間低點 22865 | 區間大小 86 點
+[2025-07-17T00:21:33+0800] INFO [rev_multi_module.run_backtest:692] --- 2024-11-04 | 開盤區間: 22865 - 22951 | 區間濾網未啟用 ---
+[2025-07-17T00:21:33+0800] ERROR [rev_multi_module.run_backtest:783] ❌ 執行回測時發生錯誤: not enough values to unpack (expected 3, got 2)
+Traceback (most recent call last):
+  File &quot;/Users/z/big/my-capital-project/rev_strategy_analysis/rev_multi_Profit-Funded Risk_多口.py&quot;, line 704, in run_backtest
+    day_pnl, trade_direction, lot_pnls = _run_multi_lot_logic(day_session_candles, trade_candles, config, range_high, range_low)
+ValueError: not enough values to unpack (expected 3, got 2)
+</pre>
+        </div>
+    </div>
+
+    <script>
+        function toggleLogExpand() {
+            const logContent = document.getElementById('logContent');
+            const toggleBtn = document.getElementById('logToggleBtn');
+
+            if (logContent.style.maxHeight === 'none') {
+                logContent.style.maxHeight = '400px';
+                toggleBtn.textContent = '展開全部';
+            } else {
+                logContent.style.maxHeight = 'none';
+                toggleBtn.textContent = '收合';
+            }
+        }
+    </script>
+</body>
+</html>
+                

@@ -1,0 +1,165 @@
+{
+  "rev_web_trading_gui": {
+    "database_type": "SQLite",
+    "database_path": "/Users/z/big/my-capital-project/rev_strategy_analysis/stock_data.sqlite",
+    "database_size": 31035392,
+    "database_mtime": 1752550685.7182024,
+    "database_exists": true,
+    "test_date": "2024-11-15",
+    "total_records": 975,
+    "session_records": 271,
+    "range_records": 2,
+    "data_available": true,
+    "first_time": "2024-11-15T08:46:00",
+    "last_time": "2024-11-15T13:45:00",
+    "data_hash": "d537307d2c431edbbbaa6615cd81ad3e",
+    "sample_records": {
+      "first": {
+        "time": "2024-11-15T08:46:00",
+        "open": 22709.0,
+        "high": 22738.0,
+        "low": 22683.0,
+        "close": 22732.0
+      },
+      "last": {
+        "time": "2024-11-15T13:45:00",
+        "open": 22763.0,
+        "high": 22770.0,
+        "low": 22757.0,
+        "close": 22762.0
+      }
+    },
+    "table_structure": [
+      {
+        "name": "trade_datetime",
+        "type": "TEXT",
+        "notnull": false,
+        "pk": true
+      },
+      {
+        "name": "open_price",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "high_price",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "low_price",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "close_price",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "price_change",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "percentage_change",
+        "type": "REAL",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "volume",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      }
+    ]
+  },
+  "mdd_gui": {
+    "database_type": "SQLite",
+    "database_path": "/Users/z/big/my-capital-project/rev_strategy_analysis/stock_data.sqlite",
+    "database_size": 31035392,
+    "database_mtime": 1752550685.7182024,
+    "database_exists": true,
+    "test_date": "2024-11-15",
+    "total_records": 975,
+    "session_records": 271,
+    "range_records": 2,
+    "data_available": true,
+    "first_time": "2024-11-15T08:46:00",
+    "last_time": "2024-11-15T13:45:00",
+    "data_hash": "d537307d2c431edbbbaa6615cd81ad3e",
+    "sample_records": {
+      "first": {
+        "time": "2024-11-15T08:46:00",
+        "open": 22709.0,
+        "high": 22738.0,
+        "low": 22683.0,
+        "close": 22732.0
+      },
+      "last": {
+        "time": "2024-11-15T13:45:00",
+        "open": 22763.0,
+        "high": 22770.0,
+        "low": 22757.0,
+        "close": 22762.0
+      }
+    },
+    "table_structure": [
+      {
+        "name": "trade_datetime",
+        "type": "TEXT",
+        "notnull": false,
+        "pk": true
+      },
+      {
+        "name": "open_price",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "high_price",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "low_price",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "close_price",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "price_change",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "percentage_change",
+        "type": "REAL",
+        "notnull": false,
+        "pk": false
+      },
+      {
+        "name": "volume",
+        "type": "INTEGER",
+        "notnull": false,
+        "pk": false
+      }
+    ]
+  },
+  "validation_time": "2025-07-17"
+}

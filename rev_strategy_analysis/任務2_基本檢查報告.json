@@ -1,0 +1,9 @@
+{
+  "timestamp": "2025-07-17T14:41:23.890650",
+  "database_file_exists": true,
+  "rev_engine_exists": true,
+  "exp_engine_exists": true,
+  "shared_module_exists": true,
+  "sqlite_connection_exists": true,
+  "config_factory_exists": true
+}

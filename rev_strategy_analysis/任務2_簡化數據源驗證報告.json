@@ -1,0 +1,44 @@
+{
+  "database_info": {
+    "database_path": "/Users/z/big/my-capital-project/rev_strategy_analysis/stock_data.sqlite",
+    "database_size": 31035392,
+    "database_mtime": 1752550685.7182024,
+    "database_exists": true
+  },
+  "data_info": {
+    "test_date": "2024-11-15",
+    "total_records": 975,
+    "session_records": 271,
+    "range_records": 2,
+    "data_available": true,
+    "first_time": "2024-11-15T08:46:00",
+    "last_time": "2024-11-15T13:45:00",
+    "first_close": 22732.0,
+    "last_close": 22762.0,
+    "price_checksum": 227547.0
+  },
+  "engine_info": {
+    "rev_web_trading_gui": {
+      "file_path": "rev_multi_Profit-Funded Risk_多口.py",
+      "file_size": 62868,
+      "file_mtime": 1752683370.6771162,
+      "exists": true
+    },
+    "mdd_gui": {
+      "file_path": "experiment_analysis/exp_rev_multi_Profit-Funded Risk_多口.py",
+      "file_size": 62446,
+      "file_mtime": 1752692198.275532,
+      "exists": true
+    }
+  },
+  "differences": [
+    "文件大小不同: rev_web(62868) vs mdd(62446)",
+    "'Decimal' 出現次數不同: rev_web(137) vs mdd(134)"
+  ],
+  "summary": {
+    "database_available": true,
+    "data_available": true,
+    "engines_available": true,
+    "differences_found": true
+  }
+}

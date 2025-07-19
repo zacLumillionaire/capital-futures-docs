@@ -1,0 +1,550 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>回測分析報告</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { text-align: center; margin-bottom: 30px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }
+        .stat-card { background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; }
+        .stat-value { font-size: 24px; font-weight: bold; color: #2e7d32; }
+        .stat-value.positive { color: #2e7d32; }
+        .stat-value.negative { color: #d32f2f; }
+        .stat-label { font-size: 14px; color: #666; margin-top: 5px; }
+        .log-section { margin-top: 30px; }
+        .log-content { background: #f8f9fa; padding: 15px; border-radius: 5px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; font-size: 12px; }
+        .debug-section { margin-top: 20px; background: #fff3cd; padding: 15px; border-radius: 5px; }
+
+        /* 🚀 【新增】詳細日誌區塊樣式 */
+        .log-container {
+            margin-top: 30px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fafafa;
+        }
+        .log-header {
+            background: #f0f0f0;
+            padding: 12px 15px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: bold;
+        }
+        #logToggleBtn {
+            background: #1976d2;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        #logToggleBtn:hover {
+            background: #1565c0;
+        }
+
+        h1, h2 { color: #333; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Profit-Funded Risk 多口交易策略回測報告</h1>
+            <p>報告生成時間: 2025-07-17 17:47:16</p>
+        </div>
+
+        <h2>📈 關鍵統計指標</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">26</div>
+                <div class="stat-label">總交易天數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">21</div>
+                <div class="stat-label">總交易次數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">33.33%</div>
+                <div class="stat-label">勝率</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">-690.00</div>
+                <div class="stat-label">總損益 (TOTAL P&L)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value negative">707.00</div>
+                <div class="stat-label">最大回撤 (MAX DRAWDOWN)</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">7</div>
+                <div class="stat-label">獲利次數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">14</div>
+                <div class="stat-label">虧損次數</div>
+            </div>
+        </div>
+
+        <!-- 🚀 【新增】各口PnL分析 -->
+        <h2>🎯 各口損益分析</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value negative">-118.00</div>
+                <div class="stat-label">第一口累積損益</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value negative">-350.00</div>
+                <div class="stat-label">第二口累積損益</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value negative">-222.00</div>
+                <div class="stat-label">第三口累積損益</div>
+            </div>
+        </div>
+        <div class="help-text" style="margin-top: 10px;">
+            <strong>各口損益說明：</strong><br>
+            • <strong>第一口：</strong> 最先進場的部位，通常風險較低<br>
+            • <strong>第二口：</strong> 第二個進場的部位，可能有保護性停損<br>
+            • <strong>第三口：</strong> 最後進場的部位，通常風險較高<br>
+            • 透過比較各口表現，可以判斷是否要使用三口策略還是兩口多組策略
+        </div>
+
+        <h2>📊 多空部位分析</h2>
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">8</div>
+                <div class="stat-label">LONG 交易天數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">-178.00</div>
+                <div class="stat-label">LONG TOTAL P&L</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">13</div>
+                <div class="stat-label">SHORT 交易天數</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">-512.00</div>
+                <div class="stat-label">SHORT TOTAL P&L</div>
+            </div>
+        </div>
+
+        <div class="debug-section">
+            <h3>🔧 數據驗證資訊</h3>
+            <p><strong>數據來源:</strong> 直接API調用 (無subprocess)</p>
+            <hr>
+            <h4>📊 交易統計驗證</h4>
+            <p><strong>總交易次數:</strong> 21</p>
+            <p><strong>多頭交易天數:</strong> 8</p>
+            <p><strong>空頭交易天數:</strong> 13</p>
+            <p><strong>最大回撤:</strong> 707.00 點</p>
+        </div>
+    </div>
+
+    <!-- 🚀 【新增】詳細日誌區塊 -->
+    <h2>📋 詳細執行日誌</h2>
+    <div class="log-container">
+        <div class="log-header">
+            <span>回測執行過程詳細記錄</span>
+            <button onclick="toggleLogExpand()" id="logToggleBtn">展開全部</button>
+        </div>
+        <div class="log-content" id="logContent">
+            <pre>[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:622] 📅 回測時間區間: 2024-11-01 至 2024-11-30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:626] 🕐 開盤區間時間: 08:46 至 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:628] 
+📋======= 🔄反轉策略設定摘要 (交易口數: 3) =======📋
+  - 交易方向：多空都做
+  - 停利目標設定：區間邊緣 (反轉策略：原停損點變停利點)
+  --- 濾網設定 ---
+  - 區間大小濾網：停用
+  - 風險管理濾網：停用
+  --- 各口數出場規則 ---
+  - [第 1 口單]
+    - 停利: 固定停利 (30點)
+  - [第 2 口單]
+    - 停利: 固定停利 (30點)
+    - 保護性停損: 前序累積獲利 * 0
+  - [第 3 口單]
+    - 停利: 固定停利 (30點)
+    - 保護性停損: 前序累積獲利 * 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:658] 🔍 找到 26 個交易日進行回測。
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-01 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22407 低:22360 收:22366
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:22368 低:22345 收:22347
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22407 | 區間低點 22345 | 區間大小 62 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-01 | 開盤區間: 22345 - 22407 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📈 LONG  | 反轉進場 3 口 | 時間: 08:48:00, 價格: 22345 | 進場模式: 區間邊緣 (原策略做空點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22331
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22305
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22304
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:50:00, 出場價: 22331, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 08:52:00, 出場價: 22305, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 08:52:00, 出場價: 22304, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-04 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 1 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:47:00 | 高:22725 低:22700 收:22724
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22725 | 區間低點 22700 | 區間大小 25 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-04 | 開盤區間: 22700 - 22725 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:48:00, 價格: 22725 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22739
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22765
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22766
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:49:00, 出場價: 22739, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 08:49:00, 出場價: 22765, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 08:49:00, 出場價: 22766, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-05 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 1 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22826 低:22780 收:22824
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22826 | 區間低點 22780 | 區間大小 46 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-05 | 開盤區間: 22780 - 22826 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:54:00, 價格: 22826 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22840
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22866
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22867
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:55:00, 出場價: 22840, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 09:04:00, 出場價: 22866, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 09:04:00, 出場價: 22867, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-06 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:23273 低:23134 收:23152
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:23169 低:23116 收:23120
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 23273 | 區間低點 23116 | 區間大小 157 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-06 | 開盤區間: 23116 - 23273 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📈 LONG  | 反轉進場 3 口 | 時間: 08:48:00, 價格: 23116 | 進場模式: 區間邊緣 (原策略做空點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 23102
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 23076
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 23075
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:51:00, 出場價: 23102, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第2口固定停利 | 時間: 08:55:00, 出場價: 23146, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第3口固定停利 | 時間: 08:55:00, 出場價: 23146, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-07 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:23191 低:23152 收:23156
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:23157 低:23124 收:23132
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 23191 | 區間低點 23124 | 區間大小 67 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-07 | 開盤區間: 23124 - 23191 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📈 LONG  | 反轉進場 3 口 | 時間: 08:48:00, 價格: 23124 | 進場模式: 區間邊緣 (原策略做空點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 23110
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 23084
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 23083
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:51:00, 出場價: 23110, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 08:57:00, 出場價: 23084, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第3口固定停利 | 時間: 09:01:00, 出場價: 23154, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-08 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:23778 低:23746 收:23766
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:23793 低:23763 收:23788
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 23793 | 區間低點 23746 | 區間大小 47 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-08 | 開盤區間: 23746 - 23793 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:48:00, 價格: 23793 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 23807
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 23833
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 23834
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第1口固定停利 | 時間: 08:51:00, 出場價: 23763, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第2口固定停利 | 時間: 08:51:00, 出場價: 23763, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第3口固定停利 | 時間: 08:51:00, 出場價: 23763, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-11 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:23585 低:23550 收:23551
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:23566 低:23537 收:23547
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 23585 | 區間低點 23537 | 區間大小 48 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-11 | 開盤區間: 23537 - 23585 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:49:00, 價格: 23585 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 23599
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 23625
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 23626
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:50:00, 出場價: 23599, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第2口固定停利 | 時間: 09:01:00, 出場價: 23555, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第3口固定停利 | 時間: 09:01:00, 出場價: 23555, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-12 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:23062 低:22985 收:23034
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:23046 低:22989 收:23036
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 23062 | 區間低點 22985 | 區間大小 77 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-12 | 開盤區間: 22985 - 23062 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:49:00, 價格: 23062 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 23076
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 23102
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 23103
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:50:00, 出場價: 23076, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 08:54:00, 出場價: 23102, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 08:54:00, 出場價: 23103, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-13 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 1 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22809 低:22751 收:22788
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22809 | 區間低點 22751 | 區間大小 58 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-13 | 開盤區間: 22751 - 22809 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:50:00, 價格: 22809 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22823
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22849
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22850
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:51:00, 出場價: 22823, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 08:53:00, 出場價: 22849, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 08:53:00, 出場價: 22850, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-14 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22832 低:22773 收:22829
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:22846 低:22820 收:22836
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22846 | 區間低點 22773 | 區間大小 73 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-14 | 開盤區間: 22773 - 22846 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📈 LONG  | 反轉進場 3 口 | 時間: 08:57:00, 價格: 22773 | 進場模式: 區間邊緣 (原策略做空點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22759
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22733
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22732
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第1口固定停利 | 時間: 08:58:00, 出場價: 22803, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第2口固定停利 | 時間: 08:58:00, 出場價: 22803, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第3口固定停利 | 時間: 08:58:00, 出場價: 22803, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-15 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22738 低:22683 收:22732
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:22735 低:22710 收:22733
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22738 | 區間低點 22683 | 區間大小 55 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-15 | 開盤區間: 22683 - 22738 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:48:00, 價格: 22738 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22752
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22778
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22779
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:49:00, 出場價: 22752, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 08:56:00, 出場價: 22778, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 08:56:00, 出場價: 22779, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-18 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22676 低:22615 收:22643
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:22659 低:22636 收:22658
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22676 | 區間低點 22615 | 區間大小 61 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-18 | 開盤區間: 22615 - 22676 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:49:00, 價格: 22676 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22690
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22716
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22717
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:50:00, 出場價: 22690, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 08:52:00, 出場價: 22716, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 08:52:00, 出場價: 22717, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-19 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22649 低:22611 收:22630
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:22635 低:22621 收:22621
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22649 | 區間低點 22611 | 區間大小 38 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-19 | 開盤區間: 22611 - 22649 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:51:00, 價格: 22649 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22663
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22689
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22690
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:52:00, 出場價: 22663, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 08:55:00, 出場價: 22689, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 08:55:00, 出場價: 22690, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-20 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22930 低:22892 收:22902
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:22923 低:22898 收:22913
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22930 | 區間低點 22892 | 區間大小 38 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-20 | 開盤區間: 22892 - 22930 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:49:00, 價格: 22930 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22944
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22970
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22971
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第1口固定停利 | 時間: 08:57:00, 出場價: 22900, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第2口固定停利 | 時間: 08:57:00, 出場價: 22900, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第3口固定停利 | 時間: 08:57:00, 出場價: 22900, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-21 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22679 低:22644 收:22672
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:22678 低:22645 收:22647
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22679 | 區間低點 22644 | 區間大小 35 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-21 | 開盤區間: 22644 - 22679 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📈 LONG  | 反轉進場 3 口 | 時間: 08:49:00, 價格: 22644 | 進場模式: 區間邊緣 (原策略做空點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22630
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22604
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22603
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:50:00, 出場價: 22630, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 08:57:00, 出場價: 22604, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 08:57:00, 出場價: 22603, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-22 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22818 低:22784 收:22787
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:22813 低:22781 收:22804
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22818 | 區間低點 22781 | 區間大小 37 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-22 | 開盤區間: 22781 - 22818 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:50:00, 價格: 22818 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22832
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22858
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22859
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:51:00, 出場價: 22832, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 08:52:00, 出場價: 22858, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 08:52:00, 出場價: 22859, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-25 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:23285 低:23222 收:23242
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:23260 低:23225 收:23228
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 23285 | 區間低點 23222 | 區間大小 63 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-25 | 開盤區間: 23222 - 23285 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📈 LONG  | 反轉進場 3 口 | 時間: 08:51:00, 價格: 23222 | 進場模式: 區間邊緣 (原策略做空點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 23208
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 23182
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 23181
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:52:00, 出場價: 23208, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 09:01:00, 出場價: 23182, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 09:01:00, 出場價: 23181, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-26 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 1 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22750 低:22687 收:22735
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22750 | 區間低點 22687 | 區間大小 63 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-26 | 開盤區間: 22687 - 22750 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:52:00, 價格: 22750 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22764
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22790
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22791
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:53:00, 出場價: 22764, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第2口固定停利 | 時間: 09:04:00, 出場價: 22720, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第3口固定停利 | 時間: 09:04:00, 出場價: 22720, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-27 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 1 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:47:00 | 高:22579 低:22559 收:22571
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22579 | 區間低點 22559 | 區間大小 20 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-27 | 開盤區間: 22559 - 22579 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📈 LONG  | 反轉進場 3 口 | 時間: 08:48:00, 價格: 22559 | 進場模式: 區間邊緣 (原策略做空點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22545
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22519
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22518
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第1口固定停利 | 時間: 08:50:00, 出場價: 22589, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第2口固定停利 | 時間: 08:50:00, 出場價: 22589, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第3口固定停利 | 時間: 08:50:00, 出場價: 22589, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-28 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 2 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22344 低:22300 收:22340
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒2: 08:47:00 | 高:22345 低:22315 收:22320
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22345 | 區間低點 22300 | 區間大小 45 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-28 | 開盤區間: 22300 - 22345 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📉 SHORT | 反轉進場 3 口 | 時間: 08:49:00, 價格: 22345 | 進場模式: 區間邊緣 (原策略做多點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22359
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22385
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22386
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:50:00, 出場價: 22359, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 09:00:00, 出場價: 22385, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:417]   ✅ 第3口固定停利 | 時間: 09:06:00, 出場價: 22315, 損益: +30
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:696] 📊 2024-11-29 開盤區間計算詳情:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:697]    時間範圍: 08:46 - 08:47
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:698]    找到 1 根K棒:
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:700]      K棒1: 08:46:00 | 高:22223 低:22159 收:22173
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:708]    ➡️ 計算結果: 區間高點 22223 | 區間低點 22159 | 區間大小 64 點
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:717] --- 2024-11-29 | 開盤區間: 22159 - 22223 | 區間濾網未啟用 ---
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:297]   📈 LONG  | 反轉進場 3 口 | 時間: 08:48:00, 價格: 22159 | 進場模式: 區間邊緣 (原策略做空點)
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第1口設定 | 🎯固定停損模式 | 停損點數: 14點 | 停損點位: 22145
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第2口設定 | 🎯固定停損模式 | 停損點數: 40點 | 停損點位: 22119
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第2口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:355]     📊 第3口設定 | 🎯固定停損模式 | 停損點數: 41點 | 停損點位: 22118
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:371]     🛡️ 第3口保護性停損倍數: 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第1口初始停損 | 時間: 08:49:00, 出場價: 22145, 損益: -14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第2口初始停損 | 時間: 08:49:00, 出場價: 22119, 損益: -40
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module._run_multi_lot_logic:469]   ❌ 第3口初始停損 | 時間: 08:49:00, 出場價: 22118, 損益: -41
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:772] ====== 回測結果總結 ======
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:773] 總交易天數: 26
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:774] 總交易次數: 21
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:775] 獲利次數: 7
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:776] 虧損次數: 14
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:777] 勝率: 33.33%
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:778] 總損益(3口): -690.00
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:779] 
+📋======= 🔄反轉策略設定摘要 (交易口數: 3) =======📋
+  - 交易方向：多空都做
+  - 停利目標設定：區間邊緣 (反轉策略：原停損點變停利點)
+  --- 濾網設定 ---
+  - 區間大小濾網：停用
+  - 風險管理濾網：停用
+  --- 各口數出場規則 ---
+  - [第 1 口單]
+    - 停利: 固定停利 (30點)
+  - [第 2 口單]
+    - 停利: 固定停利 (30點)
+    - 保護性停損: 前序累積獲利 * 0
+  - [第 3 口單]
+    - 停利: 固定停利 (30點)
+    - 保護性停損: 前序累積獲利 * 0
+[2025-07-17T17:47:16+0800] INFO [rev_multi_module.run_backtest:780] ===========================
+</pre>
+        </div>
+    </div>
+
+    <script>
+        function toggleLogExpand() {
+            const logContent = document.getElementById('logContent');
+            const toggleBtn = document.getElementById('logToggleBtn');
+
+            if (logContent.style.maxHeight === 'none') {
+                logContent.style.maxHeight = '400px';
+                toggleBtn.textContent = '展開全部';
+            } else {
+                logContent.style.maxHeight = 'none';
+                toggleBtn.textContent = '收合';
+            }
+        }
+    </script>
+</body>
+</html>
+                

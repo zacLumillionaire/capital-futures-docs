@@ -10,14 +10,48 @@ from flask import Flask, render_template_string, request, jsonify, send_file
 import subprocess
 import json
 import os
+import sys
 import threading
 import logging
 from datetime import datetime
 from pathlib import Path
+import importlib.util
 
 # 設定日誌
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# 🚀 【修復】直接導入統一的回測引擎
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 導入統一的回測引擎
+try:
+    # 獲取正確的路徑
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    engine_path = os.path.join(parent_dir, "rev_multi_Profit-Funded Risk_多口.py")
+
+    spec = importlib.util.spec_from_file_location(
+        "unified_backtest_engine",
+        engine_path
+    )
+    if spec and spec.loader:
+        unified_backtest_engine = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(unified_backtest_engine)
+        logger.info(f"✅ 統一回測引擎導入成功: {engine_path}")
+    else:
+        raise ImportError("無法載入回測引擎")
+except Exception as e:
+    logger.error(f"❌ 統一回測引擎導入失敗: {e}")
+    unified_backtest_engine = None
+
+# 導入統一的配置工廠
+try:
+    from strategy_config_factory import create_config_from_gui_dict
+    logger.info("✅ 配置工廠導入成功")
+except Exception as e:
+    logger.error(f"❌ 配置工廠導入失敗: {e}")
+    create_config_from_gui_dict = None
 
 app = Flask(__name__)
 app.secret_key = 'mdd_gui_secret_key'
@@ -72,6 +106,12 @@ HTML_TEMPLATE = """
         .recommendation-badge { background-color: #ffc107; color: #212529; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
         .mdd-value { font-weight: bold; color: #dc3545; }
         .pnl-value { font-weight: bold; color: #28a745; }
+        .radio-group { display: flex; gap: 15px; margin-top: 5px; }
+        .radio-group label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+        .radio-group input[type="radio"] { margin: 0; }
+        .date-range-display { background-color: #e8f4fd; border: 1px solid #bee5eb; border-radius: 5px; padding: 10px; margin-top: 5px; }
+        .date-range-display strong { color: #0c5460; font-size: 16px; }
+        .date-info { color: #6c757d; font-size: 14px; margin-left: 10px; }
     </style>
 </head>
 <body>
@@ -154,6 +194,38 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
                 <button type="button" class="btn btn-info" onclick="addInterval()">➕ 新增時間區間</button>
+
+                <!-- 回測日期範圍 -->
+                <h3>📅 回測日期範圍</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>固定日期範圍:</label>
+                        <div class="date-range-display">
+                            <strong>2024-11-04 至 2025-06-28</strong>
+                            <span class="date-info">（約 7.8 個月，涵蓋完整交易週期）</span>
+                        </div>
+                        <div class="help-text">
+                            此日期範圍已針對策略驗證進行最佳化，包含多種市場條件以確保回測結果的可靠性。
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 進場方式設定 -->
+                <h3>🎯 進場方式設定</h3>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>多單進場方式:</label>
+                        <div class="radio-group">
+                            <label><input type="radio" name="entry_price_mode" value="range_boundary" checked> 區間下邊緣進場</label>
+                            <label><input type="radio" name="entry_price_mode" value="breakout_low"> 最低點+5點進場</label>
+                        </div>
+                        <div class="help-text">
+                            <strong>進場方式說明：</strong><br>
+                            • <strong>區間下邊緣進場：</strong> 當K棒跌破區間低點時，使用區間下邊緣價格進場（保守，執行確定性高）<br>
+                            • <strong>最低點+5點進場：</strong> 當K棒跌破區間低點時，使用該K棒的最低價+5點進場（避免極端價格，平衡執行風險）
+                        </div>
+                    </div>
+                </div>
 
                 <!-- 執行設定 -->
                 <h3>⚙️ 執行設定</h3>
@@ -307,6 +379,7 @@ HTML_TEMPLATE = """
                     individual: parseNumberList(document.getElementById('individualProfit').value)
                 },
                 time_intervals: timeIntervals,
+                entry_price_mode: document.querySelector('input[name="entry_price_mode"]:checked').value,
                 max_workers: parseInt(document.getElementById('maxWorkers').value)
             };
         }
@@ -414,6 +487,49 @@ HTML_TEMPLATE = """
 
 
 
+        // 停利模式映射字典
+        const takeProfitModeMap = {
+            'unified_fixed': '統一停利',
+            'individual_fixed': '各口獨立停利',
+            'range_boundary': '區間邊緣停利'
+        };
+
+        // 獲取停利類型顯示文字的輔助函數
+        function getTakeProfitDisplayText(config) {
+            // 優先使用 take_profit_mode 字段
+            if (config.take_profit_mode && takeProfitModeMap[config.take_profit_mode]) {
+                const baseType = takeProfitModeMap[config.take_profit_mode];
+
+                // 為統一停利和個別停利添加數值
+                if (config.take_profit_mode === 'unified_fixed') {
+                    // 從實驗結果中獲取實際使用的停利值
+                    const takeProfitValue = config.lot1_take_profit || config.unified_take_profit;
+                    return takeProfitValue ? `${baseType} ${takeProfitValue}` : baseType;
+                } else if (config.take_profit_mode === 'individual_fixed') {
+                    // 從實驗結果中獲取實際使用的停利值
+                    const takeProfitValue = config.lot1_take_profit || config.individual_take_profit;
+                    return takeProfitValue ? `${baseType} ${takeProfitValue}` : baseType;
+                } else {
+                    return baseType; // 區間邊緣停利不需要數值
+                }
+            }
+
+            // 備用邏輯：使用舊的 type 字段
+            if (config.type) {
+                if (config.type.includes('統一停利')) {
+                    return config.type;
+                } else if (config.type.includes('個別停利')) {
+                    return config.type;
+                } else if (config.type.includes('區間')) {
+                    return '區間邊緣停利';
+                }
+                return config.type;
+            }
+
+            // 最後備用：預設值
+            return '統一停利';
+        }
+
         // 顯示時間區間結果
         function displayTimeIntervalResults(timeIntervals, container) {
             if (!timeIntervals || timeIntervals.length === 0) {
@@ -425,33 +541,49 @@ HTML_TEMPLATE = """
 
             timeIntervals.forEach(interval => {
                 html += `
-                    <h4>🕙 ${interval.time}</h4>
+                    <h4>🕙 ${interval.time || interval.interval}</h4>
                     <table class="results-table">
                         <thead>
                             <tr>
+                                <th>排名</th>
                                 <th>停利類型</th>
                                 <th>MDD</th>
                                 <th>P&L</th>
-                                <th>參數設定</th>
-                                <th>推薦</th>
+                                <th>停損參數設定</th>
                             </tr>
                         </thead>
                         <tbody>
                 `;
 
-                if (interval.configs && interval.configs.length > 0) {
-                    interval.configs.forEach(config => {
-                        const isRecommended = interval.recommendation &&
-                            interval.recommendation.includes(config.type);
-                        const rowClass = isRecommended ? 'best-config' : '';
+                // 顯示前3名（從 top3 或 configs 中取得）
+                let dataToShow = [];
+                if (interval.top3 && interval.top3.length > 0) {
+                    dataToShow = interval.top3.slice(0, 3);
+                } else if (interval.configs && interval.configs.length > 0) {
+                    dataToShow = interval.configs.slice(0, 3);
+                }
+
+                if (dataToShow.length > 0) {
+                    dataToShow.forEach((config, index) => {
+                        // 使用新的停利類型顯示邏輯
+                        const stopProfitType = getTakeProfitDisplayText(config);
+
+                        // 添加調試日誌
+                        console.log(`[DEBUG] 時間區間結果 ${index + 1}:`, {
+                            take_profit_mode: config.take_profit_mode,
+                            type: config.type,
+                            lot1_take_profit: config.lot1_take_profit,
+                            displayText: stopProfitType,
+                            rawConfig: config
+                        });
 
                         html += `
-                            <tr class="${rowClass}">
-                                <td>${config.type || ''}</td>
+                            <tr>
+                                <td><strong>${index + 1}</strong></td>
+                                <td>${stopProfitType}</td>
                                 <td class="mdd-value">${config.mdd || 'N/A'}</td>
                                 <td class="pnl-value">${config.pnl || 'N/A'}</td>
                                 <td>${config.params || ''}</td>
-                                <td>${isRecommended ? '<span class="recommendation-badge">⭐ 推薦</span>' : ''}</td>
                             </tr>
                         `;
                     });
@@ -527,8 +659,8 @@ HTML_TEMPLATE = """
                             <th>總P&L</th>
                             <th>LONG PNL</th>
                             <th>SHORT PNL</th>
-                            <th>參數設定</th>
-                            <th>策略類型</th>
+                            <th>停損參數設定</th>
+                            <th>停利類型</th>
                             <th>時間區間</th>
                         </tr>
                     </thead>
@@ -536,6 +668,18 @@ HTML_TEMPLATE = """
             `;
 
             mddTop10.forEach(item => {
+                // 使用新的停利類型顯示邏輯
+                const stopProfitType = getTakeProfitDisplayText(item);
+
+                // 添加調試日誌
+                console.log(`[DEBUG] MDD TOP 10 項目:`, {
+                    take_profit_mode: item.take_profit_mode,
+                    strategy: item.strategy,
+                    lot1_take_profit: item.lot1_take_profit,
+                    displayText: stopProfitType,
+                    rawItem: item
+                });
+
                 html += `
                     <tr>
                         <td><strong>${item.rank}</strong></td>
@@ -544,7 +688,7 @@ HTML_TEMPLATE = """
                         <td class="pnl-value">${item.long_pnl || 0}</td>
                         <td class="pnl-value">${item.short_pnl || 0}</td>
                         <td>${item.params || ''}</td>
-                        <td>${item.strategy || ''}</td>
+                        <td>${stopProfitType}</td>
                         <td>${item.time || ''}</td>
                     </tr>
                 `;
@@ -575,8 +719,8 @@ HTML_TEMPLATE = """
                             <th>總P&L</th>
                             <th>LONG PNL</th>
                             <th>SHORT PNL</th>
-                            <th>參數設定</th>
-                            <th>策略類型</th>
+                            <th>停損參數設定</th>
+                            <th>停利類型</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -620,8 +764,8 @@ HTML_TEMPLATE = """
                             <th>LONG PNL</th>
                             <th>總P&L</th>
                             <th>SHORT PNL</th>
-                            <th>參數設定</th>
-                            <th>策略類型</th>
+                            <th>停損參數設定</th>
+                            <th>停利類型</th>
                             <th>時間區間</th>
                         </tr>
                     </thead>
@@ -629,6 +773,9 @@ HTML_TEMPLATE = """
             `;
 
             longPnlTop10.forEach(item => {
+                // 使用新的停利類型顯示邏輯
+                const stopProfitType = getTakeProfitDisplayText(item);
+
                 html += `
                     <tr>
                         <td><strong>${item.rank}</strong></td>
@@ -636,7 +783,7 @@ HTML_TEMPLATE = """
                         <td class="pnl-value">${item.pnl}</td>
                         <td class="pnl-value">${item.short_pnl || 0}</td>
                         <td>${item.params || ''}</td>
-                        <td>${item.strategy || ''}</td>
+                        <td>${stopProfitType}</td>
                         <td>${item.time || ''}</td>
                     </tr>
                 `;
@@ -665,8 +812,8 @@ HTML_TEMPLATE = """
                             <th>SHORT PNL</th>
                             <th>總P&L</th>
                             <th>LONG PNL</th>
-                            <th>參數設定</th>
-                            <th>策略類型</th>
+                            <th>停損參數設定</th>
+                            <th>停利類型</th>
                             <th>時間區間</th>
                         </tr>
                     </thead>
@@ -674,6 +821,9 @@ HTML_TEMPLATE = """
             `;
 
             shortPnlTop10.forEach(item => {
+                // 使用新的停利類型顯示邏輯
+                const stopProfitType = getTakeProfitDisplayText(item);
+
                 html += `
                     <tr>
                         <td><strong>${item.rank}</strong></td>
@@ -681,7 +831,7 @@ HTML_TEMPLATE = """
                         <td class="pnl-value">${item.pnl}</td>
                         <td class="pnl-value">${item.long_pnl || 0}</td>
                         <td>${item.params || ''}</td>
-                        <td>${item.strategy || ''}</td>
+                        <td>${stopProfitType}</td>
                         <td>${item.time || ''}</td>
                     </tr>
                 `;
@@ -783,104 +933,317 @@ def run_experiment():
         logger.error(f"啟動實驗失敗: {e}")
         return jsonify({'status': 'error', 'message': f'啟動失敗: {str(e)}'})
 
-def run_experiment_thread(params):
-    """在背景線程執行實驗"""
+def run_experiment_thread_unified(params):
+    """使用統一回測引擎執行實驗"""
     global experiment_status
 
     try:
-        # 建立臨時配置檔案
-        config_data = create_temp_config(params)
-        config_file = 'temp_gui_config.json'
+        if not unified_backtest_engine or not create_config_from_gui_dict:
+            raise Exception("統一回測引擎或配置工廠未正確導入")
 
-        with open(config_file, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=2)
-
-        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 開始執行 MDD 優化實驗\n"
-        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 配置已保存到 {config_file}\n"
+        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 開始執行 MDD 優化實驗（使用統一引擎）\n"
+        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 回測日期範圍: 2024-11-04 至 2025-06-28\n"
+        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 進場方式: {params.get('entry_price_mode', 'range_boundary')}\n"
         experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 參數: {params}\n"
 
-        # 執行 enhanced_mdd_optimizer.py --config time_interval_analysis
-        max_workers = params.get('max_workers', 6)  # 預設 6 線程
-        cmd = [
-            'python', 'enhanced_mdd_optimizer.py',
-            '--config', 'time_interval_analysis',
-            '--max-workers', str(max_workers)
-        ]
+        # 解析時間區間
+        time_intervals = params.get('time_intervals', [])
+        if isinstance(time_intervals, str):
+            time_intervals = [interval.strip() for interval in time_intervals.split(',') if interval.strip()]
+        elif isinstance(time_intervals, list):
+            # 處理嵌套列表格式 [['10:30', '10:32'], ['12:00', '12:02']]
+            if time_intervals and isinstance(time_intervals[0], list):
+                time_intervals = [f"{interval[0]}-{interval[1]}" for interval in time_intervals]
 
-        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 執行命令: {' '.join(cmd)}\n"
-        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 工作目錄: {os.path.dirname(os.path.abspath(__file__))}\n"
+        # 解析停損參數 - 處理新的參數格式
+        stop_loss_ranges = params.get('stop_loss_ranges', {})
+        lot1_stop_loss = stop_loss_ranges.get('lot1', [15])
+        lot2_stop_loss = stop_loss_ranges.get('lot2', [40])
+        lot3_stop_loss = stop_loss_ranges.get('lot3', [41])
 
-        # 暫時修改 mdd_search_config.py 來使用我們的參數
-        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 正在修改配置檔案...\n"
-        modify_config_temporarily(config_data)
-        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 配置檔案修改完成\n"
+        # 如果是舊格式，使用舊的解析方式
+        if not stop_loss_ranges:
+            lot1_stop_loss = parse_parameter_list(params.get('lot1_stop_loss', '15'))
+            lot2_stop_loss = parse_parameter_list(params.get('lot2_stop_loss', '40'))
+            lot3_stop_loss = parse_parameter_list(params.get('lot3_stop_loss', '41'))
 
-        try:
-            experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 開始執行回測...\n"
+        # 解析停利參數 - 需要執行所有三種停利模式
+        take_profit_ranges = params.get('take_profit_ranges', {})
 
-            # 使用 Popen 來即時捕獲輸出
-            process = subprocess.Popen(
-                cmd,
-                cwd=os.path.dirname(os.path.abspath(__file__)),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding='utf-8',
-                bufsize=1,
-                universal_newlines=True
-            )
+        # 準備所有停利模式的參數組合
+        all_take_profit_combinations = []
 
-            # 即時讀取輸出
-            while True:
-                output = process.stdout.readline()
-                if output == '' and process.poll() is not None:
-                    break
-                if output:
-                    experiment_status['log_content'] += output
-                    print(f"[MDD GUI] {output.strip()}")  # 也輸出到控制台
+        # 1. 統一停利模式 - 支援多個統一停利值
+        if 'unified' in take_profit_ranges and take_profit_ranges['unified']:
+            unified_values = take_profit_ranges['unified']
+            all_take_profit_combinations.append({
+                'mode': 'unified_fixed',
+                'lot1': unified_values,  # 支援多個統一停利值
+                'lot2': unified_values,  # 所有口使用相同值
+                'lot3': unified_values   # 但會測試所有值
+            })
 
-            return_code = process.poll()
-            experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 執行完成，返回碼: {return_code}\n"
+        # 2. 個別停利模式
+        if 'individual' in take_profit_ranges and take_profit_ranges['individual']:
+            individual_values = take_profit_ranges['individual']
+            all_take_profit_combinations.append({
+                'mode': 'individual_fixed',
+                'lot1': individual_values,
+                'lot2': individual_values,
+                'lot3': individual_values
+            })
 
-            if return_code == 0:
-                experiment_status['completed'] = True
-                experiment_status['result'] = '實驗執行成功'
-                experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 實驗執行成功！\n"
+        # 3. 區間邊緣停利模式（固定添加）
+        all_take_profit_combinations.append({
+            'mode': 'range_boundary',
+            'lot1': [0],  # 區間停利不使用固定點數
+            'lot2': [0],
+            'lot3': [0]
+        })
 
-                # 解析結果
-                parsed_results = parse_experiment_results(experiment_status['log_content'])
-                experiment_status['parsed_results'] = parsed_results
+        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 時間區間: {time_intervals}\n"
+        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 停損參數: L1={lot1_stop_loss}, L2={lot2_stop_loss}, L3={lot3_stop_loss}\n"
+        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 停利模式數量: {len(all_take_profit_combinations)}\n"
+        for i, tp_combo in enumerate(all_take_profit_combinations):
+            experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 停利模式 {i+1}: {tp_combo['mode']} - L1={tp_combo['lot1']}, L2={tp_combo['lot2']}, L3={tp_combo['lot3']}\n"
 
-                # 調試信息
-                experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 解析結果統計:\n"
-                experiment_status['log_content'] += f"  - 時間區間: {len(parsed_results.get('time_intervals', []))}\n"
-                experiment_status['log_content'] += f"  - 一日建議: {len(parsed_results.get('recommendations', []))}\n"
-                experiment_status['log_content'] += f"  - MDD TOP 10: {len(parsed_results.get('mdd_top10', []))}\n"
-                experiment_status['log_content'] += f"  - 風險調整收益 TOP 10: {len(parsed_results.get('risk_adjusted_top10', []))}\n"
-                experiment_status['log_content'] += f"  - LONG PNL TOP 10: {len(parsed_results.get('long_pnl_top10', []))}\n"
-                experiment_status['log_content'] += f"  - SHORT PNL TOP 10: {len(parsed_results.get('short_pnl_top10', []))}\n"
-            else:
-                experiment_status['error'] = f'執行失敗，返回碼: {return_code}'
-                experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 執行失敗\n"
+        # 生成實驗組合 - 遍歷所有停利模式
+        results = []
+        experiment_id = 1
 
-        finally:
-            # 恢復原始配置
-            experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 正在恢復原始配置...\n"
-            restore_original_config()
-            experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 原始配置已恢復\n"
+        for time_interval in time_intervals:
+            for l1_sl in lot1_stop_loss:
+                for l2_sl in lot2_stop_loss:
+                    for l3_sl in lot3_stop_loss:
+                        for tp_combination in all_take_profit_combinations:
+                            for l1_tp in tp_combination['lot1']:
+                                for l2_tp in tp_combination['lot2']:
+                                    for l3_tp in tp_combination['lot3']:
+                                        try:
+                                            # 解析時間區間
+                                            start_time, end_time = time_interval.split('-')
 
-        # 清理臨時檔案
-        if os.path.exists(config_file):
-            os.remove(config_file)
-            experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 臨時檔案已清理\n"
+                                            # 根據停利模式設定配置
+                                            if tp_combination['mode'] == 'range_boundary':
+                                                # 區間邊緣停利模式
+                                                individual_tp_enabled = False
+                                                fixed_stop_mode = False
+                                            else:
+                                                # 固定停利模式（統一或個別）
+                                                individual_tp_enabled = True
+                                                fixed_stop_mode = True
+
+                                            # 創建GUI配置
+                                            gui_config = {
+                                                "trade_lots": 3,
+                                                "start_date": "2024-11-04",
+                                                "end_date": "2025-06-28",
+                                                "range_start_time": start_time.strip(),
+                                                "range_end_time": end_time.strip(),
+                                                "fixed_stop_mode": fixed_stop_mode,
+                                                "individual_take_profit_enabled": individual_tp_enabled,
+                                                "entry_price_mode": params.get('entry_price_mode', 'range_boundary'),
+                                                "trading_direction": "BOTH",
+                                                "lot_settings": {
+                                                    "lot1": {
+                                                        "trigger": l1_sl,
+                                                        "trailing": 0,
+                                                        "take_profit": l1_tp
+                                                    },
+                                                    "lot2": {
+                                                        "trigger": l2_sl,
+                                                        "trailing": 0,
+                                                        "protection": 2.0,
+                                                        "take_profit": l2_tp
+                                                    },
+                                                    "lot3": {
+                                                        "trigger": l3_sl,
+                                                        "trailing": 0,
+                                                        "protection": 2.0,
+                                                        "take_profit": l3_tp
+                                                    }
+                                                },
+                                                "filters": {
+                                                    "range_filter": {"enabled": False, "max_range_points": 50},
+                                                    "risk_filter": {"enabled": False, "daily_loss_limit": 150, "profit_target": 200},
+                                                    "stop_loss_filter": {"enabled": False, "stop_loss_type": "range_boundary", "fixed_stop_loss_points": 15.0}
+                                                }
+                                            }
+
+                                            # 使用統一配置工廠
+                                            strategy_config = create_config_from_gui_dict(gui_config)
+
+                                            # 直接調用統一回測引擎
+                                            result = unified_backtest_engine.run_backtest(
+                                                strategy_config,
+                                                start_date=gui_config["start_date"],
+                                                end_date=gui_config["end_date"],
+                                                range_start_time=gui_config["range_start_time"],
+                                                range_end_time=gui_config["range_end_time"]
+                                            )
+
+                                            if result:
+                                                mdd = result.get('max_drawdown', 0)
+                                                total_pnl = result.get('total_pnl', 0)
+                                                long_pnl = result.get('long_pnl', 0)
+                                                short_pnl = result.get('short_pnl', 0)
+
+                                                results.append({
+                                                    'experiment_id': experiment_id,
+                                                    'time_interval': time_interval,
+                                                    'lot1_stop_loss': l1_sl,
+                                                    'lot2_stop_loss': l2_sl,
+                                                    'lot3_stop_loss': l3_sl,
+                                                    'lot1_take_profit': l1_tp,
+                                                    'lot2_take_profit': l2_tp,
+                                                    'lot3_take_profit': l3_tp,
+                                                    'take_profit_mode': tp_combination['mode'],
+                                                    'mdd': mdd,
+                                                    'total_pnl': total_pnl,
+                                                    'long_pnl': long_pnl,
+                                                    'short_pnl': short_pnl,
+                                                    'risk_adjusted_return': abs(total_pnl / mdd) if mdd != 0 else 0
+                                                })
+
+                                                experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 實驗 {experiment_id} ({tp_combination['mode']}): MDD={mdd:.1f}, PNL={total_pnl:.1f}\n"
+
+                                            experiment_id += 1
+
+                                        except Exception as e:
+                                            experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 實驗 {experiment_id} 失敗: {e}\n"
+                                            experiment_id += 1
+
+        # 生成報告
+        if results:
+            report_content = generate_unified_report(results)
+            experiment_status['log_content'] += report_content
+            experiment_status['completed'] = True
+            experiment_status['result'] = '實驗執行成功'
+            experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 統一引擎實驗執行成功！共完成 {len(results)} 個實驗\n"
+
+            # 解析結果
+            parsed_results = parse_experiment_results(experiment_status['log_content'])
+            experiment_status['parsed_results'] = parsed_results
+
+            # 調試信息
+            experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 📊 解析結果統計:\n"
+            experiment_status['log_content'] += f"  - 時間區間分析: {len(parsed_results.get('time_intervals', []))}\n"
+            experiment_status['log_content'] += f"  - 一日配置建議: {len(parsed_results.get('recommendations', []))}\n"
+            experiment_status['log_content'] += f"  - MDD TOP 10: {len(parsed_results.get('mdd_top10', []))}\n"
+            experiment_status['log_content'] += f"  - 風險調整收益 TOP 10: {len(parsed_results.get('risk_adjusted_top10', []))}\n"
+            experiment_status['log_content'] += f"  - LONG PNL TOP 10: {len(parsed_results.get('long_pnl_top10', []))}\n"
+            experiment_status['log_content'] += f"  - SHORT PNL TOP 10: {len(parsed_results.get('short_pnl_top10', []))}\n"
+        else:
+            experiment_status['error'] = '沒有成功的實驗結果'
+            experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 沒有成功的實驗結果\n"
 
     except Exception as e:
-        experiment_status['error'] = f'執行錯誤: {str(e)}'
-        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 錯誤: {str(e)}\n"
-        print(f"[MDD GUI ERROR] {str(e)}")  # 也輸出到控制台
+        experiment_status['running'] = False
+        experiment_status['error'] = str(e)
+        experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 實驗執行失敗: {e}\n"
+        logger.error(f"實驗執行失敗: {e}")
+
     finally:
         experiment_status['running'] = False
         experiment_status['log_content'] += f"[{datetime.now().strftime('%H:%M:%S')}] 實驗線程結束\n"
+
+def parse_parameter_list(param_str):
+    """解析參數列表"""
+    if isinstance(param_str, list):
+        return param_str
+    if isinstance(param_str, str):
+        return [float(x.strip()) for x in param_str.split(',') if x.strip()]
+    return [float(param_str)]
+
+def generate_unified_report(results):
+    """生成統一格式的報告"""
+    if not results:
+        return "沒有實驗結果\n"
+
+    # 按 MDD 排序（越小越好）
+    sorted_by_mdd = sorted(results, key=lambda x: abs(x['mdd']))
+
+    # 按風險調整收益排序（越大越好）
+    sorted_by_risk_adj = sorted(results, key=lambda x: x.get('risk_adjusted_return', 0), reverse=True)
+
+    # 按多頭PNL排序
+    sorted_by_long_pnl = sorted(results, key=lambda x: x.get('long_pnl', 0), reverse=True)
+
+    # 按空頭PNL排序
+    sorted_by_short_pnl = sorted(results, key=lambda x: x.get('short_pnl', 0), reverse=True)
+
+    # 按時間區間分組
+    time_interval_groups = {}
+    for result in results:
+        interval = result['time_interval']
+        if interval not in time_interval_groups:
+            time_interval_groups[interval] = []
+        time_interval_groups[interval].append(result)
+
+    report = f"\n📊 實驗結果報告 (共 {len(results)} 個實驗)\n"
+    report += "=" * 80 + "\n"
+
+    # 各時間區間的最佳MDD前3名
+    report += "\n📊 各時間區間 MDD 最佳前3名:\n"
+    report += "-" * 60 + "\n"
+    for interval, interval_results in time_interval_groups.items():
+        sorted_interval = sorted(interval_results, key=lambda x: abs(x['mdd']))[:3]
+        report += f"\n🕐 時間區間: {interval}\n"
+        for i, result in enumerate(sorted_interval, 1):
+            # 添加停利模式信息到報告中
+            take_profit_mode = result.get('take_profit_mode', 'unified_fixed')
+            report += f"  {i}. MDD:{result['mdd']:6.1f} | PNL:{result['total_pnl']:6.1f} | "
+            report += f"參數:{result['lot1_stop_loss']}/{result['lot2_stop_loss']}/{result['lot3_stop_loss']} | "
+            report += f"多頭:{result['long_pnl']:6.1f} | 空頭:{result['short_pnl']:6.1f} | "
+            report += f"停利模式:{take_profit_mode}\n"
+
+    # TOP 10 最佳 MDD
+    report += "\n🏆 MDD 最小 TOP 10:\n"
+    report += "-" * 60 + "\n"
+    for i, result in enumerate(sorted_by_mdd[:10], 1):
+        take_profit_mode = result.get('take_profit_mode', 'unified_fixed')
+        report += f"{i:2d}. 實驗{result['experiment_id']:3d} | 時間:{result['time_interval']} | "
+        report += f"MDD:{result['mdd']:6.1f} | PNL:{result['total_pnl']:6.1f} | "
+        report += f"參數:{result['lot1_stop_loss']}/{result['lot2_stop_loss']}/{result['lot3_stop_loss']} | "
+        report += f"多頭:{result['long_pnl']:6.1f} | 空頭:{result['short_pnl']:6.1f} | "
+        report += f"停利模式:{take_profit_mode}\n"
+
+    # TOP 10 風險調整收益
+    report += "\n💎 風險調整收益 TOP 10:\n"
+    report += "-" * 60 + "\n"
+    for i, result in enumerate(sorted_by_risk_adj[:10], 1):
+        risk_adj = result.get('risk_adjusted_return', 0)
+        take_profit_mode = result.get('take_profit_mode', 'unified_fixed')
+        report += f"{i:2d}. 實驗{result['experiment_id']:3d} | 時間:{result['time_interval']} | "
+        report += f"風險調整:{risk_adj:6.2f} | PNL:{result['total_pnl']:6.1f} | MDD:{result['mdd']:6.1f} | "
+        report += f"參數:{result['lot1_stop_loss']}/{result['lot2_stop_loss']}/{result['lot3_stop_loss']} | "
+        report += f"停利模式:{take_profit_mode}\n"
+
+    # TOP 10 多頭PNL
+    report += "\n🟢 LONG 部位 PNL TOP 10:\n"
+    report += "-" * 60 + "\n"
+    for i, result in enumerate(sorted_by_long_pnl[:10], 1):
+        take_profit_mode = result.get('take_profit_mode', 'unified_fixed')
+        report += f"{i:2d}. 實驗{result['experiment_id']:3d} | 時間:{result['time_interval']} | "
+        report += f"多頭PNL:{result['long_pnl']:6.1f} | 總PNL:{result['total_pnl']:6.1f} | MDD:{result['mdd']:6.1f} | "
+        report += f"參數:{result['lot1_stop_loss']}/{result['lot2_stop_loss']}/{result['lot3_stop_loss']} | "
+        report += f"停利模式:{take_profit_mode}\n"
+
+    # TOP 10 空頭PNL
+    report += "\n🔴 SHORT 部位 PNL TOP 10:\n"
+    report += "-" * 60 + "\n"
+    for i, result in enumerate(sorted_by_short_pnl[:10], 1):
+        take_profit_mode = result.get('take_profit_mode', 'unified_fixed')
+        report += f"{i:2d}. 實驗{result['experiment_id']:3d} | 時間:{result['time_interval']} | "
+        report += f"空頭PNL:{result['short_pnl']:6.1f} | 總PNL:{result['total_pnl']:6.1f} | MDD:{result['mdd']:6.1f} | "
+        report += f"參數:{result['lot1_stop_loss']}/{result['lot2_stop_loss']}/{result['lot3_stop_loss']} | "
+        report += f"停利模式:{take_profit_mode}\n"
+
+    return report
+
+def run_experiment_thread(params):
+    """原始實驗執行函數（保持向後兼容）"""
+    return run_experiment_thread_unified(params)
 
 def create_temp_config(params):
     """建立臨時配置"""
@@ -903,9 +1266,10 @@ def create_temp_config(params):
         'take_profit_modes': ['unified_fixed', 'individual_fixed', 'range_boundary'],
         'take_profit_ranges': params['take_profit_ranges'],
         'time_intervals': [tuple(interval) for interval in params['time_intervals']],
+        'entry_price_mode': params.get('entry_price_mode', 'range_boundary'),
         'estimated_combinations': {
             'per_interval_analysis': total_combinations,
-            'breakdown': f'{stop_loss_combinations} 停損組合 × {take_profit_combinations} 停利模式 × {time_interval_count} 時間區間 = {total_combinations} 總組合 (GUI 自定義)'
+            'breakdown': f'{stop_loss_combinations} 停損組合 × {take_profit_combinations} 停利模式 × {time_interval_count} 時間區間 = {total_combinations} 總組合 (進場方式: {params.get("entry_price_mode", "range_boundary")}) (GUI 自定義)'
         }
     }
 
@@ -978,19 +1342,95 @@ def parse_experiment_results(log_content):
 
     lines = log_content.split('\n')
     current_interval = None
+    parsing_time_intervals = False
     parsing_mdd_top10 = False
     parsing_risk_top10 = False
     parsing_long_pnl_top10 = False
     parsing_short_pnl_top10 = False
 
     for line in lines:
+        # 檢查是否開始解析時間區間分析
+        if '📊 各時間區間 MDD 最佳前3名:' in line:
+            parsing_time_intervals = True
+            parsing_mdd_top10 = False
+            parsing_risk_top10 = False
+            parsing_long_pnl_top10 = False
+            parsing_short_pnl_top10 = False
+            print(f"[DEBUG] 開始解析時間區間分析")
+            continue
+        elif line.startswith('🕐 時間區間:') and parsing_time_intervals:
+            # 解析時間區間標題
+            interval = line.replace('🕐 時間區間:', '').strip()
+            current_interval = {
+                'time': interval,  # 前端期望的字段名
+                'interval': interval,  # 保持兼容性
+                'top3': [],
+                'configs': []  # 前端期望的字段名
+            }
+            results['time_intervals'].append(current_interval)
+            print(f"[DEBUG] 發現時間區間: {interval}")
+            continue
+        elif parsing_time_intervals and current_interval and line.strip() and (line.strip().startswith('1.') or line.strip().startswith('2.') or line.strip().startswith('3.')):
+            # 解析時間區間的前3名
+            try:
+                if 'MDD:' in line and 'PNL:' in line:
+                    # 提取數據
+                    mdd_match = line.split('MDD:')[1].split('|')[0].strip() if 'MDD:' in line else '0'
+                    pnl_match = line.split('PNL:')[1].split('|')[0].strip() if 'PNL:' in line else '0'
+                    params_match = line.split('參數:')[1].split('|')[0].strip() if '參數:' in line else ''
+                    long_pnl_match = line.split('多頭:')[1].split('|')[0].strip() if '多頭:' in line else '0'
+                    short_pnl_match = line.split('空頭:')[1].split('|')[0].strip() if '空頭:' in line else '0'
+
+                    # 提取停利模式信息
+                    take_profit_mode = 'unified_fixed'  # 預設值
+                    if '停利模式:' in line:
+                        take_profit_mode = line.split('停利模式:')[1].strip()
+
+                    # 添加到 top3 (保持兼容性)
+                    current_interval['top3'].append({
+                        'rank': len(current_interval['top3']) + 1,
+                        'mdd': mdd_match,
+                        'pnl': pnl_match,
+                        'params': params_match,
+                        'long_pnl': long_pnl_match,
+                        'short_pnl': short_pnl_match,
+                        'take_profit_mode': take_profit_mode,  # 添加停利模式信息
+                        'raw_line': line
+                    })
+
+                    # 根據停利模式判斷停利類型顯示
+                    stop_profit_type = '統一停利'  # 預設
+                    if take_profit_mode == 'range_boundary':
+                        stop_profit_type = '區間邊緣停利'
+                    elif take_profit_mode == 'individual_fixed':
+                        stop_profit_type = '各口獨立停利'
+                    elif take_profit_mode == 'unified_fixed':
+                        stop_profit_type = '統一停利'
+
+                    # 添加到 configs (前端期望的格式)
+                    current_interval['configs'].append({
+                        'type': stop_profit_type,
+                        'take_profit_mode': take_profit_mode,  # 添加停利模式信息
+                        'mdd': float(mdd_match) if mdd_match else 0,
+                        'pnl': float(pnl_match) if pnl_match else 0,
+                        'params': params_match
+                    })
+                    print(f"[DEBUG] 解析時間區間數據: MDD={mdd_match}, PNL={pnl_match}")
+            except Exception as e:
+                print(f"[DEBUG] 時間區間解析錯誤: {e}, 行內容: {line}")
+                pass
+            continue
         # 檢查是否開始解析 TOP 10 結果
-        if '🏆 MDD最小 TOP 10:' in line:
+        elif '🏆 MDD 最小 TOP 10:' in line or '🏆 MDD最小 TOP 10:' in line:
+            parsing_time_intervals = False
             parsing_mdd_top10 = True
             parsing_risk_top10 = False
+            parsing_long_pnl_top10 = False
+            parsing_short_pnl_top10 = False
             print(f"[DEBUG] 開始解析 MDD TOP 10")
             continue
         elif '💎 風險調整收益 TOP 10' in line:
+            parsing_time_intervals = False
             parsing_mdd_top10 = False
             parsing_risk_top10 = True
             parsing_long_pnl_top10 = False
@@ -998,6 +1438,7 @@ def parse_experiment_results(log_content):
             print(f"[DEBUG] 開始解析風險調整收益 TOP 10")
             continue
         elif '🟢 LONG 部位 PNL TOP 10:' in line:
+            parsing_time_intervals = False
             parsing_mdd_top10 = False
             parsing_risk_top10 = False
             parsing_long_pnl_top10 = True
@@ -1005,6 +1446,7 @@ def parse_experiment_results(log_content):
             print(f"[DEBUG] 開始解析 LONG PNL TOP 10")
             continue
         elif '🔴 SHORT 部位 PNL TOP 10:' in line:
+            parsing_time_intervals = False
             parsing_mdd_top10 = False
             parsing_risk_top10 = False
             parsing_long_pnl_top10 = False
@@ -1012,18 +1454,20 @@ def parse_experiment_results(log_content):
             print(f"[DEBUG] 開始解析 SHORT PNL TOP 10")
             continue
         elif '============================================================' in line or '================================================================================' in line:
+            parsing_time_intervals = False
             parsing_mdd_top10 = False
             parsing_risk_top10 = False
             parsing_long_pnl_top10 = False
             parsing_short_pnl_top10 = False
         elif '📈 預期每日總計:' in line:
+            parsing_time_intervals = False
             parsing_mdd_top10 = False
             parsing_risk_top10 = False
             parsing_long_pnl_top10 = False
             parsing_short_pnl_top10 = False
 
         # 解析 MDD TOP 10
-        if parsing_mdd_top10 and 'MDD:' in line and ('總P&L:' in line or 'P&L:' in line):
+        if parsing_mdd_top10 and 'MDD:' in line and ('總P&L:' in line or 'P&L:' in line or 'PNL:' in line):
             try:
                 # 處理 [MDD GUI] 前綴
                 line_clean = line.strip()
@@ -1055,8 +1499,12 @@ def parse_experiment_results(log_content):
                         pnl_match = None
                         if '總P&L:' in line:
                             pnl_part = line.split('總P&L:')[1].split('|')[0].strip() if '|' in line.split('總P&L:')[1] else line.split('總P&L:')[1].strip()
+                        elif '總PNL:' in line:
+                            pnl_part = line.split('總PNL:')[1].split('|')[0].strip() if '|' in line.split('總PNL:')[1] else line.split('總PNL:')[1].strip()
                         elif 'P&L:' in line:
                             pnl_part = line.split('P&L:')[1].split('|')[0].strip() if '|' in line.split('P&L:')[1] else line.split('P&L:')[1].strip()
+                        elif 'PNL:' in line:
+                            pnl_part = line.split('PNL:')[1].split('|')[0].strip() if '|' in line.split('PNL:')[1] else line.split('PNL:')[1].strip()
                         else:
                             pnl_part = ''
 
@@ -1074,6 +1522,12 @@ def parse_experiment_results(log_content):
                                 long_pnl_match = float(long_pnl_part)
                             except:
                                 pass
+                        elif '多頭:' in line:
+                            long_pnl_part = line.split('多頭:')[1].split('|')[0].strip() if '|' in line.split('多頭:')[1] else line.split('多頭:')[1].strip()
+                            try:
+                                long_pnl_match = float(long_pnl_part)
+                            except:
+                                pass
 
                         # 提取 SHORT PNL
                         short_pnl_match = None
@@ -1083,14 +1537,27 @@ def parse_experiment_results(log_content):
                                 short_pnl_match = float(short_pnl_part)
                             except:
                                 pass
+                        elif '空頭:' in line:
+                            short_pnl_part = line.split('空頭:')[1].split('|')[0].strip() if '|' in line.split('空頭:')[1] else line.split('空頭:')[1].strip()
+                            try:
+                                short_pnl_match = float(short_pnl_part)
+                            except:
+                                pass
 
                         if mdd_match is not None and pnl_match is not None:
-                            # 提取其他信息 - 需要重新分析因為添加了 LONG/SHORT PNL
-                            parts = line.split('|')
-                            # 由於格式變為: MDD | 總P&L | LONG | SHORT | 參數 | 策略 | 時間
-                            params_part = parts[4].strip() if len(parts) > 4 else ''
-                            strategy_part = parts[5].strip() if len(parts) > 5 else ''
-                            time_part = parts[6].strip() if len(parts) > 6 else ''
+                            # 提取時間區間
+                            import re
+                            time_match = re.search(r'時間:([^|]+)', line)
+                            time_interval = time_match.group(1).strip() if time_match else ''
+
+                            # 提取參數
+                            params_match = re.search(r'參數:([^|]+)', line)
+                            params = params_match.group(1).strip() if params_match else ''
+
+                            # 提取停利模式
+                            take_profit_mode = 'unified_fixed'  # 預設值
+                            if '停利模式:' in line:
+                                take_profit_mode = line.split('停利模式:')[1].strip()
 
                             results['mdd_top10'].append({
                                 'rank': rank,
@@ -1098,16 +1565,18 @@ def parse_experiment_results(log_content):
                                 'pnl': pnl_match,
                                 'long_pnl': long_pnl_match if long_pnl_match is not None else 0,
                                 'short_pnl': short_pnl_match if short_pnl_match is not None else 0,
-                                'params': params_part,
-                                'strategy': strategy_part,
-                                'time': time_part
+                                'params': params,
+                                'take_profit_mode': take_profit_mode,  # 添加停利模式信息
+                                'strategy': '統一停利',  # 保持向後兼容
+                                'time': time_interval
                             })
+                            print(f"[DEBUG] 成功解析 MDD TOP 10: 排名={rank}, MDD={mdd_match}, PNL={pnl_match}, 時間={time_interval}")
             except Exception as e:
                 print(f"[DEBUG] MDD TOP 10 解析錯誤: {e}, 行內容: {line}")
                 pass
 
         # 解析風險調整收益 TOP 10
-        elif parsing_risk_top10 and '風險調整收益:' in line and 'MDD:' in line:
+        elif parsing_risk_top10 and ('風險調整收益:' in line or '風險調整:' in line) and 'MDD:' in line:
             try:
                 # 處理 [MDD GUI] 前綴
                 line_clean = line.strip()
@@ -1130,6 +1599,12 @@ def parse_experiment_results(log_content):
                         ratio_match = None
                         if '風險調整收益:' in line:
                             ratio_part = line.split('風險調整收益:')[1].split('|')[0].strip() if '|' in line.split('風險調整收益:')[1] else line.split('風險調整收益:')[1].strip()
+                            try:
+                                ratio_match = float(ratio_part)
+                            except:
+                                pass
+                        elif '風險調整:' in line:
+                            ratio_part = line.split('風險調整:')[1].split('|')[0].strip() if '|' in line.split('風險調整:')[1] else line.split('風險調整:')[1].strip()
                             try:
                                 ratio_match = float(ratio_part)
                             except:
@@ -1198,7 +1673,7 @@ def parse_experiment_results(log_content):
                 pass
 
         # 解析 LONG PNL TOP 10
-        elif parsing_long_pnl_top10 and 'LONG:' in line and ('總P&L:' in line or 'P&L:' in line):
+        elif parsing_long_pnl_top10 and ('LONG:' in line or '多頭PNL:' in line) and ('總P&L:' in line or 'P&L:' in line or 'PNL:' in line):
             try:
                 # 處理 [MDD GUI] 前綴
                 line_clean = line.strip()
@@ -1225,13 +1700,23 @@ def parse_experiment_results(log_content):
                                 long_pnl_match = float(long_pnl_part)
                             except:
                                 pass
+                        elif '多頭PNL:' in line:
+                            long_pnl_part = line.split('多頭PNL:')[1].split('|')[0].strip() if '|' in line.split('多頭PNL:')[1] else line.split('多頭PNL:')[1].strip()
+                            try:
+                                long_pnl_match = float(long_pnl_part)
+                            except:
+                                pass
 
                         # 提取總 P&L
                         pnl_match = None
                         if '總P&L:' in line:
                             pnl_part = line.split('總P&L:')[1].split('|')[0].strip() if '|' in line.split('總P&L:')[1] else line.split('總P&L:')[1].strip()
+                        elif '總PNL:' in line:
+                            pnl_part = line.split('總PNL:')[1].split('|')[0].strip() if '|' in line.split('總PNL:')[1] else line.split('總PNL:')[1].strip()
                         elif 'P&L:' in line:
                             pnl_part = line.split('P&L:')[1].split('|')[0].strip() if '|' in line.split('P&L:')[1] else line.split('P&L:')[1].strip()
+                        elif 'PNL:' in line:
+                            pnl_part = line.split('PNL:')[1].split('|')[0].strip() if '|' in line.split('PNL:')[1] else line.split('PNL:')[1].strip()
                         else:
                             pnl_part = ''
 
@@ -1271,7 +1756,7 @@ def parse_experiment_results(log_content):
                 pass
 
         # 解析 SHORT PNL TOP 10
-        elif parsing_short_pnl_top10 and 'SHORT:' in line and ('總P&L:' in line or 'P&L:' in line):
+        elif parsing_short_pnl_top10 and ('SHORT:' in line or '空頭PNL:' in line) and ('總P&L:' in line or 'P&L:' in line or 'PNL:' in line):
             try:
                 # 處理 [MDD GUI] 前綴
                 line_clean = line.strip()
@@ -1298,13 +1783,23 @@ def parse_experiment_results(log_content):
                                 short_pnl_match = float(short_pnl_part)
                             except:
                                 pass
+                        elif '空頭PNL:' in line:
+                            short_pnl_part = line.split('空頭PNL:')[1].split('|')[0].strip() if '|' in line.split('空頭PNL:')[1] else line.split('空頭PNL:')[1].strip()
+                            try:
+                                short_pnl_match = float(short_pnl_part)
+                            except:
+                                pass
 
                         # 提取總 P&L
                         pnl_match = None
                         if '總P&L:' in line:
                             pnl_part = line.split('總P&L:')[1].split('|')[0].strip() if '|' in line.split('總P&L:')[1] else line.split('總P&L:')[1].strip()
+                        elif '總PNL:' in line:
+                            pnl_part = line.split('總PNL:')[1].split('|')[0].strip() if '|' in line.split('總PNL:')[1] else line.split('總PNL:')[1].strip()
                         elif 'P&L:' in line:
                             pnl_part = line.split('P&L:')[1].split('|')[0].strip() if '|' in line.split('P&L:')[1] else line.split('P&L:')[1].strip()
+                        elif 'PNL:' in line:
+                            pnl_part = line.split('PNL:')[1].split('|')[0].strip() if '|' in line.split('PNL:')[1] else line.split('PNL:')[1].strip()
                         else:
                             pnl_part = ''
 

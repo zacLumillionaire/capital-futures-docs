@@ -1,0 +1,106 @@
+{
+  "rev_web_system": {
+    "success": true,
+    "result": {
+      "total_pnl": -90.0,
+      "long_pnl": 0.0,
+      "short_pnl": -90.0,
+      "total_trades": 1,
+      "long_trades": 0,
+      "short_trades": 1,
+      "winning_trades": 0,
+      "losing_trades": 1,
+      "long_wins": 0,
+      "short_wins": 0,
+      "win_rate": 0.0,
+      "long_win_rate": 0.0,
+      "short_win_rate": 0.0,
+      "trade_days": 1,
+      "max_drawdown": 90.0,
+      "peak_pnl": 0.0,
+      "lot1_pnl": -15.0,
+      "lot2_pnl": -35.0,
+      "lot3_pnl": -40.0
+    },
+    "method": "direct_api_call"
+  },
+  "mdd_system": {
+    "success": true,
+    "result": {
+      "total_pnl": 0.0,
+      "long_pnl": 0.0,
+      "short_pnl": 0.0,
+      "total_trades": 0,
+      "long_trades": 0,
+      "short_trades": 0,
+      "winning_trades": 0,
+      "losing_trades": 0,
+      "long_wins": 0,
+      "short_wins": 0,
+      "win_rate": 0.0,
+      "long_win_rate": 0.0,
+      "short_win_rate": 0.0,
+      "trade_days": 0
+    },
+    "method": "direct_api_call"
+  },
+  "comparison": {
+    "differences": [
+      {
+        "field": "total_pnl",
+        "rev_web": -90.0,
+        "mdd_gui": 0.0,
+        "difference": 90.0,
+        "percentage_diff": 100.0
+      },
+      {
+        "field": "max_drawdown",
+        "rev_web": 90.0,
+        "mdd_gui": 0.0,
+        "difference": 90.0,
+        "percentage_diff": 100.0
+      },
+      {
+        "field": "short_pnl",
+        "rev_web": -90.0,
+        "mdd_gui": 0.0,
+        "difference": 90.0,
+        "percentage_diff": 100.0
+      },
+      {
+        "field": "lot1_pnl",
+        "rev_web": -15.0,
+        "mdd_gui": 0.0,
+        "difference": 15.0,
+        "percentage_diff": 100.0
+      },
+      {
+        "field": "lot2_pnl",
+        "rev_web": -35.0,
+        "mdd_gui": 0.0,
+        "difference": 35.0,
+        "percentage_diff": 100.0
+      },
+      {
+        "field": "lot3_pnl",
+        "rev_web": -40.0,
+        "mdd_gui": 0.0,
+        "difference": 40.0,
+        "percentage_diff": 100.0
+      },
+      {
+        "field": "total_trades",
+        "rev_web": 1.0,
+        "mdd_gui": 0.0,
+        "difference": 1.0,
+        "percentage_diff": 100.0
+      }
+    ],
+    "matches": [
+      "long_pnl",
+      "win_rate"
+    ],
+    "total_differences": 7,
+    "total_matches": 2
+  }
+}

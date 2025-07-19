@@ -29,7 +29,7 @@ spec.loader.exec_module(rev_multi_module)
 core_run_backtest = rev_multi_module.run_backtest
 
 # 🚀 【重構】導入統一的配置工廠
-from strategy_config_factory import create_web_gui_compatible_config
+from strategy_config_factory import create_config_from_gui_dict
 
 # 🔍 調試：檢查函數簽名
 import inspect
@@ -938,8 +938,10 @@ def execute_backtest_thread(config_data):
         # 🚀 【Task 2 重構】直接調用核心回測引擎，移除 subprocess
         print(f"🚀 直接調用回測引擎，配置: {gui_config}")
 
-        # 🚀 【重構】使用與 Web GUI 兼容的配置工廠創建策略配置
-        strategy_config = create_web_gui_compatible_config(gui_config)
+        # 🚀 【Task 4 修復】使用正確的配置工廠函數，確保GUI參數被正確處理
+        print(f"🔍 DEBUG: 即將傳遞的 gui_config: {gui_config}")
+        strategy_config = create_config_from_gui_dict(gui_config)
+        print(f"🔍 DEBUG: 創建的 strategy_config: {repr(strategy_config)}")
 
         # 提取時間參數
         start_date = gui_config["start_date"]

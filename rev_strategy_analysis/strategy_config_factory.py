@@ -313,9 +313,9 @@ def create_config_from_gui_dict(gui_config: Dict[str, Any]) -> StrategyConfig:
     
     # 預設lot_settings如果不存在
     default_lot_settings = {
-        "lot1": {"trigger": 15, "trailing": 10, "take_profit": 30},
-        "lot2": {"trigger": 35, "trailing": 10, "protection": 2.0, "take_profit": 30},
-        "lot3": {"trigger": 40, "trailing": 20, "protection": 2.0, "take_profit": 30}
+        "lot1": {"trigger": 15, "trailing": 0, "take_profit": 30},
+        "lot2": {"trigger": 35, "trailing": 0, "protection": 2.0, "take_profit": 30},
+        "lot3": {"trigger": 40, "trailing": 0, "protection": 2.0, "take_profit": 30}
     }
     
     for i in range(1, trade_lots + 1):
@@ -489,7 +489,7 @@ def validate_config(config: StrategyConfig) -> bool:
         # 口數規則驗證
         for i, lot_rule in enumerate(config.lot_rules, 1):
             assert lot_rule.trailing_activation > 0, f"第{i}口觸發點數必須大於0"
-            assert 0 < lot_rule.trailing_pullback <= 1, f"第{i}口回檔比例必須在0-1之間"
+            assert 0 <= lot_rule.trailing_pullback <= 1, f"第{i}口回檔比例必須在0-1之間"
         
         return True
     except AssertionError as e:
